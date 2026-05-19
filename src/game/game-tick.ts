@@ -167,6 +167,8 @@ export interface TickInput {
   aimWorldPosition: { x: number; y: number } | null
   collecting: boolean
   tutorialStep: TutorialStep
+  /** Camera-visible world-space rectangle, for gating fire to on-screen targets. */
+  viewBounds: { centerX: number; centerY: number; halfW: number; halfH: number }
 }
 
 export type MetalVariant = 'silver' | 'gold'
@@ -363,9 +365,6 @@ function emptyResult(): TickResult {
 // Aim-targeting helpers
 // ---------------------------------------------------------------------------
 
-/** Maximum distance auto-fire will look for a target along the aim ray. */
-const AUTO_FIRE_RANGE = 200
-
 /** Squared distance from point (cx, cy) to segment (ax, ay)→(bx, by). */
 function pointToSegmentDistSq(
   cx: number,
@@ -393,11 +392,16 @@ function pointToSegmentDistSq(
 }
 
 /**
- * True when a ray from the ship along the aim direction (out to AUTO_FIRE_RANGE)
- * passes through a live asteroid or enemy. Used to gate auto-fire so the player
- * doesn't shoot into empty space.
+ * True when a live asteroid or enemy is BOTH (a) visible on screen and (b) on
+ * the firing line from the ship along the aim direction. Gates firing so the
+ * weapon only shoots at on-screen things the player is actually pointing at —
+ * never at off-screen rocks that merely share the bearing.
  */
-function aimRayHasTarget(state: TickState, aim: { x: number; y: number }): boolean {
+function aimLineHasVisibleTarget(
+  state: TickState,
+  aim: { x: number; y: number },
+  view: TickInput['viewBounds'],
+): boolean {
   const ship = state.ship
   const dx = aim.x - ship.x
   const dy = aim.y - ship.y
@@ -405,18 +409,29 @@ function aimRayHasTarget(state: TickState, aim: { x: number; y: number }): boole
   if (dist < 0.5) return false
   const ux = dx / dist
   const uy = dy / dist
-  const endX = ship.x + ux * AUTO_FIRE_RANGE
-  const endY = ship.y + uy * AUTO_FIRE_RANGE
+  // Ray long enough to span the whole visible area; the visibility test below
+  // is what actually bounds which targets count.
+  const rayLen = Math.hypot(view.halfW * 2, view.halfH * 2)
+  const endX = ship.x + ux * rayLen
+  const endY = ship.y + uy * rayLen
+
+  // A target counts only if its body overlaps the viewport (visible, even
+  // partially) AND the firing line passes within its radius (in line).
+  const onScreen = (x: number, y: number, r: number): boolean =>
+    Math.abs(x - view.centerX) <= view.halfW + r &&
+    Math.abs(y - view.centerY) <= view.halfH + r
 
   for (const a of state.asteroids) {
     if (a.hp <= 0) continue
     const r = ASTEROID_SIZE_RADIUS[a.size] ?? 5
+    if (!onScreen(a.x, a.y, r)) continue
     if (pointToSegmentDistSq(a.x, a.y, ship.x, ship.y, endX, endY) < r * r) return true
   }
   if (state.enemy && state.enemy.alive) {
     if (
+      onScreen(state.enemy.x, state.enemy.y, ENEMY_COLLISION_RADIUS) &&
       pointToSegmentDistSq(state.enemy.x, state.enemy.y, ship.x, ship.y, endX, endY) <
-      ENEMY_COLLISION_RADIUS * ENEMY_COLLISION_RADIUS
+        ENEMY_COLLISION_RADIUS * ENEMY_COLLISION_RADIUS
     ) {
       return true
     }
@@ -424,8 +439,9 @@ function aimRayHasTarget(state: TickState, aim: { x: number; y: number }): boole
   for (const e of state.ambushEnemies) {
     if (!e.alive) continue
     if (
+      onScreen(e.x, e.y, ENEMY_COLLISION_RADIUS) &&
       pointToSegmentDistSq(e.x, e.y, ship.x, ship.y, endX, endY) <
-      ENEMY_COLLISION_RADIUS * ENEMY_COLLISION_RADIUS
+        ENEMY_COLLISION_RADIUS * ENEMY_COLLISION_RADIUS
     ) {
       return true
     }
@@ -748,7 +764,7 @@ export function tick(state: TickState, input: TickInput): TickResult {
   // asteroid or enemy, fire automatically (player doesn't have to hold).
   // Skip during prologue — that flow has its own scripted auto-fire.
   if (!isPrologue && state.aimActive && input.aimWorldPosition && state.inputCooldown <= 0) {
-    if (aimRayHasTarget(state, input.aimWorldPosition)) {
+    if (aimLineHasVisibleTarget(state, input.aimWorldPosition, input.viewBounds)) {
       state.fireTarget = { x: input.aimWorldPosition.x, y: input.aimWorldPosition.y }
       state.mouseHoldingFire = true
     }
@@ -757,9 +773,13 @@ export function tick(state: TickState, input: TickInput): TickResult {
   // --- Universal "only fire at targets" gate ---
   // Whatever set fireTarget (manual hold, gamepad right-stick aim, mobile fire
   // button, auto-fire), only proceed if the aim direction actually passes
-  // through a live asteroid or enemy. Skip during prologue (it scripts its
-  // own aim and always targets a live entity anyway).
-  if (!isPrologue && state.fireTarget && !aimRayHasTarget(state, state.fireTarget)) {
+  // through a live asteroid or enemy that's on screen. Skip during prologue
+  // (it scripts its own aim and always targets a live entity anyway).
+  if (
+    !isPrologue &&
+    state.fireTarget &&
+    !aimLineHasVisibleTarget(state, state.fireTarget, input.viewBounds)
+  ) {
     state.fireTarget = null
     state.mouseHoldingFire = false
   }

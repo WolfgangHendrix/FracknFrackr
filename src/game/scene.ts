@@ -563,6 +563,11 @@ export function createGameScene(
     tickState.mouseHoldingFire = mouseHoldingFire
     tickState.aimActive = aimState.active
 
+    // Camera-visible world rectangle (camera looks straight down at the z=0
+    // play plane). Used by tick() to gate fire to on-screen targets only.
+    const camHalfH = camera.position.z * Math.tan((camera.fov * Math.PI) / 360)
+    const camHalfW = camHalfH * camera.aspect
+
     const tickInput: TickInput = {
       dt,
       paused,
@@ -570,6 +575,12 @@ export function createGameScene(
       aimWorldPosition,
       collecting,
       tutorialStep: getTutorialStep(),
+      viewBounds: {
+        centerX: camera.position.x,
+        centerY: camera.position.y,
+        halfW: camHalfW,
+        halfH: camHalfH,
+      },
     }
 
     // Snapshot mesh-bearing objects before tick (tick may splice them out)
