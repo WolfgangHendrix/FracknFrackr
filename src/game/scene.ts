@@ -944,7 +944,7 @@ export function createGameScene(
         }
       }
       const collectingActive = anyInRange || tickState.prologueAutoCollect
-      updateCollectorVfx(collectorVfx, dt, collectingActive, ship.x, ship.y)
+      updateCollectorVfx(collectorVfx, dt, collectingActive, ship.x, ship.y, collectorRange)
       if (collectingActive) {
         startCollectorHum()
       } else {

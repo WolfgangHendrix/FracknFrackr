@@ -234,18 +234,22 @@ export function stopEngineSound(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Arbiter Siren — looping alarm wail while The Arbiter closes in
+// Arbiter Siren — pulsing red-alert klaxon while The Arbiter closes in
 // ---------------------------------------------------------------------------
 
 interface ArbiterSiren {
-  gain: GainNode
-  osc: OscillatorNode
-  lfo: OscillatorNode
+  masterGain: GainNode
+  /** LFO sweeping the pitch into a repeating rising whoop. */
+  pitchLFO: OscillatorNode
+  /** LFO chopping the amplitude into distinct klaxon beats. */
+  pulseLFO: OscillatorNode
+  /** Every oscillator node, so they can all be stopped on dispose. */
+  oscNodes: OscillatorNode[]
 }
 
 let arbiterSiren: ArbiterSiren | null = null
 
-/** Start the looping Arbiter approach siren. Idempotent. */
+/** Start the looping Arbiter red-alert klaxon. Idempotent. */
 export function startArbiterSiren(): void {
   if (arbiterSiren) return
   const ctx = getContext()
@@ -253,59 +257,89 @@ export function startArbiterSiren(): void {
 
   const now = ctx.currentTime
 
-  const gain = ctx.createGain()
-  gain.gain.setValueAtTime(0, now)
-  gain.connect(ctx.destination)
+  // Master volume — driven by updateArbiterSiren()
+  const masterGain = ctx.createGain()
+  masterGain.gain.setValueAtTime(0, now)
+  masterGain.connect(ctx.destination)
 
-  // Main wailing tone — sawtooth shaped by a bandpass for a siren timbre
-  const osc = ctx.createOscillator()
-  osc.type = 'sawtooth'
-  osc.frequency.setValueAtTime(520, now)
+  // Klaxon beat — amplitude chopped on/off so it honks instead of droning
+  const pulseGain = ctx.createGain()
+  pulseGain.gain.setValueAtTime(0.45, now)
+  pulseGain.connect(masterGain)
 
+  const pulseLFO = ctx.createOscillator()
+  pulseLFO.type = 'triangle'
+  pulseLFO.frequency.setValueAtTime(1.4, now)
+  const pulseDepth = ctx.createGain()
+  pulseDepth.gain.setValueAtTime(0.55, now)
+  pulseLFO.connect(pulseDepth)
+  pulseDepth.connect(pulseGain.gain)
+
+  // Bandpass keeps the harsh saw tone tight and alarm-like
   const filter = ctx.createBiquadFilter()
   filter.type = 'bandpass'
-  filter.frequency.setValueAtTime(900, now)
-  filter.Q.setValueAtTime(3, now)
+  filter.frequency.setValueAtTime(1150, now)
+  filter.Q.setValueAtTime(2.5, now)
+  filter.connect(pulseGain)
 
-  // LFO sweeps the pitch up and down for the classic siren wail
-  const lfo = ctx.createOscillator()
-  lfo.type = 'sine'
-  lfo.frequency.setValueAtTime(0.6, now)
-  const lfoGain = ctx.createGain()
-  lfoGain.gain.setValueAtTime(180, now)
-  lfo.connect(lfoGain)
-  lfoGain.connect(osc.frequency)
+  // Pitch sweep — a sawtooth LFO ramps the pitch up then snaps it back,
+  // giving the classic rising "whoop ... whoop" red-alert sweep.
+  const pitchLFO = ctx.createOscillator()
+  pitchLFO.type = 'sawtooth'
+  pitchLFO.frequency.setValueAtTime(1.4, now)
+  const pitchDepth = ctx.createGain()
+  pitchDepth.gain.setValueAtTime(220, now)
+  pitchLFO.connect(pitchDepth)
 
-  osc.connect(filter)
-  filter.connect(gain)
-  osc.start(now)
-  lfo.start(now)
+  // Two slightly detuned saws give the klaxon a harsh, beating body
+  const oscNodes: OscillatorNode[] = []
+  for (const detune of [-9, 9]) {
+    const osc = ctx.createOscillator()
+    osc.type = 'sawtooth'
+    osc.frequency.setValueAtTime(480, now)
+    osc.detune.setValueAtTime(detune, now)
+    pitchDepth.connect(osc.frequency)
+    osc.connect(filter)
+    osc.start(now)
+    oscNodes.push(osc)
+  }
 
-  arbiterSiren = { gain, osc, lfo }
+  pitchLFO.start(now)
+  pulseLFO.start(now)
+
+  arbiterSiren = { masterGain, pitchLFO, pulseLFO, oscNodes }
 }
 
 /**
- * Update the siren — louder and faster as the Arbiter nears.
+ * Update the klaxon — louder and faster as the Arbiter nears.
  * @param intensity 0 (far) → 1 (arrived)
  */
 export function updateArbiterSiren(intensity: number): void {
   if (!arbiterSiren || !audioCtx) return
   const clamped = Math.max(0, Math.min(1, intensity))
-  const vol = (0.05 + clamped * 0.11) * getSfxVolume()
-  arbiterSiren.gain.gain.setTargetAtTime(vol, audioCtx.currentTime, 0.1)
-  arbiterSiren.lfo.frequency.setTargetAtTime(0.5 + clamped * 1.4, audioCtx.currentTime, 0.1)
+  const now = audioCtx.currentTime
+
+  const vol = (0.07 + clamped * 0.13) * getSfxVolume()
+  arbiterSiren.masterGain.gain.setTargetAtTime(vol, now, 0.1)
+
+  // Both LFOs share the rate so the pitch sweep and the beat stay locked;
+  // the alarm quickens from a steady 1.1 Hz to an urgent 2.4 Hz.
+  const rate = 1.1 + clamped * 1.3
+  arbiterSiren.pitchLFO.frequency.setTargetAtTime(rate, now, 0.15)
+  arbiterSiren.pulseLFO.frequency.setTargetAtTime(rate, now, 0.15)
 }
 
-/** Stop the Arbiter siren with a short fade-out. Idempotent. */
+/** Stop the Arbiter klaxon with a short fade-out. Idempotent. */
 export function stopArbiterSiren(): void {
   if (!arbiterSiren) return
   const ctx = audioCtx
   if (ctx) {
-    arbiterSiren.gain.gain.setTargetAtTime(0, ctx.currentTime, 0.15)
+    arbiterSiren.masterGain.gain.setTargetAtTime(0, ctx.currentTime, 0.15)
     const stopAt = ctx.currentTime + 0.45
     try {
-      arbiterSiren.osc.stop(stopAt)
-      arbiterSiren.lfo.stop(stopAt)
+      arbiterSiren.pitchLFO.stop(stopAt)
+      arbiterSiren.pulseLFO.stop(stopAt)
+      for (const osc of arbiterSiren.oscNodes) osc.stop(stopAt)
     } catch {
       // already stopped
     }

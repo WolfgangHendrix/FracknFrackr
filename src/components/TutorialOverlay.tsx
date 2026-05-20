@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import type { TutorialStep } from '@/hooks/useTutorial'
+import { useGamepadActive } from '@/hooks/useGamepadActive'
 
 /** Grace period before dismiss listeners activate, so in-flight inputs don't instantly close. */
 const DISMISS_GRACE_MS = 400
@@ -30,56 +31,67 @@ const STEPS: {
     | 'drive-through'
   desktop: string
   mobile: string
+  gamepad: string
 }[] = [
   {
     key: 'move',
-    desktop: 'Use WASD or Arrow Keys to move your ship',
+    desktop: 'Use WASD, Arrow Keys to move your ship',
     mobile: 'Touch and drag the left side of the screen to move',
+    gamepad: 'Navigate with LS',
   },
   {
     key: 'shoot',
-    desktop: 'Click to fire at the asteroid',
-    mobile: 'Tap the FIRE button to shoot',
+    desktop: 'Aim at a target to fire',
+    mobile: 'Aim at a target to fire',
+    gamepad: 'Aim at a target to fire',
   },
   {
     key: 'collect',
-    desktop: 'Hold E or Space near metal chunks to collect them',
-    mobile: 'Hold the COLLECT button near metal chunks',
+    desktop: 'Approach metal chunks to collect.',
+    mobile: 'Approach metal chunks to collect.',
+    gamepad: 'Approach metal chunks to collect.',
   },
   {
     key: 'destroy-enemy',
     desktop: 'An enemy ship approaches! Shoot it down!',
     mobile: 'An enemy ship approaches! Shoot it down!',
+    gamepad: 'An enemy ship approaches! Shoot it down!',
   },
   {
     key: 'collect-scrap',
     desktop: 'Collect the scrap it dropped!',
     mobile: 'Collect the scrap it dropped!',
+    gamepad: 'Collect the scrap it dropped!',
   },
   {
     key: 'go-to-station',
     desktop: 'Head to the Trade Station! Follow the arrow!',
     mobile: 'Head to the Trade Station! Follow the arrow!',
+    gamepad: 'Head to the Trade Station! Follow the arrow!',
   },
   {
     key: 'approach-station',
     desktop: 'Click the shop icon when it appears!',
     mobile: 'Tap the shop icon when it appears!',
+    gamepad: 'When the shop icon appears, press (A) to shop!',
   },
   {
     key: 'trade-sell',
     desktop: 'Sell your collected materials!',
     mobile: 'Sell your collected materials!',
+    gamepad: 'Sell your collected materials!',
   },
   {
     key: 'trade-buy',
     desktop: 'Buy the Fire Rate upgrade!',
     mobile: 'Buy the Fire Rate upgrade!',
+    gamepad: 'Buy the Fire Rate upgrade!',
   },
   {
     key: 'drive-through',
-    desktop: 'Drive through the station for a free ship repair!',
-    mobile: 'Drive through the station for a free ship repair!',
+    desktop: 'Navigate through the station for a free ship repair!',
+    mobile: 'Navigate through the station for a free ship repair!',
+    gamepad: 'Navigate through the station for a free ship repair!',
   },
 ]
 
@@ -108,14 +120,14 @@ function StepDots({ step }: { step: TutorialStep }) {
   )
 }
 
-function getPromptText(step: TutorialStep): string {
-  const touch = isTouchDevice()
-
+function getPromptText(step: TutorialStep, gamepadActive: boolean): string {
   if (step === 'wait-for-metal') return 'Keep shooting the asteroid...'
 
   const entry = STEPS.find((s) => s.key === step)
   if (!entry) return ''
-  return touch ? entry.mobile : entry.desktop
+  // A gamepad in active use wins over touch/desktop prompts.
+  if (gamepadActive) return entry.gamepad
+  return isTouchDevice() ? entry.mobile : entry.desktop
 }
 
 export function TutorialOverlay({
@@ -126,6 +138,7 @@ export function TutorialOverlay({
   onDismiss,
 }: TutorialOverlayProps) {
   const [confirming, setConfirming] = useState(false)
+  const gamepadActive = useGamepadActive()
 
   // Reset confirmation state when the step changes
   useEffect(() => {
@@ -181,7 +194,7 @@ export function TutorialOverlay({
   // Hide overlay during prologue (PrologueOverlay handles this)
   if (step.startsWith('prologue-')) return null
 
-  const text = getPromptText(step)
+  const text = getPromptText(step, gamepadActive)
 
   return (
     <div className="absolute inset-0 pointer-events-none" data-testid="tutorial-overlay">
@@ -191,7 +204,9 @@ export function TutorialOverlay({
         <p className="text-hud-green text-xs sm:text-sm md:text-base">{text}</p>
         {frozen && (
           <>
-            <p className="text-white/50 text-xs mt-2 animate-pulse">Press any key to continue</p>
+            <p className="text-white/50 text-xs mt-2 animate-pulse">
+              {gamepadActive ? 'Press (A) to continue' : 'Press any key to continue'}
+            </p>
             {/* Invisible focusable target so gamepad A press fires onDismiss. */}
             <button
               data-menu-item

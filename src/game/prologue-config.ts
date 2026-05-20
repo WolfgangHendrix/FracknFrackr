@@ -29,7 +29,7 @@ export const ARBITER_APPROACH_SPEED = 30
 export const ARBITER_STRIP_DELAY = 1.5
 
 export const ARBITER_DIALOGUE = [
-  'You have grown too powerful, fracker.',
-  'The belt was not built for one to dominate.',
-  'I am restoring balance.',
+  'Fracker! You have exceeded authorized power limits.',
+  'The belt was not designed for unilateral dominance.',
+  'Initiating corrective actions.',
 ] as const
