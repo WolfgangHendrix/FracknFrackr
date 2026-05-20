@@ -6,6 +6,12 @@ export const SHIP_MAX_SPEED = 120
 export const SHIP_FRICTION = 0.94
 
 /**
+ * How fast the hull rotates to face its direction of travel (radians/sec).
+ * The hull tracks movement; the turret tracks aim independently.
+ */
+export const SHIP_TURN_RATE = 9
+
+/**
  * Ship voxel colors (hex values).
  */
 export const SHIP_COLORS = {

@@ -13,6 +13,17 @@ const PROLOGUE_COLORS = {
   lazerLens: 0x00ffff,
 }
 
+/** Industrial palette for the asteroid-mining vessel. */
+const MINING_COLORS = {
+  hull: 0x7c8a99, // steel plating
+  hullDark: 0x49545f, // gunmetal frame
+  cockpit: 0x35d0ff, // bridge glass
+  engine: 0xff7a1a, // thruster glow
+  hazard: 0xf2b21c, // hazard-stripe yellow
+  drill: 0xcdd2db, // drill-bit alloy
+  claw: 0xe8842a, // mining-claw orange
+} as const
+
 function addVoxelSized(
   group: THREE.Group,
   x: number,
@@ -38,37 +49,73 @@ function addVoxel(group: THREE.Group, x: number, y: number, z: number, color: nu
  */
 export function createShipModel(variant: 'normal' | 'prologue' = 'normal'): THREE.Group {
   if (variant === 'prologue') return createPrologueShipModel()
+  return createMiningShipModel()
+}
 
+/**
+ * Build the standard player vessel — a chunky asteroid-mining ship.
+ *
+ * Facing local +Y: a wide rear engine block, an armoured cargo midsection
+ * flanked by hazard-striped ore pods, a glass bridge, and a forward mining
+ * rig (twin pincer claws around a central drill bit). The aim turret sits on
+ * top of the hull and rotates independently.
+ */
+function createMiningShipModel(): THREE.Group {
   const ship = new THREE.Group()
-  const { hull, cockpit, engine, wingTip } = SHIP_COLORS
+  const { hull, hullDark, cockpit, engine, hazard, drill, claw } = MINING_COLORS
 
-  // Main body (center fuselage) — 3 wide, 6 long
-  for (let row = -2; row <= 3; row++) {
-    addVoxel(ship, 0, row, 0, hull)
-    if (row >= -1 && row <= 2) {
-      addVoxel(ship, -1, row, 0, hull)
-      addVoxel(ship, 1, row, 0, hull)
+  // --- Rear engine block — wide gunmetal mount with thruster nozzles ---
+  for (let x = -2; x <= 2; x++) {
+    addVoxel(ship, x, -3, 0, hullDark)
+  }
+  // Recessed thruster nozzles (engine trail anchors here)
+  for (let x = -1; x <= 1; x++) {
+    addVoxel(ship, x, -4, -0.3, engine)
+  }
+  addVoxel(ship, -2, -4, -0.3, engine)
+  addVoxel(ship, 2, -4, -0.3, engine)
+
+  // --- Armoured cargo midsection — 3-wide hull core ---
+  for (let row = -2; row <= 2; row++) {
+    for (let x = -1; x <= 1; x++) {
+      // Hazard stripe runs down the spine
+      const color = x === 0 && (row === -1 || row === 1) ? hazard : hull
+      addVoxel(ship, x, row, 0, color)
     }
   }
 
-  // Cockpit (front nose) — raised slightly
-  addVoxel(ship, 0, 4, 0.5, cockpit)
-
-  // Wings — swept back
-  for (let w = 2; w <= 4; w++) {
-    const row = -w + 2
-    addVoxel(ship, -w, row, 0, hull)
-    addVoxel(ship, w, row, 0, hull)
+  // --- Side ore pods — hazard-striped containers flanking the hull ---
+  for (const side of [-1, 1]) {
+    const px = side * 2
+    addVoxel(ship, px, -1, 0, hullDark)
+    addVoxel(ship, px, 0, 0, hazard)
+    addVoxel(ship, px, 1, 0, hullDark)
+    // Stacked upper container
+    addVoxel(ship, px, 0, 0.7, hullDark)
   }
 
-  // Wing tips — green accent
-  addVoxel(ship, -4, -2, 0, wingTip)
-  addVoxel(ship, 4, -2, 0, wingTip)
+  // --- Bridge — glass cockpit set between two frame blocks ---
+  addVoxel(ship, -1, 3, 0.2, hullDark)
+  addVoxel(ship, 1, 3, 0.2, hullDark)
+  addVoxel(ship, 0, 3, 0.5, cockpit)
 
-  // Engine glow (rear) — recessed slightly
-  addVoxel(ship, -1, -3, -0.3, engine)
-  addVoxel(ship, 0, -3, -0.3, engine)
-  addVoxel(ship, 1, -3, -0.3, engine)
+  // --- Forward mining rig — twin pincer claws around a central drill ---
+  // Claw mounts
+  addVoxel(ship, -2, 3, 0, hullDark)
+  addVoxel(ship, 2, 3, 0, hullDark)
+  // Left claw arm, curving inward toward the tip
+  addVoxel(ship, -2, 4, 0, claw)
+  addVoxel(ship, -2, 5, 0, claw)
+  addVoxel(ship, -1, 6, 0, claw)
+  // Right claw arm, mirrored
+  addVoxel(ship, 2, 4, 0, claw)
+  addVoxel(ship, 2, 5, 0, claw)
+  addVoxel(ship, 1, 6, 0, claw)
+  // Central drill bit, projecting forward to a point
+  addVoxel(ship, 0, 4, 0, drill)
+  addVoxel(ship, 0, 5, 0, drill)
+  addVoxel(ship, 0, 6, 0, drill)
+  addVoxel(ship, 0, 7, 0, drill)
 
   // --- Turret (rotates independently to track the player's aim) ---
   // Named 'turret' so scene.ts can grab it and set rotation.z each frame.

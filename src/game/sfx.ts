@@ -7,7 +7,12 @@ import { getSfxVolume } from './volume-control'
 let audioCtx: AudioContext | null = null
 
 function getContext(): AudioContext | null {
-  if (audioCtx) return audioCtx
+  if (audioCtx) {
+    // Browsers start the context suspended until a user gesture; resume so
+    // menu/UI sounds triggered from clicks and gamepad input are audible.
+    if (audioCtx.state === 'suspended') void audioCtx.resume()
+    return audioCtx
+  }
   try {
     audioCtx = new AudioContext()
   } catch {
@@ -229,11 +234,217 @@ export function stopEngineSound(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Arbiter Siren — looping alarm wail while The Arbiter closes in
+// ---------------------------------------------------------------------------
+
+interface ArbiterSiren {
+  gain: GainNode
+  osc: OscillatorNode
+  lfo: OscillatorNode
+}
+
+let arbiterSiren: ArbiterSiren | null = null
+
+/** Start the looping Arbiter approach siren. Idempotent. */
+export function startArbiterSiren(): void {
+  if (arbiterSiren) return
+  const ctx = getContext()
+  if (!ctx) return
+
+  const now = ctx.currentTime
+
+  const gain = ctx.createGain()
+  gain.gain.setValueAtTime(0, now)
+  gain.connect(ctx.destination)
+
+  // Main wailing tone — sawtooth shaped by a bandpass for a siren timbre
+  const osc = ctx.createOscillator()
+  osc.type = 'sawtooth'
+  osc.frequency.setValueAtTime(520, now)
+
+  const filter = ctx.createBiquadFilter()
+  filter.type = 'bandpass'
+  filter.frequency.setValueAtTime(900, now)
+  filter.Q.setValueAtTime(3, now)
+
+  // LFO sweeps the pitch up and down for the classic siren wail
+  const lfo = ctx.createOscillator()
+  lfo.type = 'sine'
+  lfo.frequency.setValueAtTime(0.6, now)
+  const lfoGain = ctx.createGain()
+  lfoGain.gain.setValueAtTime(180, now)
+  lfo.connect(lfoGain)
+  lfoGain.connect(osc.frequency)
+
+  osc.connect(filter)
+  filter.connect(gain)
+  osc.start(now)
+  lfo.start(now)
+
+  arbiterSiren = { gain, osc, lfo }
+}
+
+/**
+ * Update the siren — louder and faster as the Arbiter nears.
+ * @param intensity 0 (far) → 1 (arrived)
+ */
+export function updateArbiterSiren(intensity: number): void {
+  if (!arbiterSiren || !audioCtx) return
+  const clamped = Math.max(0, Math.min(1, intensity))
+  const vol = (0.05 + clamped * 0.11) * getSfxVolume()
+  arbiterSiren.gain.gain.setTargetAtTime(vol, audioCtx.currentTime, 0.1)
+  arbiterSiren.lfo.frequency.setTargetAtTime(0.5 + clamped * 1.4, audioCtx.currentTime, 0.1)
+}
+
+/** Stop the Arbiter siren with a short fade-out. Idempotent. */
+export function stopArbiterSiren(): void {
+  if (!arbiterSiren) return
+  const ctx = audioCtx
+  if (ctx) {
+    arbiterSiren.gain.gain.setTargetAtTime(0, ctx.currentTime, 0.15)
+    const stopAt = ctx.currentTime + 0.45
+    try {
+      arbiterSiren.osc.stop(stopAt)
+      arbiterSiren.lfo.stop(stopAt)
+    } catch {
+      // already stopped
+    }
+  }
+  arbiterSiren = null
+}
+
+// ---------------------------------------------------------------------------
+// UI / menu sounds — all procedurally synthesized
+// ---------------------------------------------------------------------------
+
+/** Soft blip when the active menu highlight moves. */
+export function playMenuMove(): void {
+  const ctx = getContext()
+  if (!ctx) return
+
+  const now = ctx.currentTime
+  const osc = ctx.createOscillator()
+  osc.type = 'triangle'
+  osc.frequency.setValueAtTime(420, now)
+  osc.frequency.exponentialRampToValueAtTime(640, now + 0.05)
+
+  const gain = ctx.createGain()
+  gain.gain.setValueAtTime(0.07 * getSfxVolume(), now)
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09)
+
+  osc.connect(gain)
+  gain.connect(ctx.destination)
+  osc.start(now)
+  osc.stop(now + 0.1)
+}
+
+/** Confirming two-note blip when a menu selection is made. */
+export function playMenuSelect(): void {
+  const ctx = getContext()
+  if (!ctx) return
+
+  const now = ctx.currentTime
+  const vol = getSfxVolume()
+  const notes = [660, 988]
+  for (let i = 0; i < notes.length; i++) {
+    const t = now + i * 0.07
+    const osc = ctx.createOscillator()
+    osc.type = 'square'
+    osc.frequency.setValueAtTime(notes[i], t)
+
+    const gain = ctx.createGain()
+    gain.gain.setValueAtTime(0.055 * vol, t)
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.12)
+
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+    osc.start(t)
+    osc.stop(t + 0.13)
+  }
+}
+
+/** Bright cascade of coin pings when materials are sold. */
+export function playSellChime(): void {
+  const ctx = getContext()
+  if (!ctx) return
+
+  const now = ctx.currentTime
+  const vol = getSfxVolume()
+  const freqs = [1318, 1760, 2093, 2637]
+  for (let i = 0; i < freqs.length; i++) {
+    const t = now + i * 0.06
+    const osc = ctx.createOscillator()
+    osc.type = 'sine'
+    osc.frequency.setValueAtTime(freqs[i], t)
+
+    const gain = ctx.createGain()
+    gain.gain.setValueAtTime(0.0001, t)
+    gain.gain.exponentialRampToValueAtTime(0.11 * vol, t + 0.01)
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.3)
+
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+    osc.start(t)
+    osc.stop(t + 0.32)
+  }
+}
+
+/** Cash-register "ka-ching" when an upgrade is purchased. */
+export function playBuyRegister(): void {
+  const ctx = getContext()
+  if (!ctx) return
+
+  const now = ctx.currentTime
+  const vol = getSfxVolume()
+
+  // "Ka" — short mechanical click (filtered noise burst)
+  const bufferSize = Math.floor(ctx.sampleRate * 0.08)
+  const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate)
+  const data = buffer.getChannelData(0)
+  for (let i = 0; i < bufferSize; i++) {
+    data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ctx.sampleRate * 0.015))
+  }
+  const noise = ctx.createBufferSource()
+  noise.buffer = buffer
+  const noiseFilter = ctx.createBiquadFilter()
+  noiseFilter.type = 'bandpass'
+  noiseFilter.frequency.setValueAtTime(1800, now)
+  noiseFilter.Q.setValueAtTime(1, now)
+  const noiseGain = ctx.createGain()
+  noiseGain.gain.setValueAtTime(0.18 * vol, now)
+  noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.08)
+  noise.connect(noiseFilter)
+  noiseFilter.connect(noiseGain)
+  noiseGain.connect(ctx.destination)
+  noise.start(now)
+
+  // "Ching" — bright two-tone bell ringing out after the click
+  const t = now + 0.07
+  const bell = [2093, 2794]
+  for (const freq of bell) {
+    const osc = ctx.createOscillator()
+    osc.type = 'triangle'
+    osc.frequency.setValueAtTime(freq, t)
+
+    const gain = ctx.createGain()
+    gain.gain.setValueAtTime(0.0001, t)
+    gain.gain.exponentialRampToValueAtTime(0.1 * vol, t + 0.01)
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.5)
+
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+    osc.start(t)
+    osc.stop(t + 0.52)
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Cleanup
 // ---------------------------------------------------------------------------
 
 export function disposeSfx(): void {
   stopEngineSound()
+  stopArbiterSiren()
   // Don't close ctx — shared with main audio module
   audioCtx = null
 }

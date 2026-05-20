@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
+import { playMenuMove, playMenuSelect, playSellChime, playBuyRegister } from '@/game/sfx'
 
 /**
  * Gamepad-driven menu navigation.
@@ -44,6 +45,8 @@ function moveFocus(delta: number): void {
   const base = idx === -1 ? (delta > 0 ? -1 : 0) : idx
   const next = (base + delta + items.length) % items.length
   items[next].focus()
+  // Audible cue as the active highlight moves between options.
+  playMenuMove()
 }
 
 function focusFirst(): void {
@@ -59,6 +62,25 @@ export function useGamepadMenu({ enabled, resetKey }: UseGamepadMenuOptions): vo
     const id = window.setTimeout(focusFirst, 0)
     return () => window.clearTimeout(id)
   }, [enabled, resetKey])
+
+  // Play a confirmation sound whenever a menu item is activated — by mouse,
+  // keyboard, or the gamepad A button (which dispatches a synthetic click).
+  // `data-menu-sound` lets specific buttons opt into a themed sound.
+  useEffect(() => {
+    if (!enabled) return
+    if (typeof document === 'undefined') return
+    const onClick = (e: MouseEvent): void => {
+      if (!(e.target instanceof Element)) return
+      const item = e.target.closest('[data-menu-item]')
+      if (!item) return
+      const sound = item.getAttribute('data-menu-sound')
+      if (sound === 'sell') playSellChime()
+      else if (sound === 'buy') playBuyRegister()
+      else playMenuSelect()
+    }
+    document.addEventListener('click', onClick)
+    return () => document.removeEventListener('click', onClick)
+  }, [enabled])
 
   const prev = useRef({
     a: false,

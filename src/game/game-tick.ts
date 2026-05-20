@@ -453,62 +453,6 @@ function aimLineHasVisibleTarget(
 // Prologue auto-behavior
 // ---------------------------------------------------------------------------
 
-/** Find nearest live target for auto-targeting. */
-function findNearestTarget(
-  state: TickState,
-  preferEnemies: boolean,
-): { x: number; y: number } | null {
-  let target: { x: number; y: number } | null = null
-  let minDist = Infinity
-
-  // Check asteroids
-  for (const a of state.asteroids) {
-    if (a.hp <= 0) continue
-    const d = Math.hypot(a.x - state.ship.x, a.y - state.ship.y)
-    if (d < minDist) {
-      minDist = d
-      target = { x: a.x, y: a.y }
-    }
-  }
-
-  // Check enemies (take priority when preferEnemies is true)
-  if (preferEnemies) {
-    const enemies: { x: number; y: number; alive: boolean }[] = [
-      ...(state.enemy && state.enemy.alive ? [state.enemy] : []),
-      ...state.ambushEnemies.filter((e) => e.alive),
-    ]
-    for (const e of enemies) {
-      const d = Math.hypot(e.x - state.ship.x, e.y - state.ship.y)
-      if (d < minDist) {
-        minDist = d
-        target = { x: e.x, y: e.y }
-      }
-    }
-  }
-
-  return target
-}
-
-/**
- * Auto-fire at the nearest target when one is within range.
- *
- * Fires directly toward the target (smart aim). Player can still
- * manually fire in the ship's facing direction via the fire button.
- */
-function autoFireAtTarget(state: TickState, preferEnemies: boolean): void {
-  const nearest = findNearestTarget(state, preferEnemies)
-  if (!nearest) return
-
-  const dist = Math.hypot(nearest.x - state.ship.x, nearest.y - state.ship.y)
-  if (dist > PROLOGUE_SHIP.autoFireRange) return
-
-  // Only auto-fire if player is not already manually firing
-  if (!state.fireTarget) {
-    state.mouseHoldingFire = true
-    state.fireTarget = { x: nearest.x, y: nearest.y }
-  }
-}
-
 /**
  * Phase-specific prologue logic.
  *
@@ -538,9 +482,9 @@ function prologueTick(state: TickState, input: TickInput, result: TickResult): v
   }
 
   // --- prologue-mining: free play — mine asteroids and fight enemies ---
-  // Enemies spawn alongside asteroids. Auto-fires at nearest target
-  // (enemies prioritized). Advances when enough asteroids destroyed AND
-  // all enemies dead.
+  // Enemies spawn alongside asteroids. Firing uses the same aim-gated rule as
+  // normal gameplay (handled in tick() — see `firingAllowed`). Advances when
+  // enough asteroids destroyed AND all enemies dead.
   if (step === 'prologue-mining') {
     state.prologueAutoCollect = true
 
@@ -557,10 +501,6 @@ function prologueTick(state: TickState, input: TickInput, result: TickResult): v
         result.ambushEnemiesSpawned.push(enemy)
       }
     }
-
-    // Auto-fire: prioritize enemies when any are alive
-    const hasLiveEnemies = state.ambushEnemies.some((e) => e.alive)
-    autoFireAtTarget(state, hasLiveEnemies)
 
     // Track progress
     const destroyed = state.asteroids.filter((a) => a.hp <= 0).length
@@ -674,6 +614,11 @@ export function tick(state: TickState, input: TickInput): TickResult {
     }
   }
 
+  // Firing is allowed in normal gameplay and during the prologue's free-play
+  // mining phase — both use the same aim-gated rule. Other prologue beats
+  // (intro, arbiter, dialogue, strip) never fire.
+  const firingAllowed = !isPrologue || input.tutorialStep === 'prologue-mining'
+
   // Collection is always automatic — the magnet runs by default. `input.collecting`
   // (E key / mobile button / right-click) is now effectively cosmetic. Only the
   // pickup range varies, driven by the Collector upgrade tier.
@@ -681,23 +626,15 @@ export function tick(state: TickState, input: TickInput): TickResult {
   void input.collecting
 
   // --- Ship update ---
-  // During prologue: player controls rotation via joystick/input, auto-fire aims
-  // independently. prologueAutoAim only drives fireTarget, NOT ship facing.
-  // During normal play: mouse aim drives both rotation and fire direction.
-  let aimRotation: number | null = null
-  if (!isPrologue && state.aimActive && input.aimWorldPosition) {
-    const adx = input.aimWorldPosition.x - state.ship.x
-    const ady = input.aimWorldPosition.y - state.ship.y
-    if (Math.abs(adx) > 0.5 || Math.abs(ady) > 0.5) {
-      aimRotation = Math.atan2(-adx, ady)
-    }
-  }
+  // The hull always faces its direction of travel (handled inside updateShip)
+  // so the engine exhaust stays consistent with movement. Aim only steers the
+  // turret, which scene.ts rotates independently of the hull.
 
   // Prologue auto-pilot: synthesize forward input without mutating TickInput
   const effectiveInput = state.prologueAutoPilotForward
     ? { ...input.inputState, up: true }
     : input.inputState
-  updateShip(state.ship, effectiveInput, dt, aimRotation)
+  updateShip(state.ship, effectiveInput, dt)
 
   // Prologue speed override: boost acceleration and raise speed cap.
   // updateShip() clamps at SHIP_MAX_SPEED (120), so we uncap and re-apply
@@ -762,8 +699,7 @@ export function tick(state: TickState, input: TickInput): TickResult {
 
   // --- Auto-fire: when aim is active and the aim ray passes through a live
   // asteroid or enemy, fire automatically (player doesn't have to hold).
-  // Skip during prologue — that flow has its own scripted auto-fire.
-  if (!isPrologue && state.aimActive && input.aimWorldPosition && state.inputCooldown <= 0) {
+  if (firingAllowed && state.aimActive && input.aimWorldPosition && state.inputCooldown <= 0) {
     if (aimLineHasVisibleTarget(state, input.aimWorldPosition, input.viewBounds)) {
       state.fireTarget = { x: input.aimWorldPosition.x, y: input.aimWorldPosition.y }
       state.mouseHoldingFire = true
@@ -771,17 +707,24 @@ export function tick(state: TickState, input: TickInput): TickResult {
   }
 
   // --- Universal "only fire at targets" gate ---
-  // Whatever set fireTarget (manual hold, gamepad right-stick aim, mobile fire
-  // button, auto-fire), only proceed if the aim direction actually passes
-  // through a live asteroid or enemy that's on screen. Skip during prologue
-  // (it scripts its own aim and always targets a live entity anyway).
-  if (
-    !isPrologue &&
-    state.fireTarget &&
-    !aimLineHasVisibleTarget(state, state.fireTarget, input.viewBounds)
-  ) {
+  // Applies to every input path AND every tool. If the player is trying to
+  // fire — either a fireTarget was set (manual hold, gamepad aim, mobile fire
+  // button, auto-fire) OR the fire button is held — suppress firing unless the
+  // aim direction crosses a live, on-screen asteroid or enemy.
+  //
+  // The `|| mouseHoldingFire` term matters for the lazer: it fires on
+  // `mouseHoldingFire` alone, so a gate guarded only by `fireTarget` would let
+  // a held lazer beam into empty space whenever fireTarget happened to be null.
+  if (!firingAllowed) {
+    // Prologue beats where firing is disallowed — force fire state off.
     state.fireTarget = null
     state.mouseHoldingFire = false
+  } else if (state.fireTarget || state.mouseHoldingFire) {
+    const aimPoint = state.fireTarget ?? input.aimWorldPosition
+    if (!aimPoint || !aimLineHasVisibleTarget(state, aimPoint, input.viewBounds)) {
+      state.fireTarget = null
+      state.mouseHoldingFire = false
+    }
   }
 
   // --- Fire ---

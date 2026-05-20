@@ -3,7 +3,12 @@ import { createShipModel } from './ship-model'
 import { createAsteroidModel } from './asteroid-model'
 import { spawnAsteroidField, spawnPrologueField } from './asteroid-spawner'
 import { createArbiterModel } from './arbiter-model'
-import { PROLOGUE_ASTEROID_COUNT, PROLOGUE_MOON_COUNT, PROLOGUE_SHIP } from './prologue-config'
+import {
+  PROLOGUE_ASTEROID_COUNT,
+  PROLOGUE_MOON_COUNT,
+  PROLOGUE_SHIP,
+  ARBITER_SPAWN_DISTANCE,
+} from './prologue-config'
 import {
   createGasStationModel,
   initGasStationNeon,
@@ -46,8 +51,13 @@ import {
   startEngineSound,
   updateEngineSound,
   suspendEngineSound,
+  startArbiterSiren,
+  updateArbiterSiren,
+  stopArbiterSiren,
   disposeSfx,
 } from './sfx'
+import { createRadar, updateRadar, disposeRadar } from './radar'
+import type { Radar, RadarBlip } from './radar'
 import { createScreenShake, addTrauma, updateScreenShake } from './screen-shake'
 import type { ScreenShake } from './screen-shake'
 import {
@@ -168,6 +178,9 @@ export function createGameScene(
   renderer.setSize(container.clientWidth, container.clientHeight)
   renderer.setClearColor(0x0a0a1a)
   container.appendChild(renderer.domElement)
+
+  // --- Radar mini-map (lower-left overlay canvas) ---
+  const radar: Radar | null = createRadar(container)
 
   // --- Scene ---
   const scene = new THREE.Scene()
@@ -1028,6 +1041,38 @@ export function createGameScene(
       stars.position.x = camera.position.x * 0.5
       stars.position.y = camera.position.y * 0.5
 
+      // --- Arbiter approach siren ---
+      // Wails throughout the prologue-arbiter beat, rising as it closes in.
+      if (currentStep === 'prologue-arbiter') {
+        startArbiterSiren()
+        const proximity = 1 - tickState.prologueArbiterDistance / ARBITER_SPAWN_DISTANCE
+        updateArbiterSiren(proximity)
+      } else {
+        stopArbiterSiren()
+      }
+
+      // --- Radar mini-map ---
+      if (radar) {
+        const radarEnemies: RadarBlip[] = []
+        if (tickState.enemy && tickState.enemy.alive) {
+          radarEnemies.push({ x: tickState.enemy.x, y: tickState.enemy.y })
+        }
+        for (const ae of tickState.ambushEnemies) {
+          if (ae.alive) radarEnemies.push({ x: ae.x, y: ae.y })
+        }
+        updateRadar(radar, {
+          shipX: ship.x,
+          shipY: ship.y,
+          shipRotation: ship.rotation,
+          asteroids: asteroids.filter((a) => a.hp > 0),
+          enemies: radarEnemies,
+          station: { x: GAS_STATION_X, y: GAS_STATION_Y },
+          arbiter: arbiterModel
+            ? { x: arbiterModel.position.x, y: arbiterModel.position.y }
+            : null,
+        })
+      }
+
       wasPaused = false
     } else {
       // --- Paused: mute all looping audio ---
@@ -1035,6 +1080,7 @@ export function createGameScene(
         wasPaused = true
         suspendEngineSound()
         stopCollectorHum()
+        stopArbiterSiren()
       }
     }
 
@@ -1115,6 +1161,9 @@ export function createGameScene(
     disposeCollectorVfx(collectorVfx)
     disposeAudio()
     disposeSfx()
+
+    // Remove the radar overlay canvas
+    if (radar) disposeRadar(radar)
 
     // Clean up background effects & engine trail
     disposeTwinkleStars(twinkleStars)

@@ -186,6 +186,7 @@ function SellPanel({
       </div>
       <button
         data-menu-item
+        data-menu-sound="sell"
         onClick={onSell}
         disabled={!hasMaterials}
         className={`mt-2 w-full py-3 rounded font-bold text-sm tracking-wider transition-all focus:outline-none focus:ring-2 focus:ring-hud-amber ${
@@ -250,6 +251,7 @@ function BuyPanel({
             </div>
             <button
               data-menu-item
+              data-menu-sound="buy"
               onClick={() => onBuy(item.type, item.cost)}
               disabled={!canAfford}
               className={`ml-3 px-4 py-2 rounded text-xs font-bold tracking-wider transition-all focus:outline-none focus:ring-2 focus:ring-hud-blue ${
@@ -284,6 +286,7 @@ function BuyPanel({
         </div>
         <button
           data-menu-item
+          data-menu-sound="buy"
           onClick={onBuyLazer}
           disabled={!canAffordLazer}
           className={`ml-3 px-4 py-2 rounded text-xs font-bold tracking-wider transition-all focus:outline-none focus:ring-2 focus:ring-hud-blue ${

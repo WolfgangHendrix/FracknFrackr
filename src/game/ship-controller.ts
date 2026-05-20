@@ -1,7 +1,22 @@
 import type { Ship } from '@/lib/schemas'
 import type { InputState, AimState } from './input'
 import { inputToDirection } from './input'
-import { SHIP_ACCELERATION, SHIP_MAX_SPEED, SHIP_FRICTION } from './ship-constants'
+import { SHIP_ACCELERATION, SHIP_MAX_SPEED, SHIP_FRICTION, SHIP_TURN_RATE } from './ship-constants'
+
+/** Speed (units/sec) below which the hull keeps its current heading. */
+const HEADING_HOLD_SPEED = 4
+
+/**
+ * Rotate `current` toward `target` by at most `maxDelta` radians, taking the
+ * shortest way around the circle.
+ */
+function steerAngle(current: number, target: number, maxDelta: number): number {
+  let diff = target - current
+  while (diff > Math.PI) diff -= Math.PI * 2
+  while (diff < -Math.PI) diff += Math.PI * 2
+  if (Math.abs(diff) <= maxDelta) return target
+  return current + Math.sign(diff) * maxDelta
+}
 
 /**
  * Convert screen-space aim coordinates to a world-space aim angle
@@ -36,21 +51,16 @@ export function aimToRotation(
  * Update ship physics for one frame.
  * Mutates the ship state in place.
  *
- * Ship rotation is decoupled from movement:
- * - If an aim target is provided (mouse cursor), ship faces the aim target
- * - Otherwise, ship faces the movement direction as a fallback
+ * The hull always faces its direction of travel, so the engine exhaust
+ * (drawn opposite the hull's heading) stays consistent with how the ship
+ * actually moves. The shooting turret tracks the aim direction separately
+ * (see scene.ts) and is therefore decoupled from the hull.
  *
  * @param ship - Current ship state (mutated)
  * @param input - Current keyboard input state
  * @param dt - Delta time in seconds
- * @param aimRotation - Optional aim angle (from aimToRotation). If null, falls back to movement direction.
  */
-export function updateShip(
-  ship: Ship,
-  input: InputState,
-  dt: number,
-  aimRotation?: number | null,
-): void {
+export function updateShip(ship: Ship, input: InputState, dt: number): void {
   const [dx, dy] = inputToDirection(input)
 
   // Apply acceleration
@@ -79,12 +89,12 @@ export function updateShip(
   ship.x += ship.velocityX * dt
   ship.y += ship.velocityY * dt
 
-  // Update rotation: prefer aim target, then joystick angle, fall back to cardinal direction
-  if (aimRotation != null) {
-    ship.rotation = aimRotation
-  } else if (input.joystickAngle != null) {
-    ship.rotation = input.joystickAngle
-  } else if (dx !== 0 || dy !== 0) {
-    ship.rotation = Math.atan2(-dx, dy)
+  // Rotate the hull toward its direction of travel. The model faces local +Y,
+  // so a velocity of (vx, vy) maps to rotation atan2(-vx, vy). Below the hold
+  // speed the heading is kept so a stopped ship doesn't spin from drift noise.
+  const speed2 = Math.sqrt(ship.velocityX ** 2 + ship.velocityY ** 2)
+  if (speed2 > HEADING_HOLD_SPEED) {
+    const targetRotation = Math.atan2(-ship.velocityX, ship.velocityY)
+    ship.rotation = steerAngle(ship.rotation, targetRotation, SHIP_TURN_RATE * dt)
   }
 }

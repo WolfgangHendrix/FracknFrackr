@@ -1,8 +1,8 @@
 /**
  * Prologue sequence configuration.
  *
- * The prologue showcases a fully maxed-out ship with auto-fire,
- * auto-mine, and magnet collector before The Arbiter strips it all.
+ * The prologue showcases a fully maxed-out ship — high tier, fast, with a
+ * wide magnet collector — before The Arbiter strips it all.
  */
 
 import type { MiningTool } from './types'
@@ -15,8 +15,6 @@ export const PROLOGUE_SHIP = {
   acceleration: 300,
   collectorRange: 40,
   collisionRadius: 5,
-  /** Auto-fire triggers when any target is within this range (world units). */
-  autoFireRange: 150,
 }
 
 export const PROLOGUE_ASTEROID_COUNT = 30
