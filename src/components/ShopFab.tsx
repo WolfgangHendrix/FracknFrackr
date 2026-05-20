@@ -9,7 +9,8 @@ export function ShopFab({ highlight, onClick }: ShopFabProps) {
   return (
     <button
       onClick={onClick}
-      className={`fixed bottom-14 left-1/2 -translate-x-1/2 z-40 w-16 h-16 rounded-full font-bold text-2xl shadow-lg transition-all flex items-center justify-center ${
+      data-menu-item
+      className={`fixed bottom-14 left-1/2 -translate-x-1/2 z-40 w-16 h-16 rounded-full font-bold text-2xl shadow-lg transition-all flex items-center justify-center focus:outline-none focus:ring-4 focus:ring-white/80 focus:scale-110 ${
         highlight
           ? 'bg-hud-green text-space-900 animate-pulse scale-110'
           : 'bg-hud-green/80 text-space-900 hover:scale-110 active:scale-95 hover:bg-hud-green'

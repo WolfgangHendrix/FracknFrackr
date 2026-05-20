@@ -22,11 +22,12 @@ const BOX_FRICTION = 0.99
 /** Slow tumble speed (radians/sec). */
 const BOX_TUMBLE_SPEED = 1.5
 
-/** Scrap box colors — metallic crate. */
-const BOX_COLORS = {
-  frame: 0x888888,
-  panel: 0x556677,
-  accent: 0xffaa00,
+/** Salvage palette — a charred chunk torn from the destroyed enemy ship. */
+const SALVAGE_COLORS = {
+  hull: 0xaa3333, // enemy hull red
+  charred: 0x4a2828, // scorched, burnt metal
+  strut: 0x7b828c, // exposed structural metal
+  accent: 0xffaa00, // glowing salvage marker
 } as const
 
 // ---------------------------------------------------------------------------
@@ -46,41 +47,83 @@ export interface ScrapBox {
 }
 
 // ---------------------------------------------------------------------------
-// Scrap box model — small metallic crate
+// Salvage model — a wreckage chunk torn from the destroyed enemy ship
 // ---------------------------------------------------------------------------
 
-function createScrapBoxModel(): THREE.Group {
-  const group = new THREE.Group()
-
-  // Main crate body (3x3x3 voxel cube with panels)
-  const positions: [number, number, number, number][] = [
-    // Frame edges
-    [-1, -1, 0, BOX_COLORS.frame],
-    [1, -1, 0, BOX_COLORS.frame],
-    [-1, 1, 0, BOX_COLORS.frame],
-    [1, 1, 0, BOX_COLORS.frame],
-    // Center panels
-    [0, -1, 0, BOX_COLORS.panel],
-    [0, 1, 0, BOX_COLORS.panel],
-    [-1, 0, 0, BOX_COLORS.panel],
-    [1, 0, 0, BOX_COLORS.panel],
-    // Center accent (glowing scrap indicator)
-    [0, 0, 0, BOX_COLORS.accent],
-    // Top layer
-    [0, 0, 1, BOX_COLORS.frame],
-  ]
-
-  for (const [vx, vy, vz, color] of positions) {
-    const geo = new THREE.BoxGeometry(BOX_VOXEL, BOX_VOXEL, BOX_VOXEL)
-    const isAccent = color === BOX_COLORS.accent
-    const mat = new THREE.MeshStandardMaterial({
+/** Build the MeshStandardMaterial for a salvage voxel of the given color. */
+function salvageMaterial(color: number): THREE.MeshStandardMaterial {
+  if (color === SALVAGE_COLORS.accent) {
+    // Glowing salvage core.
+    return new THREE.MeshStandardMaterial({
       color,
       flatShading: true,
-      metalness: 0.6,
-      roughness: 0.3,
-      ...(isAccent ? { emissive: color, emissiveIntensity: 0.4 } : {}),
+      metalness: 0.4,
+      roughness: 0.4,
+      emissive: color,
+      emissiveIntensity: 0.6,
     })
-    const mesh = new THREE.Mesh(geo, mat)
+  }
+  if (color === SALVAGE_COLORS.charred) {
+    // Burnt metal — matte, non-reflective.
+    return new THREE.MeshStandardMaterial({
+      color,
+      flatShading: true,
+      metalness: 0.2,
+      roughness: 0.85,
+    })
+  }
+  if (color === SALVAGE_COLORS.strut) {
+    // Bare structural metal — shiny.
+    return new THREE.MeshStandardMaterial({
+      color,
+      flatShading: true,
+      metalness: 0.8,
+      roughness: 0.3,
+    })
+  }
+  // Hull plating.
+  return new THREE.MeshStandardMaterial({
+    color,
+    flatShading: true,
+    metalness: 0.5,
+    roughness: 0.5,
+  })
+}
+
+/**
+ * Build the dropped salvage: an irregular voxel cluster that reads as a
+ * torn-off piece of the enemy ship — scorched red hull plating, buckled
+ * fragments, and exposed structural struts jutting from the break, with a
+ * glowing core so it still stands out as a collectible.
+ */
+function createScrapBoxModel(): THREE.Group {
+  const group = new THREE.Group()
+  const { hull, charred, strut, accent } = SALVAGE_COLORS
+
+  const voxels: [number, number, number, number][] = [
+    // Base hull slab — jagged, asymmetric
+    [-1, -1, 0, hull],
+    [0, -1, 0, charred],
+    [1, -1, 0, hull],
+    [-1, 0, 0, hull],
+    [0, 0, 0, accent],
+    [1, 0, 0, hull],
+    [-1, 1, 0, charred],
+    [0, 1, 0, hull],
+    // Buckled fragments raised off the slab
+    [-1, 0, 1, hull],
+    [0, 1, 1, charred],
+    [1, -1, 1, hull],
+    // Exposed structural struts jutting from the break
+    [2, 0, 0, strut],
+    [-2, 0, 0, strut],
+  ]
+
+  for (const [vx, vy, vz, color] of voxels) {
+    // Struts are slimmer so they read as torn framework, not full blocks.
+    const size = color === strut ? BOX_VOXEL * 0.55 : BOX_VOXEL
+    const geo = new THREE.BoxGeometry(size, size, size)
+    const mesh = new THREE.Mesh(geo, salvageMaterial(color))
     mesh.position.set(vx * BOX_VOXEL, vy * BOX_VOXEL, vz * BOX_VOXEL * 0.5)
     group.add(mesh)
   }

@@ -258,6 +258,11 @@ export default function Home() {
 
   const inPrologue = tutorialStep.startsWith('prologue-')
 
+  // Trade-station shop FAB visibility. Hidden during the scripted prologue —
+  // the shop has no role in the intro, and the FAB would overlap the SKIP
+  // INTRO prompt (both sit bottom-centre).
+  const shopFabVisible = inStationRange && !tradeMenuOpen && !inPrologue
+
   // Tutorial catch-up: auto-advance trade steps when their conditions are already met.
   // This prevents the tutorial from getting stuck if the player performed actions
   // (opened trade, sold materials, bought upgrades) before the tutorial reached those steps.
@@ -301,7 +306,9 @@ export default function Home() {
         ? 'trade'
         : tutorial.active
           ? `tut:${tutorial.step}`
-          : ''
+          : shopFabVisible
+            ? 'shop'
+            : ''
   useGamepadMenu({
     enabled: screen === 'game',
     resetKey: inGameOverlayKey,
@@ -376,7 +383,7 @@ export default function Home() {
           onDismiss={tutorial.unfreeze}
         />
       )}
-      {inStationRange && !tradeMenuOpen && (
+      {shopFabVisible && (
         <ShopFab
           highlight={tutorial.active && tutorial.step === 'approach-station'}
           onClick={handleShopFabClick}
