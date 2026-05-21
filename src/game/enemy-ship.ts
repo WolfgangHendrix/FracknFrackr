@@ -359,22 +359,37 @@ function createCarrierModel(): THREE.Group {
   return group
 }
 
-/** Drone — a normal-sized red fighter launched by carriers. */
+/**
+ * Drone — a carrier-launched fighter. Same footprint as a regular grunt,
+ * with a brighter orange-red palette and straight (rather than swept) wings
+ * so it still reads as a distinct unit.
+ */
 function createDroneModel(): THREE.Group {
   const group = new THREE.Group()
   const hull = 0xcc4444
   const wing = 0xff6644
 
-  // Slim body
-  for (let row = -1; row <= 2; row++) addVoxel(group, 0, row, 0, hull)
-  addVoxel(group, 0, 2, 0.4, 0xff8888) // cockpit
-  // Stubby swept wings
-  addVoxel(group, -1, 0, 0, wing)
-  addVoxel(group, 1, 0, 0, wing)
-  addVoxel(group, -2, -1, 0, wing)
-  addVoxel(group, 2, -1, 0, wing)
-  // Engine
-  addVoxel(group, 0, -2, -0.3, 0xff8800)
+  // Body — matches the grunt's dimensions
+  for (let row = -2; row <= 3; row++) {
+    addVoxel(group, 0, row, 0, hull)
+    if (row >= -1 && row <= 2) {
+      addVoxel(group, -1, row, 0, hull)
+      addVoxel(group, 1, row, 0, hull)
+    }
+  }
+  // Cockpit
+  addVoxel(group, 0, 4, 0.5, 0xff8888)
+  // Straight wings
+  for (let w = 2; w <= 4; w++) {
+    addVoxel(group, -w, 0, 0, wing)
+    addVoxel(group, w, 0, 0, wing)
+  }
+  addVoxel(group, -4, 1, 0, wing)
+  addVoxel(group, 4, 1, 0, wing)
+  // Engine glow
+  addVoxel(group, -1, -3, -0.3, 0xff8800)
+  addVoxel(group, 0, -3, -0.3, 0xff8800)
+  addVoxel(group, 1, -3, -0.3, 0xff8800)
   return group
 }
 

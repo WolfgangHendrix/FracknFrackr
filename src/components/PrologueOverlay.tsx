@@ -30,48 +30,25 @@ function FadingText({ text, color = 'text-hud-green' }: { text: string; color?: 
   )
 }
 
-/** Click-to-advance Arbiter dialogue. Each tap reveals the next line. */
+/**
+ * Arbiter dialogue — reveals one line at a time, each lingering long enough
+ * to read at a normal pace before the next appears, then completes itself.
+ */
 function ArbiterDialogue({ onComplete }: { onComplete: () => void }) {
   const [lineIndex, setLineIndex] = useState(0)
   const allRevealed = lineIndex >= ARBITER_DIALOGUE.length
 
-  const advance = useCallback(() => {
-    setLineIndex((i) => {
-      const next = i + 1
-      if (next >= ARBITER_DIALOGUE.length) {
-        // Defer onComplete to avoid setState-during-render
-        setTimeout(onComplete, 0)
-      }
-      return next
-    })
-  }, [onComplete])
-
-  // Listen for any tap/click/key to advance dialogue
+  // Auto-advance: hold each line on screen for a readable beat. The duration
+  // scales with line length so longer lines get more time.
   useEffect(() => {
-    if (allRevealed) return
-
-    let handler: ((e: Event) => void) | null = null
-
-    // Small grace period so the tap that triggered this step doesn't advance immediately
-    const timerId = setTimeout(() => {
-      handler = (e: Event) => {
-        e.preventDefault()
-        advance()
-      }
-      window.addEventListener('mousedown', handler, { once: true })
-      window.addEventListener('touchstart', handler, { once: true })
-      window.addEventListener('keydown', handler, { once: true })
-    }, 300)
-
-    return () => {
-      clearTimeout(timerId)
-      if (handler) {
-        window.removeEventListener('mousedown', handler)
-        window.removeEventListener('touchstart', handler)
-        window.removeEventListener('keydown', handler)
-      }
+    if (lineIndex >= ARBITER_DIALOGUE.length) {
+      const done = setTimeout(onComplete, 500)
+      return () => clearTimeout(done)
     }
-  }, [lineIndex, allRevealed, advance])
+    const readMs = 1900 + ARBITER_DIALOGUE[lineIndex].length * 55
+    const next = setTimeout(() => setLineIndex((i) => i + 1), readMs)
+    return () => clearTimeout(next)
+  }, [lineIndex, onComplete])
 
   return (
     <div className="flex flex-col items-center gap-3">
@@ -85,18 +62,6 @@ function ArbiterDialogue({ onComplete }: { onComplete: () => void }) {
           &quot;{line}&quot;
         </p>
       ))}
-      {!allRevealed && (
-        <>
-          <p className="text-white/40 text-sm mt-2 animate-pulse">Tap to continue</p>
-          {/* Invisible focusable target so gamepad A press advances dialogue. */}
-          <button
-            data-menu-item
-            onClick={advance}
-            aria-label="Advance dialogue"
-            className="pointer-events-auto absolute opacity-0 w-px h-px"
-          />
-        </>
-      )}
     </div>
   )
 }
