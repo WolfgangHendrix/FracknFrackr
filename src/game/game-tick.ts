@@ -54,7 +54,13 @@ import {
   updateEnemyProjectile,
   ENEMY_COLLISION_RADIUS,
   ENEMY_SPAWN_DISTANCE,
+  CARRIER_DRONE_INTERVAL,
+  CARRIER_MAX_DRONES,
+  DRONE_DAMAGE_MULT,
+  SCAVENGER_GRAB_RANGE,
+  SCAVENGER_ESCAPE_DISTANCE,
 } from './enemy-ship'
+import type { EnemyKind } from './enemy-ship'
 import { createScrapBox, updateScrapBox, attractScrapBoxToShip, SCRAP_BOX_VALUE } from './scrap-box'
 import { HITS_PER_BREAK } from './asteroid-debris'
 import { spawnEdgeAsteroid } from './asteroid-spawner'
@@ -84,8 +90,8 @@ import {
 import type { ArbiterState } from './arbiter'
 import {
   PROLOGUE_SHIP,
-  PROLOGUE_ENEMY_FLEET_SIZE,
   PROLOGUE_MINING_TARGET,
+  PROLOGUE_FIELD_RADIUS,
   ARBITER_STRIP_DELAY,
   ARBITER_SPAWN_DISTANCE,
   ARBITER_APPROACH_SPEED,
@@ -248,6 +254,12 @@ export interface TickResult {
   // Ambush
   ambushEnemiesSpawned: EnemyShip[]
   ambushEnemiesDestroyed: EnemyShip[]
+  /** Scavengers that fled the sector with loot — remove their meshes quietly. */
+  enemiesEscaped: EnemyShip[]
+  /** Ids of metal chunks stolen by scavengers (mesh removal, no player credit). */
+  metalStolen: string[]
+  /** Ids of scrap boxes stolen by scavengers (mesh removal, no player credit). */
+  scrapStolen: string[]
   // Callback events (booleans/counts for scene.ts callbacks)
   shipMoved: boolean
   asteroidHit: boolean
@@ -414,6 +426,9 @@ function emptyResult(): TickResult {
     enemyProjectileHits: [],
     ambushEnemiesSpawned: [],
     ambushEnemiesDestroyed: [],
+    enemiesEscaped: [],
+    metalStolen: [],
+    scrapStolen: [],
     shipMoved: false,
     asteroidHit: false,
     crystallineDeflect: false,
@@ -587,15 +602,17 @@ function prologueTick(state: TickState, input: TickInput, result: TickResult): v
   if (step === 'prologue-mining') {
     state.prologueAutoCollect = true
 
-    // Spawn enemy fleet once (alongside asteroids)
+    // Spawn enemy fleet once (alongside asteroids). The prologue showcases
+    // every hostile class — a grunt pair, snipers, a scavenger, and a carrier
+    // (which then launches its own drones) — as a taste of the threats ahead.
     if (!state.prologueEnemiesSpawned) {
       state.prologueEnemiesSpawned = true
-      for (let i = 0; i < PROLOGUE_ENEMY_FLEET_SIZE; i++) {
-        const angle = (i / PROLOGUE_ENEMY_FLEET_SIZE) * Math.PI * 2
-        const dist = ENEMY_SPAWN_DISTANCE
-        const ex = state.ship.x + Math.cos(angle) * dist
-        const ey = state.ship.y + Math.sin(angle) * dist
-        const enemy = createEnemyShip(ex, ey, AMBUSH_PROJECTILE_DAMAGE)
+      const fleet: EnemyKind[] = ['grunt', 'grunt', 'sniper', 'sniper', 'scavenger', 'carrier']
+      for (let i = 0; i < fleet.length; i++) {
+        const angle = (i / fleet.length) * Math.PI * 2
+        const ex = state.ship.x + Math.cos(angle) * ENEMY_SPAWN_DISTANCE
+        const ey = state.ship.y + Math.sin(angle) * ENEMY_SPAWN_DISTANCE
+        const enemy = createEnemyShip(ex, ey, AMBUSH_PROJECTILE_DAMAGE, fleet[i])
         state.ambushEnemies.push(enemy)
         result.ambushEnemiesSpawned.push(enemy)
       }
@@ -787,6 +804,28 @@ export function tick(state: TickState, input: TickInput): TickResult {
 
   // --- Asteroid-asteroid collision ---
   resolveAsteroidAsteroidCollisions(state.asteroids)
+
+  // --- Prologue containment: bounce asteroids off an invisible bubble so the
+  // field never drifts out of reach and the mining target stays achievable ---
+  if (isPrologue) {
+    const rSq = PROLOGUE_FIELD_RADIUS * PROLOGUE_FIELD_RADIUS
+    for (const a of state.asteroids) {
+      const distSq = a.x * a.x + a.y * a.y
+      if (distSq <= rSq) continue
+      const dist = Math.sqrt(distSq) || 1
+      const nx = a.x / dist
+      const ny = a.y / dist
+      // Clamp back onto the boundary
+      a.x = nx * PROLOGUE_FIELD_RADIUS
+      a.y = ny * PROLOGUE_FIELD_RADIUS
+      // Reflect any outward velocity inward (damped bounce)
+      const outward = a.velocityX * nx + a.velocityY * ny
+      if (outward > 0) {
+        a.velocityX -= 1.6 * outward * nx
+        a.velocityY -= 1.6 * outward * ny
+      }
+    }
+  }
 
   // --- Ship-asteroid collision ---
   for (const a of state.asteroids) {
@@ -1233,9 +1272,13 @@ export function tick(state: TickState, input: TickInput): TickResult {
     for (const ae of state.ambushEnemies) {
       if (!ae.alive) continue
       const newProjs = updateEnemyShip(ae, state.ship, dt, state.asteroids)
-      // Prologue ambush enemies fire a frantic barrage; endless patrols keep
-      // the normal enemy cadence set inside updateEnemyShip().
-      if (isPrologue && ae.shootTimer > AMBUSH_SHOOT_MAX) {
+      // Prologue grunts/drones fire a frantic barrage; ranged kinds keep
+      // their own cadence, and endless patrols use the updateEnemyShip default.
+      if (
+        isPrologue &&
+        (ae.kind === 'grunt' || ae.kind === 'drone') &&
+        ae.shootTimer > AMBUSH_SHOOT_MAX
+      ) {
         ae.shootTimer = AMBUSH_SHOOT_MIN + Math.random() * (AMBUSH_SHOOT_MAX - AMBUSH_SHOOT_MIN)
       }
       for (const proj of newProjs) {
@@ -1243,6 +1286,9 @@ export function tick(state: TickState, input: TickInput): TickResult {
         result.newEnemyProjectiles.push(proj)
       }
     }
+
+    // Carriers launch drone swarms; scavengers acquire/steal loot and flee.
+    updateSpecialEnemies(state, result)
 
     // Projectile collision check against ambush enemies
     if (state.projectiles.length > 0) {
@@ -1432,6 +1478,18 @@ function updateEndlessMode(
   }
 }
 
+/**
+ * Pick a patrol enemy class. The roster opens up as the Ledger climbs, so a
+ * fresh run faces plain grunts and later runs see the full bestiary.
+ */
+function pickPatrolKind(ledger: number): EnemyKind {
+  const r = Math.random()
+  if (ledger > 2000 && r < 0.14) return 'carrier'
+  if (ledger > 900 && r < 0.36) return 'scavenger'
+  if (ledger > 300 && r < 0.62) return 'sniper'
+  return 'grunt'
+}
+
 /** Spawn up to `requested` patrol enemies off-screen around the player. */
 function spawnPatrol(
   state: TickState,
@@ -1448,8 +1506,130 @@ function spawnPatrol(
     const angle = Math.random() * Math.PI * 2
     const ex = state.ship.x + Math.cos(angle) * ringRadius
     const ey = state.ship.y + Math.sin(angle) * ringRadius
-    const enemy = createEnemyShip(ex, ey, damage)
+    const enemy = createEnemyShip(ex, ey, damage, pickPatrolKind(state.ledger))
     state.ambushEnemies.push(enemy)
     result.ambushEnemiesSpawned.push(enemy)
+  }
+}
+
+/**
+ * Per-frame upkeep for the special enemy kinds: carriers launch drone swarms,
+ * scavengers acquire and steal loot, then flee the sector once they have it.
+ */
+function updateSpecialEnemies(state: TickState, result: TickResult): void {
+  // --- Carriers launch drones ---
+  const carriers = state.ambushEnemies.filter((e) => e.kind === 'carrier' && e.alive)
+  for (const carrier of carriers) {
+    if (carrier.droneTimer > 0) continue
+    carrier.droneTimer = CARRIER_DRONE_INTERVAL
+    const aliveDrones = state.ambushEnemies.reduce(
+      (n, e) => n + (e.kind === 'drone' && e.alive ? 1 : 0),
+      0,
+    )
+    if (aliveDrones >= CARRIER_MAX_DRONES * carriers.length) continue
+    const ang = Math.random() * Math.PI * 2
+    const drone = createEnemyShip(
+      carrier.x + Math.cos(ang) * 9,
+      carrier.y + Math.sin(ang) * 9,
+      carrier.projectileDamage * DRONE_DAMAGE_MULT,
+      'drone',
+    )
+    state.ambushEnemies.push(drone)
+    result.ambushEnemiesSpawned.push(drone)
+  }
+
+  // --- Scavengers chase loot, steal it, then flee ---
+  const scavengers = state.ambushEnemies.filter((e) => e.kind === 'scavenger' && e.alive)
+  for (const sc of scavengers) {
+    if (sc.fleeing) {
+      const fdx = sc.x - state.ship.x
+      const fdy = sc.y - state.ship.y
+      if (fdx * fdx + fdy * fdy > SCAVENGER_ESCAPE_DISTANCE * SCAVENGER_ESCAPE_DISTANCE) {
+        // Got away clean — drop it from the fight (scene removes the mesh).
+        sc.alive = false
+        result.enemiesEscaped.push(sc)
+      }
+      continue
+    }
+
+    // Keep the cached target position fresh; drop it if the loot is gone
+    // (the player collected it, or another scavenger grabbed it first).
+    if (sc.targetLootId) {
+      const loot = findLoot(state, sc.targetLootId)
+      if (loot) {
+        sc.targetLootX = loot.x
+        sc.targetLootY = loot.y
+      } else {
+        sc.targetLootId = null
+      }
+    }
+    if (!sc.targetLootId) {
+      const nearest = nearestLoot(state, sc.x, sc.y)
+      if (nearest) {
+        sc.targetLootId = nearest.id
+        sc.targetLootX = nearest.x
+        sc.targetLootY = nearest.y
+      }
+    }
+    // Snatch the loot once it is in reach, then bolt.
+    if (sc.targetLootId) {
+      const gdx = sc.targetLootX - sc.x
+      const gdy = sc.targetLootY - sc.y
+      if (gdx * gdx + gdy * gdy < SCAVENGER_GRAB_RANGE * SCAVENGER_GRAB_RANGE) {
+        stealLoot(state, result, sc.targetLootId)
+        sc.carrying++
+        sc.fleeing = true
+        sc.targetLootId = null
+      }
+    }
+  }
+}
+
+/** Find a loot item (metal chunk or scrap box) by id. */
+function findLoot(state: TickState, id: string): { x: number; y: number } | null {
+  const m = state.metalChunks.find((c) => c.id === id)
+  if (m) return m
+  const s = state.scrapBoxes.find((b) => b.id === id)
+  if (s) return s
+  return null
+}
+
+/** Nearest loot item to a point, or null when the field has none. */
+function nearestLoot(
+  state: TickState,
+  x: number,
+  y: number,
+): { id: string; x: number; y: number } | null {
+  let best: { id: string; x: number; y: number } | null = null
+  let bestSq = Infinity
+  for (const c of state.metalChunks) {
+    const d = (c.x - x) ** 2 + (c.y - y) ** 2
+    if (d < bestSq) {
+      bestSq = d
+      best = c
+    }
+  }
+  for (const b of state.scrapBoxes) {
+    const d = (b.x - x) ** 2 + (b.y - y) ** 2
+    if (d < bestSq) {
+      bestSq = d
+      best = b
+    }
+  }
+  return best
+}
+
+/** Remove a stolen loot item from the world; scene.ts clears its mesh. */
+function stealLoot(state: TickState, result: TickResult, id: string): void {
+  const mi = state.metalChunks.findIndex((c) => c.id === id)
+  if (mi >= 0) {
+    state.metalChunks.splice(mi, 1)
+    result.metalStolen.push(id)
+    return
+  }
+  const si = state.scrapBoxes.findIndex((b) => b.id === id)
+  if (si >= 0) {
+    state.scrapBoxes.splice(si, 1)
+    result.scrapStolen.push(id)
   }
 }

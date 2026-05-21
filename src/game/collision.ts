@@ -7,7 +7,6 @@ import { PROJECTILE_RADIUS, LAZER_DAMAGE_MULTIPLIER } from './blaster-constants'
 import {
   SHIP_COLLISION_RADIUS,
   ASTEROID_COLLISION_RADIUS,
-  ENEMY_COLLISION_RADIUS,
   COLLISION_PUSH_BUFFER,
 } from './collision-constants'
 import { ASTEROID_SIZE_RADIUS } from './asteroid-model'
@@ -89,17 +88,18 @@ export function resolveShipAsteroidCollision(ship: Ship, asteroid: Asteroid): bo
 /**
  * Resolve enemy-asteroid collision by pushing the enemy out of the asteroid.
  * Mirrors resolveShipAsteroidCollision but operates on the enemy's vx/vy
- * fields. Mutates the enemy and returns true if a collision was resolved.
+ * fields and its own `collisionRadius` (which varies by enemy kind).
+ * Mutates the enemy and returns true if a collision was resolved.
  */
 export function resolveEnemyAsteroidCollision(
-  enemy: { x: number; y: number; vx: number; vy: number },
+  enemy: { x: number; y: number; vx: number; vy: number; collisionRadius: number },
   asteroid: Asteroid,
 ): boolean {
   const dx = enemy.x - asteroid.x
   const dy = enemy.y - asteroid.y
   const distSq = dx * dx + dy * dy
   const asteroidRadius = ASTEROID_SIZE_RADIUS[asteroid.size] ?? ASTEROID_COLLISION_RADIUS
-  const minDist = ENEMY_COLLISION_RADIUS + asteroidRadius
+  const minDist = enemy.collisionRadius + asteroidRadius
 
   if (distSq >= minDist * minDist) return false
 

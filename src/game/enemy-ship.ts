@@ -54,6 +54,48 @@ export const ORBIT_DISTANCE = 50
 /** How far from the player the enemy spawns. */
 export const ENEMY_SPAWN_DISTANCE = 120
 
+// --- Sniper: long-range, charges a high-damage aimed shot ---
+export const SNIPER_MAX_HP = 2
+const SNIPER_RANGE = 115
+const SNIPER_SPEED = 16
+/** Wind-up time before the sniper fires (the laser sight is shown). */
+const SNIPER_CHARGE_TIME = 1.3
+/** Cooldown after a shot before the sniper can charge again. */
+const SNIPER_COOLDOWN = 2.4
+const SNIPER_PROJECTILE_SPEED = 280
+/** Charged shots hit far harder than a grunt's pot-shot. */
+const SNIPER_DAMAGE_MULT = 3
+
+// --- Scavenger: ignores the player, steals dropped loot, flees with it ---
+export const SCAVENGER_MAX_HP = 3
+const SCAVENGER_SPEED = 48
+/** Distance the scavenger loiters at while no loot is in reach. */
+const SCAVENGER_LOITER_DISTANCE = 75
+/** How close the scavenger must get to snatch a loot item. */
+export const SCAVENGER_GRAB_RANGE = 6
+/** Once fleeing, the scavenger escapes (despawns) past this distance. */
+export const SCAVENGER_ESCAPE_DISTANCE = 380
+
+// --- Carrier: slow, tanky, launches drone swarms ---
+export const CARRIER_MAX_HP = 14
+const CARRIER_SPEED = 10
+const CARRIER_RANGE = 135
+/** Seconds between drone launches. */
+export const CARRIER_DRONE_INTERVAL = 3.6
+/** Max drones a carrier keeps in the field at once. */
+export const CARRIER_MAX_DRONES = 3
+/** Carrier collision radius — bigger hull than a grunt. */
+const CARRIER_COLLISION_RADIUS = 6
+
+// --- Drone: tiny, fast, fragile swarm unit launched by carriers ---
+export const DRONE_MAX_HP = 1
+/** Drones deal a fraction of the carrier's configured projectile damage. */
+export const DRONE_DAMAGE_MULT = 0.5
+const DRONE_COLLISION_RADIUS = 2
+
+/** The behavioural class of a hostile ship. */
+export type EnemyKind = 'grunt' | 'sniper' | 'scavenger' | 'carrier' | 'drone'
+
 /** Colors for the enemy ship. */
 const ENEMY_COLORS = {
   hull: 0xaa3333,
@@ -90,6 +132,10 @@ const WRECK_COLORS = [0xaa3333, 0xff6600, 0x884422, 0xff4444, 0x663322] as const
 
 export interface EnemyShip {
   mesh: THREE.Group
+  /** Behavioural class — drives which AI runs in updateEnemyShip. */
+  kind: EnemyKind
+  /** Hull collision radius (varies by kind). */
+  collisionRadius: number
   x: number
   y: number
   vx: number
@@ -114,6 +160,24 @@ export interface EnemyShip {
   idling: boolean
   /** Target cardinal angle (0, π/2, π, -π/2) the enemy is steering toward. */
   targetCardinal: number
+  // --- Sniper state ---
+  /** True while winding up a charged shot (laser sight visible). */
+  charging: boolean
+  /** Seconds remaining in the current charge. */
+  chargeTimer: number
+  // --- Scavenger state ---
+  /** True once the scavenger has loot and is bolting for the sector edge. */
+  fleeing: boolean
+  /** Number of loot items the scavenger has hauled off. */
+  carrying: number
+  /** Id of the loot item the scavenger is currently chasing, or null. */
+  targetLootId: string | null
+  /** Last known position of the targeted loot. */
+  targetLootX: number
+  targetLootY: number
+  // --- Carrier state ---
+  /** Countdown to the next drone launch. */
+  droneTimer: number
 }
 
 export interface EnemyProjectile {
@@ -187,6 +251,145 @@ function createEnemyShipModel(): THREE.Group {
   return group
 }
 
+/** A thin red beam the sniper projects while charging — scaled by scene.ts. */
+function createLaserSight(): THREE.Mesh {
+  const geo = new THREE.BoxGeometry(0.4, 1, 0.4)
+  geo.translate(0, 0.5, 0) // base at the origin, extends along +Y
+  const mat = new THREE.MeshBasicMaterial({ color: 0xff3344, transparent: true, opacity: 0.45 })
+  const mesh = new THREE.Mesh(geo, mat)
+  mesh.position.set(0, 8, 0.4) // start just past the barrel tip
+  mesh.visible = false
+  return mesh
+}
+
+/** Sniper — slim violet hull with a long forward barrel and a laser sight. */
+function createSniperModel(): THREE.Group {
+  const group = new THREE.Group()
+  const hull = 0x6a3a9a
+  const accent = 0xcc66ff
+  const eye = 0xff55ff
+
+  for (let row = -3; row <= 3; row++) addVoxel(group, 0, row, 0, hull)
+  addVoxel(group, -1, 0, 0, hull)
+  addVoxel(group, 1, 0, 0, hull)
+  addVoxel(group, -1, -1, 0, hull)
+  addVoxel(group, 1, -1, 0, hull)
+  // Long barrel reaching forward
+  for (let row = 4; row <= 7; row++) addVoxel(group, 0, row, 0.2, accent)
+  addVoxel(group, 0, 1, 0.6, eye)
+  // Swept fins
+  addVoxel(group, -2, -2, 0, hull)
+  addVoxel(group, 2, -2, 0, hull)
+  addVoxel(group, -2, -3, 0, accent)
+  addVoxel(group, 2, -3, 0, accent)
+  addVoxel(group, 0, -4, -0.3, 0xff8800)
+
+  const sight = createLaserSight()
+  group.add(sight)
+  group.userData.laserSight = sight
+  return group
+}
+
+/** Scavenger — junky amber hull with forward grabber claws. */
+function createScavengerModel(): THREE.Group {
+  const group = new THREE.Group()
+  const hull = 0xaa7722
+  const accent = 0xffcc44
+  const dark = 0x5a4420
+
+  for (let x = -1; x <= 1; x++) {
+    for (let y = -2; y <= 2; y++) {
+      addVoxel(group, x, y, 0, x === 0 ? hull : dark)
+    }
+  }
+  // Grabber claws
+  addVoxel(group, -2, 3, 0, accent)
+  addVoxel(group, 2, 3, 0, accent)
+  addVoxel(group, -2, 2, 0, hull)
+  addVoxel(group, 2, 2, 0, hull)
+  addVoxel(group, -1, 3, 0, hull)
+  addVoxel(group, 1, 3, 0, hull)
+  addVoxel(group, 0, 1, 0.6, 0x66ffaa)
+  // Salvage strapped to the back
+  addVoxel(group, -1, -3, 0.3, accent)
+  addVoxel(group, 1, -3, -0.3, dark)
+  addVoxel(group, 0, -3, 0, hull)
+  addVoxel(group, 0, -4, -0.3, 0xff8800)
+  return group
+}
+
+/** Carrier — bulky teal hull with side drone bays and triple engines. */
+function createCarrierModel(): THREE.Group {
+  const group = new THREE.Group()
+  const hull = 0x3a6a7a
+  const accent = 0x66ddee
+  const dark = 0x223a44
+
+  for (let x = -2; x <= 2; x++) {
+    for (let y = -3; y <= 3; y++) {
+      const edge = Math.abs(x) === 2 || Math.abs(y) === 3
+      addVoxel(group, x, y, 0, edge ? dark : hull)
+    }
+  }
+  // Drone bays — glowing slots on the flanks
+  addVoxel(group, -3, 0, 0, accent)
+  addVoxel(group, 3, 0, 0, accent)
+  addVoxel(group, -3, -1, 0, dark)
+  addVoxel(group, 3, -1, 0, dark)
+  addVoxel(group, -3, 1, 0, dark)
+  addVoxel(group, 3, 1, 0, dark)
+  // Command bridge
+  addVoxel(group, 0, 2, 0.8, accent)
+  addVoxel(group, 0, 1, 0.6, hull)
+  // Triple engines
+  addVoxel(group, -1, -4, -0.3, 0xff8800)
+  addVoxel(group, 1, -4, -0.3, 0xff8800)
+  addVoxel(group, 0, -4, -0.3, 0xffaa00)
+  return group
+}
+
+/** Drone — tiny red swarm unit launched by carriers. */
+function createDroneModel(): THREE.Group {
+  const group = new THREE.Group()
+  const hull = 0xcc4444
+  addVoxel(group, 0, 0, 0, hull)
+  addVoxel(group, 0, 1, 0, hull)
+  addVoxel(group, -1, 0, 0, hull)
+  addVoxel(group, 1, 0, 0, hull)
+  addVoxel(group, 0, 1, 0.4, 0xff8888)
+  group.scale.setScalar(0.55)
+  return group
+}
+
+/** Per-kind hull stats. */
+interface KindStats {
+  maxHp: number
+  collisionRadius: number
+}
+const KIND_STATS: Record<EnemyKind, KindStats> = {
+  grunt: { maxHp: ENEMY_MAX_HP, collisionRadius: ENEMY_COLLISION_RADIUS },
+  sniper: { maxHp: SNIPER_MAX_HP, collisionRadius: ENEMY_COLLISION_RADIUS },
+  scavenger: { maxHp: SCAVENGER_MAX_HP, collisionRadius: ENEMY_COLLISION_RADIUS },
+  carrier: { maxHp: CARRIER_MAX_HP, collisionRadius: CARRIER_COLLISION_RADIUS },
+  drone: { maxHp: DRONE_MAX_HP, collisionRadius: DRONE_COLLISION_RADIUS },
+}
+
+/** Build the voxel model for the given enemy kind. */
+function createModelForKind(kind: EnemyKind): THREE.Group {
+  switch (kind) {
+    case 'sniper':
+      return createSniperModel()
+    case 'scavenger':
+      return createScavengerModel()
+    case 'carrier':
+      return createCarrierModel()
+    case 'drone':
+      return createDroneModel()
+    default:
+      return createEnemyShipModel()
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Enemy projectile model
 // ---------------------------------------------------------------------------
@@ -228,28 +431,34 @@ function createEnemyProjectileModel(): THREE.Group {
  * @param projectileDamage - Damage this enemy's shots deal to the player.
  *   Defaults to the standard enemy value; the prologue ambush and endless
  *   patrols pass their own scaled values.
+ * @param kind - Behavioural class. Defaults to the standard orbiting grunt.
  */
 export function createEnemyShip(
   x: number,
   y: number,
   projectileDamage: number = ENEMY_PROJECTILE_DAMAGE,
+  kind: EnemyKind = 'grunt',
 ): EnemyShip {
-  const mesh = createEnemyShipModel()
+  const mesh = createModelForKind(kind)
   mesh.position.set(x, y, 0)
 
   // Pick the nearest cardinal angle based on spawn position relative to origin
   const spawnAngle = Math.atan2(y, x)
   const initialCardinal = nearestCardinal(spawnAngle)
+  const stats = KIND_STATS[kind]
 
   return {
     mesh,
+    kind,
+    collisionRadius: stats.collisionRadius,
     x,
     y,
     vx: 0,
     vy: 0,
     rotation: 0,
-    hp: Math.ceil(ENEMY_MAX_HP / 2),
-    maxHp: ENEMY_MAX_HP,
+    // The grunt traditionally spawns half-damaged; others spawn at full hull.
+    hp: kind === 'grunt' ? Math.ceil(ENEMY_MAX_HP / 2) : stats.maxHp,
+    maxHp: stats.maxHp,
     alive: true,
     projectileDamage,
     heading: Math.random() * Math.PI * 2,
@@ -259,6 +468,14 @@ export function createEnemyShip(
     idleTimer: ENEMY_IDLE_INTERVAL * (0.5 + Math.random() * 0.5),
     idling: false,
     targetCardinal: initialCardinal,
+    charging: false,
+    chargeTimer: 0,
+    fleeing: false,
+    carrying: 0,
+    targetLootId: null,
+    targetLootX: 0,
+    targetLootY: 0,
+    droneTimer: CARRIER_DRONE_INTERVAL * (0.4 + Math.random() * 0.5),
   }
 }
 
@@ -320,11 +537,31 @@ function nextCardinal(current: number, direction: number): number {
 }
 
 /**
- * Update enemy ship AI — smoothly orbits the player like a dogfight.
- * Returns new projectiles spawned this frame (if any).
+ * Push the enemy out of any asteroid it overlaps, then sync its mesh
+ * transform to the simulation state. Every per-kind AI ends with this.
+ */
+function finalizeEnemy(enemy: EnemyShip, asteroids: Asteroid[]): void {
+  for (const a of asteroids) {
+    if (a.hp > 0) resolveEnemyAsteroidCollision(enemy, a)
+  }
+  enemy.mesh.position.set(enemy.x, enemy.y, 0)
+  enemy.mesh.rotation.z = enemy.rotation
+}
+
+/** Smoothly steer `enemy.heading` toward `desired`, capped by the turn rate. */
+function steerHeading(enemy: EnemyShip, desired: number, dt: number, turnRate: number): void {
+  const diff = normaliseAngle(desired - enemy.heading)
+  const maxTurn = turnRate * dt
+  enemy.heading = Math.abs(diff) <= maxTurn ? desired : enemy.heading + Math.sign(diff) * maxTurn
+  enemy.heading = normaliseAngle(enemy.heading)
+}
+
+/**
+ * Advance one hostile ship by a frame. Dispatches to the per-kind AI and
+ * returns any projectiles spawned this frame.
  *
- * Pass `asteroids` so the enemy holds fire when its line of sight to the
- * player is blocked by a live asteroid (no more shooting through rocks).
+ * Pass `asteroids` so ranged kinds hold fire when their line of sight to the
+ * player is blocked by a live rock.
  */
 export function updateEnemyShip(
   enemy: EnemyShip,
@@ -333,7 +570,28 @@ export function updateEnemyShip(
   asteroids: Asteroid[] = [],
 ): EnemyProjectile[] {
   if (!enemy.alive) return []
+  switch (enemy.kind) {
+    case 'sniper':
+      return updateSniperAI(enemy, player, dt, asteroids)
+    case 'scavenger':
+      return updateScavengerAI(enemy, player, dt, asteroids)
+    case 'carrier':
+      return updateCarrierAI(enemy, player, dt, asteroids)
+    default:
+      // grunt and carrier-launched drones share the orbiting dogfight AI
+      return updateGruntAI(enemy, player, dt, asteroids)
+  }
+}
 
+/**
+ * Grunt/drone AI — smoothly orbits the player like a dogfight and pots shots.
+ */
+function updateGruntAI(
+  enemy: EnemyShip,
+  player: Ship,
+  dt: number,
+  asteroids: Asteroid[] = [],
+): EnemyProjectile[] {
   const newProjectiles: EnemyProjectile[] = []
 
   // --- Compute desired heading based on distance to player ---
@@ -461,16 +719,192 @@ export function updateEnemyShip(
     }
   }
 
-  // --- Asteroid collision — push the enemy out of any rock it overlaps ---
-  for (const a of asteroids) {
-    if (a.hp > 0) resolveEnemyAsteroidCollision(enemy, a)
+  finalizeEnemy(enemy, asteroids)
+  return newProjectiles
+}
+
+/**
+ * Sniper AI — holds at long range, winds up a telegraphed charged shot
+ * (laser sight on), and fires a fast, high-damage round. Aborts the charge
+ * if the player breaks line of sight behind an asteroid.
+ */
+function updateSniperAI(
+  enemy: EnemyShip,
+  player: Ship,
+  dt: number,
+  asteroids: Asteroid[],
+): EnemyProjectile[] {
+  const newProjectiles: EnemyProjectile[] = []
+  const dx = player.x - enemy.x
+  const dy = player.y - enemy.y
+  const dist = Math.sqrt(dx * dx + dy * dy) || 1
+  const toPlayer = Math.atan2(dy, dx)
+
+  // Reposition only while not committed to a charge.
+  if (enemy.charging) {
+    enemy.vx = 0
+    enemy.vy = 0
+  } else {
+    let moveAngle: number
+    let speed = SNIPER_SPEED
+    if (dist < SNIPER_RANGE * 0.8) {
+      moveAngle = toPlayer + Math.PI // back away
+    } else if (dist > SNIPER_RANGE * 1.2) {
+      moveAngle = toPlayer // close in
+    } else {
+      moveAngle = toPlayer + (Math.PI / 2) * enemy.strafeDir // strafe
+      speed = SNIPER_SPEED * 0.5
+    }
+    steerHeading(enemy, moveAngle, dt, ENEMY_TURN_RATE)
+    enemy.vx = Math.cos(enemy.heading) * speed
+    enemy.vy = Math.sin(enemy.heading) * speed
+    enemy.x += enemy.vx * dt
+    enemy.y += enemy.vy * dt
+    enemy.strafeTimer -= dt
+    if (enemy.strafeTimer <= 0) {
+      enemy.strafeTimer = ENEMY_STRAFE_CHANGE_INTERVAL * (0.7 + Math.random() * 0.6)
+      enemy.strafeDir = -enemy.strafeDir
+    }
   }
 
-  // --- Sync mesh ---
-  enemy.mesh.position.set(enemy.x, enemy.y, 0)
-  enemy.mesh.rotation.z = enemy.rotation
+  enemy.rotation = toPlayer - Math.PI / 2
 
+  const losBlocked =
+    asteroids.length > 0 &&
+    segmentBlockedByAsteroid(enemy.x, enemy.y, player.x, player.y, asteroids)
+
+  if (enemy.charging) {
+    enemy.chargeTimer -= dt
+    if (losBlocked) {
+      // Lost the shot — abort and reacquire shortly.
+      enemy.charging = false
+      enemy.shootTimer = 0.6
+    } else if (enemy.chargeTimer <= 0) {
+      enemy.charging = false
+      enemy.shootTimer = SNIPER_COOLDOWN
+      const nx = dx / dist
+      const ny = dy / dist
+      const proj = createEnemyProjectile(
+        enemy.x + nx * 6,
+        enemy.y + ny * 6,
+        nx * SNIPER_PROJECTILE_SPEED,
+        ny * SNIPER_PROJECTILE_SPEED,
+        enemy.projectileDamage * SNIPER_DAMAGE_MULT,
+      )
+      proj.mesh.scale.setScalar(1.7)
+      newProjectiles.push(proj)
+    }
+  } else {
+    enemy.shootTimer -= dt
+    if (enemy.shootTimer <= 0) {
+      if (losBlocked) {
+        enemy.shootTimer = 0.4
+      } else {
+        enemy.charging = true
+        enemy.chargeTimer = SNIPER_CHARGE_TIME
+      }
+    }
+  }
+
+  finalizeEnemy(enemy, asteroids)
   return newProjectiles
+}
+
+/**
+ * Scavenger AI — ignores combat. Loiters near the player until loot is in
+ * reach, darts to grab it, then bolts for the sector edge. Targeting and the
+ * actual steal/escape are driven by game-tick (which owns the loot arrays);
+ * this AI just flies toward whatever target state has been set.
+ */
+function updateScavengerAI(
+  enemy: EnemyShip,
+  player: Ship,
+  dt: number,
+  asteroids: Asteroid[],
+): EnemyProjectile[] {
+  const dx = player.x - enemy.x
+  const dy = player.y - enemy.y
+  const distPlayer = Math.sqrt(dx * dx + dy * dy) || 1
+
+  let moveAngle: number
+  let speed = SCAVENGER_SPEED
+  if (enemy.fleeing) {
+    moveAngle = Math.atan2(enemy.y - player.y, enemy.x - player.x) // straight away
+  } else if (enemy.targetLootId) {
+    moveAngle = Math.atan2(enemy.targetLootY - enemy.y, enemy.targetLootX - enemy.x)
+  } else {
+    // Loiter — circle the player at standoff distance, waiting for loot.
+    if (distPlayer < SCAVENGER_LOITER_DISTANCE * 0.7) {
+      moveAngle = Math.atan2(-dy, -dx)
+    } else if (distPlayer > SCAVENGER_LOITER_DISTANCE * 1.3) {
+      moveAngle = Math.atan2(dy, dx)
+    } else {
+      moveAngle = Math.atan2(dy, dx) + (Math.PI / 2) * enemy.strafeDir
+    }
+    speed = SCAVENGER_SPEED * 0.6
+  }
+
+  steerHeading(enemy, moveAngle, dt, ENEMY_TURN_RATE * 1.5)
+  enemy.vx = Math.cos(enemy.heading) * speed
+  enemy.vy = Math.sin(enemy.heading) * speed
+  enemy.x += enemy.vx * dt
+  enemy.y += enemy.vy * dt
+  enemy.rotation = enemy.heading - Math.PI / 2 // faces its flight path
+
+  enemy.strafeTimer -= dt
+  if (enemy.strafeTimer <= 0) {
+    enemy.strafeTimer = ENEMY_STRAFE_CHANGE_INTERVAL * (0.7 + Math.random() * 0.6)
+    enemy.strafeDir = -enemy.strafeDir
+  }
+
+  finalizeEnemy(enemy, asteroids)
+  return []
+}
+
+/**
+ * Carrier AI — slow and tanky, keeps long range from the player. Drone
+ * launches are timed here (droneTimer) but game-tick performs the spawn.
+ */
+function updateCarrierAI(
+  enemy: EnemyShip,
+  player: Ship,
+  dt: number,
+  asteroids: Asteroid[],
+): EnemyProjectile[] {
+  const dx = player.x - enemy.x
+  const dy = player.y - enemy.y
+  const dist = Math.sqrt(dx * dx + dy * dy) || 1
+  const toPlayer = Math.atan2(dy, dx)
+
+  let moveAngle: number
+  let speed = CARRIER_SPEED
+  if (dist < CARRIER_RANGE * 0.85) {
+    moveAngle = toPlayer + Math.PI
+  } else if (dist > CARRIER_RANGE * 1.25) {
+    moveAngle = toPlayer
+  } else {
+    moveAngle = toPlayer + (Math.PI / 2) * enemy.strafeDir
+    speed = CARRIER_SPEED * 0.7
+  }
+
+  steerHeading(enemy, moveAngle, dt, ENEMY_TURN_RATE * 0.5)
+  enemy.vx = Math.cos(enemy.heading) * speed
+  enemy.vy = Math.sin(enemy.heading) * speed
+  enemy.x += enemy.vx * dt
+  enemy.y += enemy.vy * dt
+  enemy.rotation = toPlayer - Math.PI / 2
+
+  enemy.strafeTimer -= dt
+  if (enemy.strafeTimer <= 0) {
+    enemy.strafeTimer = ENEMY_STRAFE_CHANGE_INTERVAL
+    enemy.strafeDir = -enemy.strafeDir
+  }
+
+  // Wind the launch timer down; game-tick reads it and spawns the drone.
+  enemy.droneTimer -= dt
+
+  finalizeEnemy(enemy, asteroids)
+  return []
 }
 
 /**
@@ -559,7 +993,7 @@ export function checkProjectileEnemyCollisions(
     const dx = p.x - enemy.x
     const dy = p.y - enemy.y
     const distSq = dx * dx + dy * dy
-    const minDist = PROJECTILE_RADIUS + ENEMY_COLLISION_RADIUS
+    const minDist = PROJECTILE_RADIUS + enemy.collisionRadius
 
     if (distSq < minDist * minDist) {
       enemy.hp = Math.max(0, enemy.hp - p.damage)
@@ -620,7 +1054,7 @@ export function checkBeamEnemyCollisions(
   if (!enemy.alive || enemy.hp <= 0) return { hit: false, t: 1, killed: false }
 
   const distSq = pointToSegmentDistSqLocal(enemy.x, enemy.y, startX, startY, endX, endY)
-  if (distSq >= ENEMY_COLLISION_RADIUS * ENEMY_COLLISION_RADIUS) {
+  if (distSq >= enemy.collisionRadius * enemy.collisionRadius) {
     return { hit: false, t: 1, killed: false }
   }
 

@@ -767,6 +767,22 @@ export function createGameScene(
         playCollectPling()
       }
 
+      // Loot stolen by scavengers — remove meshes silently (no pling, no credit)
+      for (const id of result.metalStolen) {
+        const mesh = metalMeshMap.get(id)
+        if (mesh) {
+          scene.remove(mesh)
+          mesh.traverse(disposeMesh)
+        }
+      }
+      for (const id of result.scrapStolen) {
+        const mesh = scrapMeshMap.get(id)
+        if (mesh) {
+          scene.remove(mesh)
+          mesh.traverse(disposeMesh)
+        }
+      }
+
       // Enemy spawned — add mesh to scene
       if (result.enemySpawned) {
         scene.add(result.enemySpawned.mesh)
@@ -845,6 +861,13 @@ export function createGameScene(
         scene.add(bigExplosion.group)
         explosions.push(bigExplosion)
         playExplosion()
+      }
+
+      // Scavengers that escaped with loot — remove their meshes quietly
+      // (they are far off-screen by the time they slip away).
+      for (const ae of result.enemiesEscaped) {
+        scene.remove(ae.mesh)
+        disposeEnemyShip(ae)
       }
 
       // Update ambush enemy mesh positions (alive only)
@@ -999,11 +1022,24 @@ export function createGameScene(
         }
       }
 
-      // --- Update ambush / patrol enemy health meters ---
+      // --- Update ambush / patrol enemy health meters + sniper sights ---
       for (const ae of tickState.ambushEnemies) {
         if (!ae.alive) continue
         const ahm = ae.mesh.userData.healthMeter as THREE.Group | undefined
         if (ahm) updateHealthMeter(ahm, ae.hp, ae.maxHp)
+
+        // Sniper laser sight — visible and stretched to the player while charging
+        if (ae.kind === 'sniper') {
+          const sight = ae.mesh.userData.laserSight as THREE.Mesh | undefined
+          if (sight) {
+            sight.visible = ae.charging
+            if (ae.charging) {
+              const sdx = ship.x - ae.x
+              const sdy = ship.y - ae.y
+              sight.scale.y = Math.max(1, Math.hypot(sdx, sdy) - 8)
+            }
+          }
+        }
       }
 
       // --- Update Shipwreck Debris ---

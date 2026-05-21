@@ -21,6 +21,14 @@ export const PROLOGUE_ASTEROID_COUNT = 30
 export const PROLOGUE_MOON_COUNT = 3
 export const PROLOGUE_ENEMY_FLEET_SIZE = 6
 export const PROLOGUE_MINING_TARGET = 25
+
+/**
+ * Radius of the prologue containment bubble (world units, centered on origin).
+ * The field spawns within ~120 units; asteroids that drift past this — from
+ * their own drift, weapon impulses, or rock-on-rock collisions — bounce back
+ * inward so the mining target always stays reachable.
+ */
+export const PROLOGUE_FIELD_RADIUS = 190
 export const PROLOGUE_SPEED_DURATION = 4
 export const PROLOGUE_AMBUSH_SIZE = 10
 
