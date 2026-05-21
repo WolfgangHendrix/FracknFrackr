@@ -602,6 +602,10 @@ export function createGameScene(
         halfW: camHalfW,
         halfH: camHalfH,
       },
+      blackHole: {
+        x: blackHole.x + camera.position.x * 0.1,
+        y: blackHole.y + camera.position.y * 0.1,
+      },
     }
 
     // Snapshot mesh-bearing objects before tick (tick may splice them out)

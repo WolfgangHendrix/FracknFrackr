@@ -109,6 +109,10 @@ const AMBUSH_SHOOT_MIN = 0.3
 const AMBUSH_SHOOT_MAX = 0.5
 const AMBUSH_PROJECTILE_DAMAGE = 20
 const DRONE_POST_LAUNCH_SHOOT_DELAY = 0.8
+const BLACK_HOLE_PULL_RADIUS = 120
+const BLACK_HOLE_EVENT_HORIZON_RADIUS = 12
+const BLACK_HOLE_PULL_ACCEL = 180
+const BLACK_HOLE_PLAYER_PULL_MULT = 0.45
 
 const DRONE_LAUNCH_SLOTS: readonly {
   bayX: number
@@ -233,6 +237,8 @@ export interface TickInput {
   tutorialStep: TutorialStep
   /** Camera-visible world-space rectangle, for gating fire to on-screen targets. */
   viewBounds: { centerX: number; centerY: number; halfW: number; halfH: number }
+  /** Active black-hole hazard position, matching the visible background object. */
+  blackHole: { x: number; y: number } | null
 }
 
 export type MetalVariant = 'silver' | 'gold'
@@ -271,6 +277,8 @@ export interface TickResult {
   metalStolen: string[]
   /** Ids of scrap boxes stolen by scavengers (mesh removal, no player credit). */
   scrapStolen: string[]
+  /** Ids of asteroids consumed by the black hole. */
+  blackHoleAsteroidsConsumed: string[]
   // Callback events (booleans/counts for scene.ts callbacks)
   shipMoved: boolean
   asteroidHit: boolean
@@ -440,6 +448,7 @@ function emptyResult(): TickResult {
     enemiesEscaped: [],
     metalStolen: [],
     scrapStolen: [],
+    blackHoleAsteroidsConsumed: [],
     shipMoved: false,
     asteroidHit: false,
     crystallineDeflect: false,
@@ -566,6 +575,112 @@ function aimLineHasVisibleTarget(
     }
   }
   return false
+}
+
+type PositionBody = { x: number; y: number }
+type VelocityBody = PositionBody & { velocityX: number; velocityY: number }
+type VBody = PositionBody & { vx: number; vy: number }
+
+function blackHolePullFactor(
+  body: PositionBody,
+  hole: PositionBody,
+): { nx: number; ny: number; factor: number } | null {
+  const dx = hole.x - body.x
+  const dy = hole.y - body.y
+  const distSq = dx * dx + dy * dy
+  if (distSq <= 0.0001) return { nx: 1, ny: 0, factor: 1 }
+  if (distSq > BLACK_HOLE_PULL_RADIUS * BLACK_HOLE_PULL_RADIUS) return null
+  const dist = Math.sqrt(distSq)
+  const proximity = 1 - dist / BLACK_HOLE_PULL_RADIUS
+  return {
+    nx: dx / dist,
+    ny: dy / dist,
+    factor: proximity * proximity,
+  }
+}
+
+function applyBlackHolePullToBody(
+  body: VelocityBody,
+  hole: PositionBody,
+  dt: number,
+  multiplier = 1,
+): void {
+  const pull = blackHolePullFactor(body, hole)
+  if (!pull) return
+  const accel = BLACK_HOLE_PULL_ACCEL * pull.factor * multiplier
+  body.velocityX += pull.nx * accel * dt
+  body.velocityY += pull.ny * accel * dt
+}
+
+function applyBlackHolePullToAsteroid(
+  asteroid: Asteroid,
+  hole: PositionBody,
+  dt: number,
+): void {
+  applyBlackHolePullToBody(asteroid, hole, dt)
+}
+
+function applyBlackHolePullToVBody(body: VBody, hole: PositionBody, dt: number): void {
+  const pull = blackHolePullFactor(body, hole)
+  if (!pull) return
+  const accel = BLACK_HOLE_PULL_ACCEL * pull.factor
+  body.vx += pull.nx * accel * dt
+  body.vy += pull.ny * accel * dt
+}
+
+function applyBlackHolePullAndDriftToVBody(body: VBody, hole: PositionBody, dt: number): void {
+  applyBlackHolePullToVBody(body, hole, dt)
+  body.x += body.vx * dt
+  body.y += body.vy * dt
+}
+
+function applyBlackHolePullToVelocityBody(
+  body: VelocityBody,
+  hole: PositionBody,
+  dt: number,
+): void {
+  applyBlackHolePullToBody(body, hole, dt)
+}
+
+function isInsideBlackHole(body: PositionBody, hole: PositionBody): boolean {
+  const dx = body.x - hole.x
+  const dy = body.y - hole.y
+  return dx * dx + dy * dy <= BLACK_HOLE_EVENT_HORIZON_RADIUS * BLACK_HOLE_EVENT_HORIZON_RADIUS
+}
+
+function applyBlackHoleConsumption(
+  state: TickState,
+  input: TickInput,
+  result: TickResult,
+): void {
+  const hole = input.blackHole
+  if (!hole) return
+
+  if (isInsideBlackHole(state.ship, hole) && !state.endlessDeathFired) {
+    state.playerHp = 0
+    state.endlessDeathFired = true
+    result.playerDamaged = true
+    result.playerKilled = true
+  }
+
+  if (state.enemy && state.enemy.alive) {
+    applyBlackHolePullAndDriftToVBody(state.enemy, hole, input.dt)
+    if (isInsideBlackHole(state.enemy, hole)) {
+      result.enemyDestroyed = { x: state.enemy.x, y: state.enemy.y }
+      result.enemyDestroyedEvent = true
+      state.enemy.alive = false
+      state.enemy = null
+    }
+  }
+
+  for (let i = state.asteroids.length - 1; i >= 0; i--) {
+    const a = state.asteroids[i]
+    if (a.hp <= 0 || !isInsideBlackHole(a, hole)) continue
+    result.expiredAsteroidIds.push(a.id)
+    result.blackHoleAsteroidsConsumed.push(a.id)
+    state.asteroidHitCounts.delete(a.id)
+    state.asteroids.splice(i, 1)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -769,6 +884,14 @@ export function tick(state: TickState, input: TickInput): TickResult {
     ? { ...input.inputState, up: true }
     : input.inputState
   updateShip(state.ship, effectiveInput, dt)
+  if (endlessActive && input.blackHole) {
+    applyBlackHolePullToBody(
+      state.ship,
+      input.blackHole,
+      dt,
+      BLACK_HOLE_PLAYER_PULL_MULT,
+    )
+  }
 
   // Prologue speed override: boost acceleration and raise speed cap.
   // updateShip() clamps at SHIP_MAX_SPEED (120), so we uncap and re-apply
@@ -807,6 +930,9 @@ export function tick(state: TickState, input: TickInput): TickResult {
 
   // --- Asteroid drift ---
   for (const a of state.asteroids) {
+    if (endlessActive && input.blackHole && a.hp > 0) {
+      applyBlackHolePullToAsteroid(a, input.blackHole, dt)
+    }
     if (a.velocityX !== 0 || a.velocityY !== 0) {
       a.x += a.velocityX * dt
       a.y += a.velocityY * dt
@@ -1063,6 +1189,16 @@ export function tick(state: TickState, input: TickInput): TickResult {
   }
 
   // --- Projectile update ---
+  if (endlessActive && input.blackHole) {
+    for (let i = state.projectiles.length - 1; i >= 0; i--) {
+      const p = state.projectiles[i]
+      applyBlackHolePullToVelocityBody(p, input.blackHole, dt)
+      if (!isInsideBlackHole(p, input.blackHole)) continue
+      result.expiredProjectileIds.push(p.id)
+      state.projectileElapsed.delete(p.id)
+      state.projectiles.splice(i, 1)
+    }
+  }
   const prevIds = state.projectiles.map((p) => p.id)
   state.projectiles = updateProjectiles(state.projectiles, dt, state.projectileElapsed)
   const currentIds = new Set(state.projectiles.map((p) => p.id))
@@ -1167,6 +1303,14 @@ export function tick(state: TickState, input: TickInput): TickResult {
 
   // --- Enemy projectile update ---
   for (let i = state.enemyProjectiles.length - 1; i >= 0; i--) {
+    if (endlessActive && input.blackHole) {
+      applyBlackHolePullToVBody(state.enemyProjectiles[i], input.blackHole, dt)
+      if (isInsideBlackHole(state.enemyProjectiles[i], input.blackHole)) {
+        result.expiredEnemyProjectileIds.push(state.enemyProjectiles[i].id)
+        state.enemyProjectiles.splice(i, 1)
+        continue
+      }
+    }
     const alive = updateEnemyProjectile(state.enemyProjectiles[i], dt)
     if (!alive) {
       result.expiredEnemyProjectileIds.push(state.enemyProjectiles[i].id)
@@ -1192,6 +1336,14 @@ export function tick(state: TickState, input: TickInput): TickResult {
 
   // --- Scrap box update & collection ---
   for (let i = state.scrapBoxes.length - 1; i >= 0; i--) {
+    if (endlessActive && input.blackHole) {
+      applyBlackHolePullToVBody(state.scrapBoxes[i], input.blackHole, dt)
+      if (isInsideBlackHole(state.scrapBoxes[i], input.blackHole)) {
+        result.scrapStolen.push(state.scrapBoxes[i].id)
+        state.scrapBoxes.splice(i, 1)
+        continue
+      }
+    }
     updateScrapBox(state.scrapBoxes[i], dt)
     if (collecting) {
       const collectorRange = isPrologue
@@ -1210,6 +1362,14 @@ export function tick(state: TickState, input: TickInput): TickResult {
   // --- Metal chunk update & collection ---
   for (let i = state.metalChunks.length - 1; i >= 0; i--) {
     const metal = state.metalChunks[i]
+    if (endlessActive && input.blackHole) {
+      applyBlackHolePullToVBody(metal, input.blackHole, dt)
+      if (isInsideBlackHole(metal, input.blackHole)) {
+        result.metalStolen.push(metal.id)
+        state.metalChunks.splice(i, 1)
+        continue
+      }
+    }
     updateMetalChunk(metal, dt)
 
     if (collecting) {
@@ -1297,6 +1457,13 @@ export function tick(state: TickState, input: TickInput): TickResult {
         state.enemyProjectiles.push(proj)
         result.newEnemyProjectiles.push(proj)
       }
+      if (endlessActive && input.blackHole) {
+        applyBlackHolePullAndDriftToVBody(ae, input.blackHole, dt)
+        if (isInsideBlackHole(ae, input.blackHole)) {
+          ae.alive = false
+          result.enemiesEscaped.push(ae)
+        }
+      }
     }
 
     // Carriers launch drone swarms; scavengers acquire/steal loot and flee.
@@ -1331,6 +1498,9 @@ export function tick(state: TickState, input: TickInput): TickResult {
   // --- Endless mode: the Ledger, field replenishment, enemy director ---
   if (endlessActive && asteroidsAliveBefore) {
     updateEndlessMode(state, input, result, asteroidsAliveBefore)
+  }
+  if (endlessActive && input.blackHole) {
+    applyBlackHoleConsumption(state, input, result)
   }
   result.ledger = state.ledger
 
