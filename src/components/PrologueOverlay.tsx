@@ -10,6 +10,10 @@ const ARBITER_VOICE_LINES = [
   './audio/vo_arbeter03.wav',
 ] as const
 
+const ARBITER_DIALOGUE_BASE_MS = 950
+const ARBITER_DIALOGUE_MS_PER_CHAR = 32
+const ARBITER_DIALOGUE_DONE_MS = 250
+
 interface PrologueOverlayProps {
   step: TutorialStep
   onSkip: () => void
@@ -60,14 +64,15 @@ function ArbiterDialogue({ onComplete }: { onComplete: () => void }) {
     }
   }, [lineIndex])
 
-  // Auto-advance: hold each line on screen for a readable beat. The duration
-  // scales with line length so longer lines get more time.
+  // Auto-advance: hold each line close to the voiceover cadence, while still
+  // scaling slightly with line length for readability.
   useEffect(() => {
     if (lineIndex >= ARBITER_DIALOGUE.length) {
-      const done = setTimeout(onComplete, 500)
+      const done = setTimeout(onComplete, ARBITER_DIALOGUE_DONE_MS)
       return () => clearTimeout(done)
     }
-    const readMs = 1900 + ARBITER_DIALOGUE[lineIndex].length * 55
+    const readMs =
+      ARBITER_DIALOGUE_BASE_MS + ARBITER_DIALOGUE[lineIndex].length * ARBITER_DIALOGUE_MS_PER_CHAR
     const next = setTimeout(() => setLineIndex((i) => i + 1), readMs)
     return () => clearTimeout(next)
   }, [lineIndex, onComplete])
