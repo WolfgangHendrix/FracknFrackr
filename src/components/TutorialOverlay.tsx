@@ -212,7 +212,7 @@ export function TutorialOverlay({
               data-menu-item
               onClick={onDismiss}
               aria-label="Continue"
-              className="pointer-events-auto absolute opacity-0 w-px h-px"
+              className="pointer-events-auto !absolute opacity-0 w-px h-px"
             />
           </>
         )}
