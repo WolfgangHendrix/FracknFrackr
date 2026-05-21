@@ -52,7 +52,6 @@ import {
   checkBeamEnemyCollisions,
   checkEnemyProjectilePlayerCollisions,
   updateEnemyProjectile,
-  ENEMY_COLLISION_RADIUS,
   ENEMY_SPAWN_DISTANCE,
   CARRIER_DRONE_INTERVAL,
   CARRIER_MAX_DRONES,
@@ -527,9 +526,9 @@ function aimLineHasVisibleTarget(
   }
   if (state.enemy && state.enemy.alive) {
     if (
-      onScreen(state.enemy.x, state.enemy.y, ENEMY_COLLISION_RADIUS) &&
+      onScreen(state.enemy.x, state.enemy.y, state.enemy.collisionRadius) &&
       pointToSegmentDistSq(state.enemy.x, state.enemy.y, ship.x, ship.y, endX, endY) <
-        ENEMY_COLLISION_RADIUS * ENEMY_COLLISION_RADIUS
+        state.enemy.collisionRadius * state.enemy.collisionRadius
     ) {
       return true
     }
@@ -537,9 +536,9 @@ function aimLineHasVisibleTarget(
   for (const e of state.ambushEnemies) {
     if (!e.alive) continue
     if (
-      onScreen(e.x, e.y, ENEMY_COLLISION_RADIUS) &&
+      onScreen(e.x, e.y, e.collisionRadius) &&
       pointToSegmentDistSq(e.x, e.y, ship.x, ship.y, endX, endY) <
-        ENEMY_COLLISION_RADIUS * ENEMY_COLLISION_RADIUS
+        e.collisionRadius * e.collisionRadius
     ) {
       return true
     }
@@ -1530,9 +1529,10 @@ function updateSpecialEnemies(state: TickState, result: TickResult): void {
     )
     if (aliveDrones >= CARRIER_MAX_DRONES * carriers.length) continue
     const ang = Math.random() * Math.PI * 2
+    const launchRadius = carrier.collisionRadius + 4
     const drone = createEnemyShip(
-      carrier.x + Math.cos(ang) * 9,
-      carrier.y + Math.sin(ang) * 9,
+      carrier.x + Math.cos(ang) * launchRadius,
+      carrier.y + Math.sin(ang) * launchRadius,
       carrier.projectileDamage * DRONE_DAMAGE_MULT,
       'drone',
     )

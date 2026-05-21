@@ -11,6 +11,7 @@ import type { ArbiterHudInfo } from '@/game/arbiter-comms'
 import { arbiterArrivalLine, arbiterDefeatLine, arbiterWithdrawLine } from '@/game/arbiter-comms'
 import type { RunStats } from '@/game/ledger-config'
 import { SoundFab } from '@/components/SoundFab'
+import { TitleScreen } from '@/components/TitleScreen'
 import { StartScreen } from '@/components/StartScreen'
 import { TutorialOverlay } from '@/components/TutorialOverlay'
 import { PrologueOverlay } from '@/components/PrologueOverlay'
@@ -20,18 +21,18 @@ import { ShopFab } from '@/components/ShopFab'
 import { useGameState } from '@/hooks/useGameState'
 import { useGamePersistence } from '@/hooks/useGamePersistence'
 import { useTutorial } from '@/hooks/useTutorial'
-import { playMenuLoop, enterGameplay, primeOnFirstGesture } from '@/lib/menu-music'
+import { playMenuLoop, enterGameplay } from '@/lib/menu-music'
 import { useGamepadMenu } from '@/hooks/useGamepadMenu'
 import { useGamepadButton } from '@/hooks/useGamepadButton'
 import type { MiningTool } from '@/game/types'
 import type { Upgrades, SaveSlotId } from '@/lib/schemas'
 
-type Screen = 'start' | 'game'
+type Screen = 'title' | 'start' | 'game'
 
 const ACTIVE_SLOT_KEY = 'fracking-asteroids-active-slot'
 
 export default function Home() {
-  const [screen, setScreen] = useState<Screen>('start')
+  const [screen, setScreen] = useState<Screen>('title')
   const [activeSlot, setActiveSlot] = useState<SaveSlotId | null>(null)
   const [isNewGame, setIsNewGame] = useState(false)
   const [tradeMenuOpen, setTradeMenuOpen] = useState(false)
@@ -96,16 +97,10 @@ export default function Home() {
     })
   }, [activeSlot, load])
 
-  // --- Music ---
-  // Start the menu loop whenever the start screen is showing; arm a one-shot
-  // gesture listener so autoplay-blocked browsers still kick it off on the
-  // first click. The same audio element survives into gameplay.
-  useEffect(() => {
-    if (screen === 'start') {
-      playMenuLoop()
-      primeOnFirstGesture()
-    }
-  }, [screen])
+  const handleTitleBegin = useCallback(() => {
+    playMenuLoop()
+    setScreen('start')
+  }, [])
 
   const handleNewGame = useCallback((slotId: SaveSlotId) => {
     localStorage.setItem(ACTIVE_SLOT_KEY, slotId)
@@ -375,10 +370,14 @@ export default function Home() {
   const shopTutorialFreeze =
     inStationRange && !tradeMenuOpen && tutorial.active && tutorial.step === 'approach-station'
 
-  if (screen === 'start') {
+  if (screen === 'title' || screen === 'start') {
     return (
       <main className="relative w-screen h-dvh overflow-hidden bg-space-900">
-        <StartScreen onNewGame={handleNewGame} onLoadGame={handleLoadGame} />
+        {screen === 'title' ? (
+          <TitleScreen onBegin={handleTitleBegin} />
+        ) : (
+          <StartScreen onNewGame={handleNewGame} onLoadGame={handleLoadGame} />
+        )}
       </main>
     )
   }

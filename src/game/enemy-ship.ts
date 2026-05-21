@@ -77,7 +77,7 @@ export const SCAVENGER_GRAB_RANGE = 6
 export const SCAVENGER_ESCAPE_DISTANCE = 380
 
 // --- Carrier: slow, tanky, launches drone swarms ---
-export const CARRIER_MAX_HP = 14
+export const CARRIER_MAX_HP = 70
 const CARRIER_SPEED = 10
 const CARRIER_RANGE = 135
 /** Seconds between drone launches. */
@@ -85,9 +85,9 @@ export const CARRIER_DRONE_INTERVAL = 3.6
 /** Max drones a carrier keeps in the field at once. */
 export const CARRIER_MAX_DRONES = 3
 /** Carrier collision radius — a hulking mothership, far bigger than a grunt. */
-const CARRIER_COLLISION_RADIUS = 11
+const CARRIER_COLLISION_RADIUS = 18
 /** Visual scale applied to the carrier's voxel body. */
-const CARRIER_BODY_SCALE = 1.8
+const CARRIER_BODY_SCALE = 3
 
 // --- Drone: tiny, fast, fragile swarm unit launched by carriers ---
 export const DRONE_MAX_HP = 1
