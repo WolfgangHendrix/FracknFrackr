@@ -32,6 +32,7 @@ import {
 import { DAMAGE_PER_TIER, LAZER_BEAM_RANGE, clampTier } from './blaster-constants'
 import {
   resolveShipAsteroidCollision,
+  resolveAsteroidAsteroidCollisions,
   checkProjectileAsteroidCollisions,
   checkBeamAsteroidCollisions,
 } from './collision'
@@ -569,6 +570,12 @@ function prologueTick(state: TickState, input: TickInput, result: TickResult): v
       state.fireRateBonus = PROLOGUE_SHIP.fireRateBonus
       state.activeMiningTool = PROLOGUE_SHIP.miningTool
     }
+    // Clear any stale Arbiter-approach state so the scripted fly-in always
+    // plays from full distance. Without this a leftover `prologueArbiterSpawned`
+    // (from a replay or hot-reload) skips the distance reset in the
+    // `prologue-arbiter` beat, making the Arbiter "arrive" instantly unseen.
+    state.prologueArbiterSpawned = false
+    state.prologueArbiterDistance = ARBITER_SPAWN_DISTANCE
     result.prologueReady = true
     return
   }
@@ -777,6 +784,9 @@ export function tick(state: TickState, input: TickInput): TickResult {
       a.y += a.velocityY * dt
     }
   }
+
+  // --- Asteroid-asteroid collision ---
+  resolveAsteroidAsteroidCollisions(state.asteroids)
 
   // --- Ship-asteroid collision ---
   for (const a of state.asteroids) {

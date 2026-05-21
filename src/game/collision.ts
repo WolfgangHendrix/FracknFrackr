@@ -7,6 +7,7 @@ import { PROJECTILE_RADIUS, LAZER_DAMAGE_MULTIPLIER } from './blaster-constants'
 import {
   SHIP_COLLISION_RADIUS,
   ASTEROID_COLLISION_RADIUS,
+  ENEMY_COLLISION_RADIUS,
   COLLISION_PUSH_BUFFER,
 } from './collision-constants'
 import { ASTEROID_SIZE_RADIUS } from './asteroid-model'
@@ -83,6 +84,124 @@ export function resolveShipAsteroidCollision(ship: Ship, asteroid: Asteroid): bo
   }
 
   return true
+}
+
+/**
+ * Resolve enemy-asteroid collision by pushing the enemy out of the asteroid.
+ * Mirrors resolveShipAsteroidCollision but operates on the enemy's vx/vy
+ * fields. Mutates the enemy and returns true if a collision was resolved.
+ */
+export function resolveEnemyAsteroidCollision(
+  enemy: { x: number; y: number; vx: number; vy: number },
+  asteroid: Asteroid,
+): boolean {
+  const dx = enemy.x - asteroid.x
+  const dy = enemy.y - asteroid.y
+  const distSq = dx * dx + dy * dy
+  const asteroidRadius = ASTEROID_SIZE_RADIUS[asteroid.size] ?? ASTEROID_COLLISION_RADIUS
+  const minDist = ENEMY_COLLISION_RADIUS + asteroidRadius
+
+  if (distSq >= minDist * minDist) return false
+
+  const dist = Math.sqrt(distSq)
+
+  // If enemy is exactly on the asteroid center, push in an arbitrary direction
+  if (dist < 0.001) {
+    enemy.x = asteroid.x + minDist + COLLISION_PUSH_BUFFER
+    enemy.vx = 0
+    enemy.vy = 0
+    return true
+  }
+
+  // Normalize direction from asteroid to enemy
+  const nx = dx / dist
+  const ny = dy / dist
+
+  // Push enemy out to the edge + buffer
+  const pushDist = minDist + COLLISION_PUSH_BUFFER - dist
+  enemy.x += nx * pushDist
+  enemy.y += ny * pushDist
+
+  // Cancel velocity component heading into the asteroid
+  const velDot = enemy.vx * nx + enemy.vy * ny
+  if (velDot < 0) {
+    enemy.vx -= velDot * nx
+    enemy.vy -= velDot * ny
+  }
+
+  return true
+}
+
+/** Bounciness of asteroid-asteroid collisions (0 = inelastic, 1 = elastic). */
+const ASTEROID_RESTITUTION = 0.4
+
+/** Collision mass of an asteroid — scales with area (radius squared). */
+function asteroidMass(a: Asteroid): number {
+  const r = ASTEROID_SIZE_RADIUS[a.size] ?? ASTEROID_COLLISION_RADIUS
+  return r * r
+}
+
+/**
+ * Resolve collisions between every pair of live asteroids: separate any
+ * overlapping pair along the contact normal and exchange momentum so heavier
+ * (larger) rocks shrug off smaller ones. Mutates asteroid positions/velocities.
+ */
+export function resolveAsteroidAsteroidCollisions(asteroids: Asteroid[]): void {
+  for (let i = 0; i < asteroids.length; i++) {
+    const a = asteroids[i]
+    if (a.hp <= 0) continue
+    const ra = ASTEROID_SIZE_RADIUS[a.size] ?? ASTEROID_COLLISION_RADIUS
+
+    for (let j = i + 1; j < asteroids.length; j++) {
+      const b = asteroids[j]
+      if (b.hp <= 0) continue
+      const rb = ASTEROID_SIZE_RADIUS[b.size] ?? ASTEROID_COLLISION_RADIUS
+
+      const dx = b.x - a.x
+      const dy = b.y - a.y
+      const minDist = ra + rb
+      const distSq = dx * dx + dy * dy
+      if (distSq >= minDist * minDist) continue
+
+      let dist = Math.sqrt(distSq)
+      let nx: number
+      let ny: number
+      if (dist < 0.001) {
+        // Concentric — separate along an arbitrary axis
+        nx = 1
+        ny = 0
+        dist = 0
+      } else {
+        nx = dx / dist
+        ny = dy / dist
+      }
+
+      const invA = 1 / asteroidMass(a)
+      const invB = 1 / asteroidMass(b)
+      const invSum = invA + invB
+
+      // --- Positional separation, weighted by inverse mass ---
+      const overlap = minDist - dist + COLLISION_PUSH_BUFFER
+      a.x -= nx * overlap * (invA / invSum)
+      a.y -= ny * overlap * (invA / invSum)
+      b.x += nx * overlap * (invB / invSum)
+      b.y += ny * overlap * (invB / invSum)
+
+      // --- Velocity response: impulse along the contact normal ---
+      const rvx = b.velocityX - a.velocityX
+      const rvy = b.velocityY - a.velocityY
+      const velAlongNormal = rvx * nx + rvy * ny
+      if (velAlongNormal > 0) continue // already separating
+
+      const impulse = (-(1 + ASTEROID_RESTITUTION) * velAlongNormal) / invSum
+      const ix = impulse * nx
+      const iy = impulse * ny
+      a.velocityX -= ix * invA
+      a.velocityY -= iy * invA
+      b.velocityX += ix * invB
+      b.velocityY += iy * invB
+    }
+  }
 }
 
 export interface ProjectileHit {

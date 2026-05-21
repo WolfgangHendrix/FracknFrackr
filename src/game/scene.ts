@@ -26,7 +26,12 @@ import type { ToolToggleButton } from './fire-button'
 import { createRechargeMeter, updateRechargeMeter } from './recharge-meter'
 import { createExplosion, updateExplosion, disposeExplosion } from './explosion'
 import type { Explosion } from './explosion'
-import { createHealthMeter, updateHealthMeter } from './asteroid-health-meter'
+import {
+  createHealthMeter,
+  updateHealthMeter,
+  attachAsteroidHealthMeter,
+  HEALTH_BAR_OFFSET_Y,
+} from './asteroid-health-meter'
 import {
   breakChunks,
   updateDebrisChunk,
@@ -319,8 +324,7 @@ export function createGameScene(
     const model = createAsteroidModel(a.type, a.size, hashString(a.id))
     model.position.set(a.x, a.y, 0)
     scene.add(model)
-    const hm = createHealthMeter()
-    model.add(hm)
+    const hm = attachAsteroidHealthMeter(model, a.size)
     asteroidModels.set(a.id, { model, healthMeter: hm })
   }
 
@@ -714,8 +718,7 @@ export function createGameScene(
         const model = createAsteroidModel(a.type, a.size, hashString(a.id))
         model.position.set(a.x, a.y, 0)
         scene.add(model)
-        const hm = createHealthMeter()
-        model.add(hm)
+        const hm = attachAsteroidHealthMeter(model, a.size)
         asteroidModels.set(a.id, { model, healthMeter: hm })
       }
 
@@ -767,7 +770,8 @@ export function createGameScene(
       // Enemy spawned — add mesh to scene
       if (result.enemySpawned) {
         scene.add(result.enemySpawned.mesh)
-        const enemyHealthMeter = createHealthMeter()
+        // Enemy faces the player, so place the bar behind the ship (-Y)
+        const enemyHealthMeter = createHealthMeter(-HEALTH_BAR_OFFSET_Y)
         result.enemySpawned.mesh.add(enemyHealthMeter)
         result.enemySpawned.mesh.userData.healthMeter = enemyHealthMeter
       }
@@ -822,7 +826,8 @@ export function createGameScene(
       // Ambush / patrol enemies — add meshes + health meters for newly spawned
       for (const ae of result.ambushEnemiesSpawned) {
         scene.add(ae.mesh)
-        const hm = createHealthMeter()
+        // Enemy faces the player, so place the bar behind the ship (-Y)
+        const hm = createHealthMeter(-HEALTH_BAR_OFFSET_Y)
         ae.mesh.add(hm)
         ae.mesh.userData.healthMeter = hm
       }
@@ -1429,8 +1434,7 @@ export function createGameScene(
       model.position.set(a.x, a.y, 0)
       scene.add(model)
 
-      const hm = createHealthMeter()
-      model.add(hm)
+      const hm = attachAsteroidHealthMeter(model, a.size)
       asteroidModels.set(a.id, { model, healthMeter: hm })
       tickState.asteroidHitCounts.set(a.id, 0)
     }
@@ -1527,8 +1531,7 @@ export function createGameScene(
       const model = createAsteroidModel(a.type, a.size, hashString(a.id))
       model.position.set(a.x, a.y, 0)
       scene.add(model)
-      const hm = createHealthMeter()
-      model.add(hm)
+      const hm = attachAsteroidHealthMeter(model, a.size)
       asteroidModels.set(a.id, { model, healthMeter: hm })
       tickState.asteroidHitCounts.set(a.id, 0)
     }

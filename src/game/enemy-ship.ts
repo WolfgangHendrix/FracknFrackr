@@ -1,17 +1,17 @@
 import * as THREE from 'three'
 import type { Ship } from '@/lib/schemas'
 import { VOXEL_SIZE } from './ship-constants'
-import { SHIP_COLLISION_RADIUS } from './collision-constants'
+import { SHIP_COLLISION_RADIUS, ENEMY_COLLISION_RADIUS } from './collision-constants'
 import { PROJECTILE_RADIUS, LAZER_DAMAGE_MULTIPLIER } from './blaster-constants'
 import type { Asteroid, Projectile } from './types'
-import { segmentBlockedByAsteroid } from './collision'
+import { segmentBlockedByAsteroid, resolveEnemyAsteroidCollision } from './collision'
+
+/** Re-exported for callers that import it alongside the enemy ship API. */
+export { ENEMY_COLLISION_RADIUS } from './collision-constants'
 
 // ---------------------------------------------------------------------------
 // Enemy ship constants
 // ---------------------------------------------------------------------------
-
-/** Collision radius for the enemy ship. */
-export const ENEMY_COLLISION_RADIUS = 3
 
 /** Enemy HP — takes 3 hits to destroy. */
 export const ENEMY_MAX_HP = 3
@@ -459,6 +459,11 @@ export function updateEnemyShip(
         newProjectiles.push(proj)
       }
     }
+  }
+
+  // --- Asteroid collision — push the enemy out of any rock it overlaps ---
+  for (const a of asteroids) {
+    if (a.hp > 0) resolveEnemyAsteroidCollision(enemy, a)
   }
 
   // --- Sync mesh ---
