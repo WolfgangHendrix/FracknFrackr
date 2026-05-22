@@ -64,8 +64,10 @@ function generateAsteroidCells(seed: number): [number, number, number][] {
       // Color picking: tend dark on edges, light on highlights.
       let colorIdx = 0 // rock (mid)
       const r = rand()
-      if (dist > 3.5) colorIdx = r < 0.55 ? 1 : 0 // rockDark on edges
-      else if (r < 0.18) colorIdx = 2 // rockLight highlights
+      if (dist > 3.5)
+        colorIdx = r < 0.55 ? 1 : 0 // rockDark on edges
+      else if (r < 0.18)
+        colorIdx = 2 // rockLight highlights
       else if (r < 0.3) colorIdx = 1
       cells.push([gx, gy, colorIdx])
     }

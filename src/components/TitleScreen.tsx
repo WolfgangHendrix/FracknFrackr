@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef } from 'react'
+import { BUILD_VERSION } from '@/lib/build-version'
 
 interface TitleScreenProps {
   onBegin: () => void
@@ -83,6 +84,9 @@ export function TitleScreen({ onBegin }: TitleScreenProps) {
       </div>
 
       <div className="menu-scanlines" aria-hidden="true" />
+      <div className="absolute bottom-3 left-3 z-10 font-mono text-[10px] sm:text-xs tracking-[0.18em] text-white/35">
+        v{BUILD_VERSION}
+      </div>
 
       <div className="relative z-10 flex flex-col items-center px-6">
         <h1 className="menu-title font-mono text-4xl sm:text-5xl md:text-7xl font-bold text-hud-green tracking-widest">
@@ -93,9 +97,7 @@ export function TitleScreen({ onBegin }: TitleScreenProps) {
         <p className="mt-8 font-mono text-sm sm:text-base md:text-lg tracking-[0.28em] text-hud-amber/80">
           CLICK, TAP, OR PRESS ENTER
         </p>
-        <p className="mt-3 font-mono text-xs sm:text-sm tracking-[0.2em] text-white/45">
-          TO BEGIN
-        </p>
+        <p className="mt-3 font-mono text-xs sm:text-sm tracking-[0.2em] text-white/45">TO BEGIN</p>
       </div>
     </button>
   )
