@@ -10,8 +10,8 @@ const ARBITER_VOICE_LINES = [
   './audio/vo_arbeter02.wav',
   './audio/vo_arbeter03.wav',
 ] as const
-const FRACKER_SIGNAL_DETECTED = './audio/vo_fracker04.wav'
-const FRACKER_SYSTEMS_FAILING = './audio/vo_fracker01.wav'
+const FRACKER_SIGNAL_DETECTED = './audio/vo_fracker01.wav'
+const FRACKER_SYSTEMS_FAILING = './audio/vo_fracker02.wav'
 
 const ARBITER_DIALOGUE_FALLBACK_BASE_MS = 950
 const ARBITER_DIALOGUE_FALLBACK_MS_PER_CHAR = 32

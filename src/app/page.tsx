@@ -32,8 +32,8 @@ type Screen = 'title' | 'start' | 'game'
 
 const ACTIVE_SLOT_KEY = 'fracking-asteroids-active-slot'
 const CRYSTALLINE_PROMPT_INTERVALS = [3, 5, 10] as const
-const FRACKER_SYSTEMS_OFFLINE = './audio/vo_fracker02.wav'
-const FRACKER_REBOOTING = './audio/vo_fracker03.wav'
+const FRACKER_SYSTEMS_OFFLINE = './audio/vo_fracker03.wav'
+const FRACKER_REBOOTING = './audio/vo_fracker04.wav'
 
 export default function Home() {
   const [screen, setScreen] = useState<Screen>('title')
