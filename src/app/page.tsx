@@ -358,7 +358,7 @@ export default function Home() {
     playedPrologueFadeVoicesRef.current.add(prologueFade)
     const voice = new Audio(voiceSrc)
     voice.preload = 'auto'
-    voice.volume = 0.85 * getSfxVolume()
+    voice.volume = 0.62 * getSfxVolume()
     prologueVoiceRefs.current.push(voice)
     voice.addEventListener(
       'ended',

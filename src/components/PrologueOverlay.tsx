@@ -125,7 +125,7 @@ export function PrologueOverlay({ step, onSkip, onDialogueComplete }: PrologueOv
     playedFrackerStepsRef.current.add(step)
     const voice = new Audio(voiceSrc)
     voice.preload = 'auto'
-    voice.volume = 0.85 * getSfxVolume()
+    voice.volume = 0.62 * getSfxVolume()
     frackerVoicesRef.current.push(voice)
     voice.addEventListener(
       'ended',
