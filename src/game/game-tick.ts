@@ -696,6 +696,17 @@ function absorbDamageWithShield(state: TickState, result: TickResult): boolean {
   return true
 }
 
+function damagePlayer(
+  state: TickState,
+  result: TickResult,
+  damage: number,
+  oneHitKill: boolean,
+): void {
+  if (absorbDamageWithShield(state, result)) return
+  state.playerHp = oneHitKill ? 0 : Math.max(0, state.playerHp - damage)
+  result.playerDamaged = true
+}
+
 type PositionBody = { x: number; y: number }
 type VelocityBody = PositionBody & { velocityX: number; velocityY: number }
 type VBody = PositionBody & { vx: number; vy: number }
@@ -1032,10 +1043,7 @@ export function tick(state: TickState, input: TickInput): TickResult {
   if (state.arbiter && state.arbiter.tractorActive) {
     const { captureDamage } = applyTractorPull(state.arbiter, state.ship, dt)
     if (captureDamage > 0) {
-      if (!absorbDamageWithShield(state, result)) {
-        state.playerHp = Math.max(0, state.playerHp - captureDamage)
-        result.playerDamaged = true
-      }
+      damagePlayer(state, result, captureDamage, endlessActive)
       result.arbiterCaptureHit = true
     }
   }
@@ -1079,7 +1087,12 @@ export function tick(state: TickState, input: TickInput): TickResult {
   // --- Ship-asteroid collision ---
   for (const a of state.asteroids) {
     if (a.hp > 0) {
-      resolveShipAsteroidCollision(state.ship, a)
+      const drilling = resolveShipAsteroidCollision(state.ship, a)
+      if (drilling) {
+        const drillDamage = (isPrologue ? 18 : 10) * dt
+        a.hp = Math.max(0, a.hp - drillDamage)
+        result.asteroidHit = true
+      }
     }
   }
 
@@ -1135,13 +1148,8 @@ export function tick(state: TickState, input: TickInput): TickResult {
     }
   }
 
-  if (
-    state.missileTier > 0 &&
-    state.missileCooldown <= 0 &&
-    firingAllowed &&
-    (state.fireTarget || state.mouseHoldingFire)
-  ) {
-    const target = state.fireTarget ?? input.aimWorldPosition
+  if (state.missileTier > 0 && state.missileCooldown <= 0 && firingAllowed) {
+    const target = nearestHomingTarget(state, state.ship.x, state.ship.y)
     if (target) {
       const dx = target.x - state.ship.x
       const dy = target.y - state.ship.y
@@ -1573,10 +1581,7 @@ export function tick(state: TickState, input: TickInput): TickResult {
         const proj = state.enemyProjectiles[i]
         if (!hitIds.has(proj.id)) continue
         const damage = proj.damage
-        if (!absorbDamageWithShield(state, result)) {
-          state.playerHp = Math.max(0, state.playerHp - damage)
-          result.playerDamaged = true
-        }
+        damagePlayer(state, result, damage, endlessActive)
         result.enemyProjectileHits.push({ id: proj.id, x: proj.x, y: proj.y, damage })
         state.enemyProjectiles.splice(i, 1)
       }

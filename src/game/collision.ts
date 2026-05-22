@@ -78,8 +78,12 @@ export function resolveShipAsteroidCollision(ship: Ship, asteroid: Asteroid): bo
   // Cancel velocity component toward the asteroid
   const velDot = ship.velocityX * nx + ship.velocityY * ny
   if (velDot < 0) {
-    ship.velocityX -= velDot * nx
-    ship.velocityY -= velDot * ny
+    const asteroidMassFactor = Math.max(1, 5 - asteroid.size)
+    const impact = -velDot
+    ship.velocityX += impact * nx * 0.35
+    ship.velocityY += impact * ny * 0.35
+    asteroid.velocityX -= nx * impact * (0.28 / asteroidMassFactor)
+    asteroid.velocityY -= ny * impact * (0.28 / asteroidMassFactor)
   }
 
   return true

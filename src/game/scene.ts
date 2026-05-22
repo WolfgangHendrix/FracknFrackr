@@ -252,18 +252,17 @@ export function createGameScene(
   const optionOrbs = new THREE.Group()
   scene.add(optionOrbs)
   const shieldVisual = new THREE.Mesh(
-    new THREE.RingGeometry(8, 9.5, 48),
+    new THREE.SphereGeometry(10, 32, 16),
     new THREE.MeshBasicMaterial({
       color: 0x66ddff,
       transparent: true,
-      opacity: 0.45,
+      opacity: 0.16,
       side: THREE.DoubleSide,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     }),
   )
   shieldVisual.visible = false
-  shieldVisual.rotation.x = Math.PI / 2
   scene.add(shieldVisual)
 
   // --- Arbiter (added to scene during prologue-arbiter step) ---
@@ -1335,6 +1334,10 @@ export function createGameScene(
       shieldVisual.visible = tickState.shieldCharges > 0
       shieldVisual.position.set(ship.x, ship.y, 1.3)
       shieldVisual.scale.setScalar(1 + tickState.shieldCharges * 0.15 + Math.sin(now / 120) * 0.04)
+      const shieldMat = shieldVisual.material
+      if (shieldMat instanceof THREE.MeshBasicMaterial) {
+        shieldMat.opacity = 0.12 + tickState.shieldCharges * 0.045 + Math.sin(now / 160) * 0.025
+      }
       if (result.shieldHit) {
         addTrauma(screenShake, 0.35)
         onShieldChanged?.(tickState.shieldCharges)

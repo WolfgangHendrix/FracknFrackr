@@ -86,8 +86,8 @@ export function TradeMenu({
   const hasMaterials = cargo.silver > 0 || cargo.gold > 0
 
   return (
-    <div className="absolute inset-0 flex items-center justify-center z-50 pointer-events-none">
-      <div className="pointer-events-auto bg-space-900/95 border-2 border-hud-green/60 rounded-xl shadow-2xl w-[360px] max-w-[90vw] font-mono">
+    <div className="absolute inset-0 flex items-center justify-center z-50 pointer-events-none p-3 sm:p-4">
+      <div className="pointer-events-auto bg-space-900/95 border-2 border-hud-green/60 rounded-xl shadow-2xl w-[360px] max-w-[90vw] max-h-[calc(100dvh-2rem)] font-mono flex flex-col overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-hud-green/30">
           <h2 className="text-hud-green text-lg font-bold tracking-wider">TRADE STATION</h2>
@@ -133,7 +133,7 @@ export function TradeMenu({
         </div>
 
         {/* Content */}
-        <div className="px-5 py-4 min-h-[200px]">
+        <div className="px-5 py-4 min-h-0 flex-1 overflow-y-auto overscroll-contain">
           {activeTab === 'sell' ? (
             <SellPanel
               cargo={cargo}
