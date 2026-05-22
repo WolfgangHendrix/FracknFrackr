@@ -42,7 +42,7 @@ export function playLaserFire(): void {
   osc.frequency.exponentialRampToValueAtTime(220, now + 0.08)
 
   const gain = ctx.createGain()
-  gain.gain.setValueAtTime(0.06 * getSfxVolume(), now)
+  gain.gain.setValueAtTime(0.035 * getSfxVolume(), now)
   gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1)
 
   const filter = ctx.createBiquadFilter()
@@ -85,7 +85,7 @@ export function playExplosion(): void {
   noiseFilter.frequency.exponentialRampToValueAtTime(100, now + 0.3)
 
   const noiseGain = ctx.createGain()
-  noiseGain.gain.setValueAtTime(0.12 * getSfxVolume(), now)
+  noiseGain.gain.setValueAtTime(0.1 * getSfxVolume(), now)
   noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.3)
 
   noise.connect(noiseFilter)
@@ -100,7 +100,7 @@ export function playExplosion(): void {
   osc.frequency.exponentialRampToValueAtTime(20, now + 0.2)
 
   const oscGain = ctx.createGain()
-  oscGain.gain.setValueAtTime(0.15 * getSfxVolume(), now)
+  oscGain.gain.setValueAtTime(0.12 * getSfxVolume(), now)
   oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.25)
 
   osc.connect(oscGain)
@@ -125,7 +125,7 @@ export function playPlayerHit(): void {
   osc.frequency.exponentialRampToValueAtTime(60, now + 0.15)
 
   const gain = ctx.createGain()
-  gain.gain.setValueAtTime(0.12 * getSfxVolume(), now)
+  gain.gain.setValueAtTime(0.09 * getSfxVolume(), now)
   gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2)
 
   const filter = ctx.createBiquadFilter()
@@ -146,7 +146,7 @@ export function playPlayerHit(): void {
   crack.frequency.exponentialRampToValueAtTime(500, now + 0.05)
 
   const crackGain = ctx.createGain()
-  crackGain.gain.setValueAtTime(0.05 * getSfxVolume(), now)
+  crackGain.gain.setValueAtTime(0.04 * getSfxVolume(), now)
   crackGain.gain.exponentialRampToValueAtTime(0.001, now + 0.06)
 
   crack.connect(crackGain)
@@ -205,7 +205,7 @@ export function startEngineSound(): void {
 export function updateEngineSound(speedNormalized: number): void {
   if (!engineSound || !audioCtx) return
 
-  const vol = speedNormalized * 0.04 * getSfxVolume()
+  const vol = speedNormalized * 0.032 * getSfxVolume()
   const freq = 60 + speedNormalized * 200
 
   engineSound.gain.gain.setTargetAtTime(vol, audioCtx.currentTime, 0.05)
@@ -319,7 +319,7 @@ export function updateArbiterSiren(intensity: number): void {
   const clamped = Math.max(0, Math.min(1, intensity))
   const now = audioCtx.currentTime
 
-  const vol = (0.07 + clamped * 0.13) * getSfxVolume()
+  const vol = (0.05 + clamped * 0.11) * getSfxVolume()
   arbiterSiren.masterGain.gain.setTargetAtTime(vol, now, 0.1)
 
   // Both LFOs share the rate so the pitch sweep and the beat stay locked;
@@ -398,7 +398,7 @@ export function playMenuSelect(): void {
     osc.frequency.setValueAtTime(notes[i], t)
 
     const gain = ctx.createGain()
-    gain.gain.setValueAtTime(0.07 * vol, t)
+    gain.gain.setValueAtTime(0.055 * vol, t)
     gain.gain.exponentialRampToValueAtTime(0.001, t + 0.14)
 
     osc.connect(gain)
@@ -424,7 +424,7 @@ export function playSellChime(): void {
 
     const gain = ctx.createGain()
     gain.gain.setValueAtTime(0.0001, t)
-    gain.gain.exponentialRampToValueAtTime(0.11 * vol, t + 0.01)
+    gain.gain.exponentialRampToValueAtTime(0.08 * vol, t + 0.01)
     gain.gain.exponentialRampToValueAtTime(0.001, t + 0.3)
 
     osc.connect(gain)
@@ -456,7 +456,7 @@ export function playBuyRegister(): void {
   noiseFilter.frequency.setValueAtTime(1800, now)
   noiseFilter.Q.setValueAtTime(1, now)
   const noiseGain = ctx.createGain()
-  noiseGain.gain.setValueAtTime(0.18 * vol, now)
+  noiseGain.gain.setValueAtTime(0.12 * vol, now)
   noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.08)
   noise.connect(noiseFilter)
   noiseFilter.connect(noiseGain)
@@ -473,7 +473,7 @@ export function playBuyRegister(): void {
 
     const gain = ctx.createGain()
     gain.gain.setValueAtTime(0.0001, t)
-    gain.gain.exponentialRampToValueAtTime(0.1 * vol, t + 0.01)
+    gain.gain.exponentialRampToValueAtTime(0.075 * vol, t + 0.01)
     gain.gain.exponentialRampToValueAtTime(0.001, t + 0.5)
 
     osc.connect(gain)

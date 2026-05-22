@@ -3,8 +3,8 @@
  * Audio modules read these values when scaling gain.
  */
 
-let sfxVolume = 0.7
-let musicVolume = 0.25
+let sfxVolume = 0.65
+let musicVolume = 0.22
 
 /** Get the current SFX volume (0–1). */
 export function getSfxVolume(): number {

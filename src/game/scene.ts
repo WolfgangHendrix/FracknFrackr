@@ -124,6 +124,8 @@ function disposeMesh(obj: THREE.Object3D): void {
 const CAMERA_HEIGHT = 150
 const CAMERA_LERP = 0.08
 const STAR_COUNT = 400
+const BLACK_HOLE_ALERT_RADIUS = 120
+const BLACK_HOLE_EVENT_HORIZON_RADIUS = 12
 
 export { PLAYER_MAX_HP } from './game-tick'
 
@@ -275,6 +277,8 @@ export function createGameScene(
   // --- Lazer Beam (persistent mesh, hidden when not firing) ---
   const lazerBeam = createLazerBeam()
   scene.add(lazerBeam)
+  const optionLazerBeams = [createLazerBeam(), createLazerBeam()]
+  for (const beam of optionLazerBeams) scene.add(beam)
   const rippleBeam = createRippleBeam()
   scene.add(rippleBeam)
 
@@ -579,6 +583,7 @@ export function createGameScene(
   let prevLedgerInt = -1
   let prevArbiterKey = ''
   let prevTractorActive = false
+  let lastContinuousWeaponSfxAt = 0
 
   function triggerEnemyDamageFeedback(
     enemy: EnemyShip,
@@ -760,6 +765,17 @@ export function createGameScene(
         result.beamEndX,
         result.beamEndY,
       )
+      for (let i = 0; i < optionLazerBeams.length; i++) {
+        const optionBeam = result.optionBeams[i]
+        updateLazerBeam(
+          optionLazerBeams[i],
+          !!optionBeam,
+          optionBeam?.startX ?? 0,
+          optionBeam?.startY ?? 0,
+          optionBeam?.endX ?? 0,
+          optionBeam?.endY ?? 0,
+        )
+      }
       updateRippleBeam(
         rippleBeam,
         result.rippleActive,
@@ -769,7 +785,12 @@ export function createGameScene(
         result.rippleEndY,
         tickState.elapsedTime,
       )
-      if (result.beamActive || result.rippleActive) {
+      if (result.beamActive || result.optionBeams.length > 0 || result.rippleActive) {
+        if (now - lastContinuousWeaponSfxAt > 90) {
+          lastContinuousWeaponSfxAt = now
+          playLaserFire()
+        }
+      } else if (result.newProjectiles.length > 0) {
         playLaserFire()
       }
 
@@ -808,9 +829,6 @@ export function createGameScene(
       }
 
       // New projectile models
-      if (result.newProjectiles.length > 0) {
-        playLaserFire()
-      }
       for (const p of result.newProjectiles) {
         const model = createProjectileModel(p.tool)
         model.position.set(p.x, p.y, 0)
@@ -1383,6 +1401,22 @@ export function createGameScene(
         const ady = tickState.arbiter.y - ship.y
         const adist = Math.sqrt(adx * adx + ady * ady)
         updateArbiterSiren(Math.max(0.15, Math.min(1, 1 - adist / 220)))
+      } else if (getTutorialStep() === 'done') {
+        const holeX = blackHole.x + camera.position.x * 0.1
+        const holeY = blackHole.y + camera.position.y * 0.1
+        const hdx = holeX - ship.x
+        const hdy = holeY - ship.y
+        const hdist = Math.sqrt(hdx * hdx + hdy * hdy)
+        if (hdist <= BLACK_HOLE_ALERT_RADIUS) {
+          startArbiterSiren()
+          const intensity =
+            1 -
+            Math.max(0, hdist - BLACK_HOLE_EVENT_HORIZON_RADIUS) /
+              (BLACK_HOLE_ALERT_RADIUS - BLACK_HOLE_EVENT_HORIZON_RADIUS)
+          updateArbiterSiren(Math.max(0.2, Math.min(1, intensity)))
+        } else {
+          stopArbiterSiren()
+        }
       } else {
         stopArbiterSiren()
       }
@@ -1447,6 +1481,7 @@ export function createGameScene(
 
     // Clean up lazer beam
     disposeLazerBeam(lazerBeam)
+    for (const beam of optionLazerBeams) disposeLazerBeam(beam)
     disposeRippleBeam(rippleBeam)
     disposeTractorBeam(tractorBeam)
 

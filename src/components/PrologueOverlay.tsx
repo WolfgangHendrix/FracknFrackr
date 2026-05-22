@@ -3,12 +3,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { TutorialStep } from '@/hooks/useTutorial'
 import { ARBITER_DIALOGUE } from '@/game/prologue-config'
+import { getSfxVolume } from '@/game/volume-control'
 
 const ARBITER_VOICE_LINES = [
   './audio/vo_arbeter01.wav',
   './audio/vo_arbeter02.wav',
   './audio/vo_arbeter03.wav',
 ] as const
+const FRACKER_SIGNAL_DETECTED = './audio/vo_fracker04.wav'
+const FRACKER_SYSTEMS_FAILING = './audio/vo_fracker01.wav'
 
 const ARBITER_DIALOGUE_FALLBACK_BASE_MS = 950
 const ARBITER_DIALOGUE_FALLBACK_MS_PER_CHAR = 32
@@ -59,6 +62,7 @@ function ArbiterDialogue({ onComplete }: { onComplete: () => void }) {
     voiceRef.current?.pause()
     const voice = new Audio(ARBITER_VOICE_LINES[lineIndex] ?? '')
     voice.preload = 'auto'
+    voice.volume = 0.9 * getSfxVolume()
     voiceRef.current = voice
     let fallback: ReturnType<typeof setTimeout> | null = null
 
@@ -102,10 +106,45 @@ function ArbiterDialogue({ onComplete }: { onComplete: () => void }) {
 
 export function PrologueOverlay({ step, onSkip, onDialogueComplete }: PrologueOverlayProps) {
   const [confirming, setConfirming] = useState(false)
+  const frackerVoicesRef = useRef<HTMLAudioElement[]>([])
+  const playedFrackerStepsRef = useRef(new Set<TutorialStep>())
 
   useEffect(() => {
     setConfirming(false)
   }, [step])
+
+  useEffect(() => {
+    const voiceSrc =
+      step === 'prologue-arbiter'
+        ? FRACKER_SIGNAL_DETECTED
+        : step === 'prologue-strip'
+          ? FRACKER_SYSTEMS_FAILING
+          : null
+    if (!voiceSrc || playedFrackerStepsRef.current.has(step)) return
+
+    playedFrackerStepsRef.current.add(step)
+    const voice = new Audio(voiceSrc)
+    voice.preload = 'auto'
+    voice.volume = 0.85 * getSfxVolume()
+    frackerVoicesRef.current.push(voice)
+    voice.addEventListener(
+      'ended',
+      () => {
+        frackerVoicesRef.current = frackerVoicesRef.current.filter((item) => item !== voice)
+      },
+      { once: true },
+    )
+    void voice.play().catch(() => {})
+  }, [step])
+
+  useEffect(() => {
+    return () => {
+      for (const voice of frackerVoicesRef.current) {
+        voice.pause()
+      }
+      frackerVoicesRef.current = []
+    }
+  }, [])
 
   const handleSkipClick = useCallback(() => {
     if (confirming) {

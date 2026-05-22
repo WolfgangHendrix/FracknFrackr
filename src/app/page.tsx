@@ -26,11 +26,14 @@ import { useGamepadMenu } from '@/hooks/useGamepadMenu'
 import { useGamepadButton } from '@/hooks/useGamepadButton'
 import type { MiningTool } from '@/game/types'
 import type { Upgrades, SaveSlotId } from '@/lib/schemas'
+import { getSfxVolume } from '@/game/volume-control'
 
 type Screen = 'title' | 'start' | 'game'
 
 const ACTIVE_SLOT_KEY = 'fracking-asteroids-active-slot'
 const CRYSTALLINE_PROMPT_INTERVALS = [3, 5, 10] as const
+const FRACKER_SYSTEMS_OFFLINE = './audio/vo_fracker02.wav'
+const FRACKER_REBOOTING = './audio/vo_fracker03.wav'
 
 export default function Home() {
   const [screen, setScreen] = useState<Screen>('title')
@@ -303,6 +306,8 @@ export default function Home() {
   >('none')
 
   const prologueRespawnRef = useRef(tutorial.onPrologueRespawnComplete)
+  const prologueVoiceRefs = useRef<HTMLAudioElement[]>([])
+  const playedPrologueFadeVoicesRef = useRef(new Set<string>())
   useEffect(() => {
     prologueRespawnRef.current = tutorial.onPrologueRespawnComplete
   }, [tutorial.onPrologueRespawnComplete])
@@ -340,6 +345,39 @@ export default function Home() {
 
     return () => timers.forEach(clearTimeout)
   }, [tutorialStep])
+
+  useEffect(() => {
+    const voiceSrc =
+      prologueFade === 'fading-in'
+        ? FRACKER_SYSTEMS_OFFLINE
+        : prologueFade === 'rebooting'
+          ? FRACKER_REBOOTING
+          : null
+    if (!voiceSrc || playedPrologueFadeVoicesRef.current.has(prologueFade)) return
+
+    playedPrologueFadeVoicesRef.current.add(prologueFade)
+    const voice = new Audio(voiceSrc)
+    voice.preload = 'auto'
+    voice.volume = 0.85 * getSfxVolume()
+    prologueVoiceRefs.current.push(voice)
+    voice.addEventListener(
+      'ended',
+      () => {
+        prologueVoiceRefs.current = prologueVoiceRefs.current.filter((item) => item !== voice)
+      },
+      { once: true },
+    )
+    void voice.play().catch(() => {})
+  }, [prologueFade])
+
+  useEffect(() => {
+    return () => {
+      for (const voice of prologueVoiceRefs.current) {
+        voice.pause()
+      }
+      prologueVoiceRefs.current = []
+    }
+  }, [])
 
   const inPrologue = tutorialStep.startsWith('prologue-')
 

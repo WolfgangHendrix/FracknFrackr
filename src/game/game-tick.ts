@@ -264,6 +264,7 @@ export interface TickResult {
   beamEndX: number
   beamEndY: number
   beamHits: BeamHit[]
+  optionBeams: { startX: number; startY: number; endX: number; endY: number }[]
   rippleActive: boolean
   rippleStartX: number
   rippleStartY: number
@@ -464,6 +465,7 @@ function emptyResult(): TickResult {
     beamEndX: 0,
     beamEndY: 0,
     beamHits: [],
+    optionBeams: [],
     rippleActive: false,
     rippleStartX: 0,
     rippleStartY: 0,
@@ -1205,8 +1207,94 @@ export function tick(state: TickState, input: TickInput): TickResult {
 
       // Beam damage scales with tier and dt (continuous DPS)
       const baseDamage = DAMAGE_PER_TIER[clampTier(state.blasterTier) - 1]
-      const dps = baseDamage * 5 * (1 + state.optionCount * 0.55)
+      const dps = baseDamage * 5
       const frameDamage = dps * dt
+
+      const processBeamAsteroidHits = (hits: BeamHit[]): void => {
+        for (const hit of hits) {
+          if (hit.deflected) {
+            result.crystallineDeflect = true
+          } else {
+            result.asteroidHit = true
+            const prevHits = state.asteroidHitCounts.get(hit.asteroidId) ?? 0
+            const newHits = prevHits + 1
+            state.asteroidHitCounts.set(hit.asteroidId, newHits)
+
+            if (newHits % HITS_PER_BREAK === 0) {
+              if (Math.random() < METAL_SPAWN_CHANCE) {
+                const hitAsteroid = state.asteroids.find((a) => a.id === hit.asteroidId)
+                const ax = hitAsteroid ? hitAsteroid.x : hit.x
+                const ay = hitAsteroid ? hitAsteroid.y : hit.y
+                const ddx = hit.x - ax
+                const ddy = hit.y - ay
+                const d = Math.sqrt(ddx * ddx + ddy * ddy)
+                const nx = d > 0.01 ? ddx / d : Math.random() - 0.5
+                const ny = d > 0.01 ? ddy / d : Math.random() - 0.5
+                const metal = createMetalChunk(hit.x, hit.y, nx, ny)
+                state.metalChunks.push(metal)
+                result.newMetalChunks.push(metal)
+                result.metalSpawned = true
+              }
+            }
+          }
+        }
+      }
+
+      const processBeamEnemies = (
+        startX: number,
+        startY: number,
+        endX: number,
+        endY: number,
+      ): { endX: number; endY: number } => {
+        const beamHitEnemies: {
+          enemy: EnemyShip
+          killed: boolean
+          isAmbush: boolean
+          t: number
+        }[] = []
+        const tryBeamEnemy = (en: EnemyShip | null, isAmbush: boolean): void => {
+          if (!en || !en.alive) return
+          const r = checkBeamEnemyCollisions(startX, startY, endX, endY, frameDamage, en)
+          if (r.hit) {
+            result.enemyDamaged.push({
+              enemy: en,
+              damage: frameDamage,
+              x: en.x,
+              y: en.y,
+              source: 'beam',
+            })
+            beamHitEnemies.push({ enemy: en, killed: r.killed, isAmbush, t: r.t })
+          }
+        }
+        tryBeamEnemy(state.enemy, false)
+        for (const ae of state.ambushEnemies) tryBeamEnemy(ae, true)
+
+        let clippedEndX = endX
+        let clippedEndY = endY
+        if (beamHitEnemies.length > 0) {
+          let minT = 1
+          for (const h of beamHitEnemies) if (h.t < minT) minT = h.t
+          const bx = endX - startX
+          const by = endY - startY
+          clippedEndX = startX + bx * minT
+          clippedEndY = startY + by * minT
+
+          for (const h of beamHitEnemies) {
+            if (!h.killed) continue
+            const box = createScrapBox(h.enemy.x, h.enemy.y)
+            state.scrapBoxes.push(box)
+            result.enemyDestroyed = { x: h.enemy.x, y: h.enemy.y }
+            result.enemyDestroyedEvent = true
+            dropScavengerLoot(state, result, h.enemy)
+            if (h.isAmbush) {
+              result.ambushEnemiesDestroyed.push(h.enemy)
+            } else if (state.enemy === h.enemy) {
+              state.enemy = null
+            }
+          }
+        }
+        return { endX: clippedEndX, endY: clippedEndY }
+      }
 
       const liveAsteroids = state.asteroids.filter((a) => a.hp > 0)
       const beamResult = checkBeamAsteroidCollisions(
@@ -1225,58 +1313,14 @@ export function tick(state: TickState, input: TickInput): TickResult {
       result.beamEndY = beamResult.beamEndY
       result.beamHits = beamResult.hits
 
-      // --- Beam vs enemies (along the segment already truncated by asteroids,
-      // so beams don't reach enemies behind rocks) ---
-      const beamHitEnemies: { enemy: EnemyShip; killed: boolean; isAmbush: boolean; t: number }[] =
-        []
-      const tryBeamEnemy = (en: EnemyShip | null, isAmbush: boolean): void => {
-        if (!en || !en.alive) return
-        const r = checkBeamEnemyCollisions(
-          state.ship.x,
-          state.ship.y,
-          result.beamEndX,
-          result.beamEndY,
-          frameDamage,
-          en,
-        )
-        if (r.hit) {
-          result.enemyDamaged.push({
-            enemy: en,
-            damage: frameDamage,
-            x: en.x,
-            y: en.y,
-            source: 'beam',
-          })
-          beamHitEnemies.push({ enemy: en, killed: r.killed, isAmbush, t: r.t })
-        }
-      }
-      tryBeamEnemy(state.enemy, false)
-      for (const ae of state.ambushEnemies) tryBeamEnemy(ae, true)
-
-      // Truncate beam end to the nearest enemy hit if any
-      if (beamHitEnemies.length > 0) {
-        let minT = 1
-        for (const h of beamHitEnemies) if (h.t < minT) minT = h.t
-        const bx = result.beamEndX - state.ship.x
-        const by = result.beamEndY - state.ship.y
-        result.beamEndX = state.ship.x + bx * minT
-        result.beamEndY = state.ship.y + by * minT
-
-        // Handle kills
-        for (const h of beamHitEnemies) {
-          if (!h.killed) continue
-          const box = createScrapBox(h.enemy.x, h.enemy.y)
-          state.scrapBoxes.push(box)
-          result.enemyDestroyed = { x: h.enemy.x, y: h.enemy.y }
-          result.enemyDestroyedEvent = true
-          dropScavengerLoot(state, result, h.enemy)
-          if (h.isAmbush) {
-            result.ambushEnemiesDestroyed.push(h.enemy)
-          } else if (state.enemy === h.enemy) {
-            state.enemy = null
-          }
-        }
-      }
+      const clippedPrimary = processBeamEnemies(
+        state.ship.x,
+        state.ship.y,
+        result.beamEndX,
+        result.beamEndY,
+      )
+      result.beamEndX = clippedPrimary.endX
+      result.beamEndY = clippedPrimary.endY
 
       // --- Beam vs Arbiter — truncate the beam to the boss if it reaches ---
       if (state.arbiter) {
@@ -1297,31 +1341,49 @@ export function tick(state: TickState, input: TickInput): TickResult {
         }
       }
 
-      // Process beam hits for events and metal spawning
-      for (const hit of beamResult.hits) {
-        if (hit.deflected) {
-          result.crystallineDeflect = true
-        } else {
-          result.asteroidHit = true
-          const prevHits = state.asteroidHitCounts.get(hit.asteroidId) ?? 0
-          const newHits = prevHits + 1
-          state.asteroidHitCounts.set(hit.asteroidId, newHits)
+      processBeamAsteroidHits(beamResult.hits)
 
-          if (newHits % HITS_PER_BREAK === 0) {
-            if (Math.random() < METAL_SPAWN_CHANCE) {
-              const hitAsteroid = state.asteroids.find((a) => a.id === hit.asteroidId)
-              const ax = hitAsteroid ? hitAsteroid.x : hit.x
-              const ay = hitAsteroid ? hitAsteroid.y : hit.y
-              const ddx = hit.x - ax
-              const ddy = hit.y - ay
-              const d = Math.sqrt(ddx * ddx + ddy * ddy)
-              const nx = d > 0.01 ? ddx / d : Math.random() - 0.5
-              const ny = d > 0.01 ? ddy / d : Math.random() - 0.5
-              const metal = createMetalChunk(hit.x, hit.y, nx, ny)
-              state.metalChunks.push(metal)
-              result.newMetalChunks.push(metal)
-              result.metalSpawned = true
-            }
+      for (const option of optionMuzzlePositions(state)) {
+        const odx = state.fireTarget.x - option.x
+        const ody = state.fireTarget.y - option.y
+        const odist = Math.sqrt(odx * odx + ody * ody)
+        if (odist < 0.5) continue
+        const optionEndX = option.x + (odx / odist) * LAZER_BEAM_RANGE
+        const optionEndY = option.y + (ody / odist) * LAZER_BEAM_RANGE
+        const optionBeamResult = checkBeamAsteroidCollisions(
+          option.x,
+          option.y,
+          optionEndX,
+          optionEndY,
+          frameDamage,
+          state.asteroids.filter((a) => a.hp > 0),
+        )
+        const clippedOption = processBeamEnemies(
+          option.x,
+          option.y,
+          optionBeamResult.beamEndX,
+          optionBeamResult.beamEndY,
+        )
+        result.optionBeams.push({
+          startX: option.x,
+          startY: option.y,
+          endX: clippedOption.endX,
+          endY: clippedOption.endY,
+        })
+        result.beamHits.push(...optionBeamResult.hits)
+        processBeamAsteroidHits(optionBeamResult.hits)
+
+        if (state.arbiter) {
+          const ab = checkBeamArbiterCollisions(
+            option.x,
+            option.y,
+            clippedOption.endX,
+            clippedOption.endY,
+            frameDamage,
+            state.arbiter,
+          )
+          if (ab.hit) {
+            result.arbiterHit = true
           }
         }
       }

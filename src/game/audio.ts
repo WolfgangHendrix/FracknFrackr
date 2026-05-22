@@ -45,7 +45,7 @@ export function startCollectorHum(): void {
 
   const gain = ctx.createGain()
   gain.gain.setValueAtTime(0, ctx.currentTime)
-  gain.gain.linearRampToValueAtTime(0.12 * getSfxVolume(), ctx.currentTime + 0.15)
+  gain.gain.linearRampToValueAtTime(0.055 * getSfxVolume(), ctx.currentTime + 0.15)
   gain.connect(ctx.destination)
 
   const oscillators: OscillatorNode[] = []
@@ -67,7 +67,7 @@ export function startCollectorHum(): void {
   osc2.type = 'sine'
   osc2.frequency.setValueAtTime(110, ctx.currentTime)
   const gain2 = ctx.createGain()
-  gain2.gain.setValueAtTime(0.06, ctx.currentTime)
+  gain2.gain.setValueAtTime(0.035, ctx.currentTime)
   osc2.connect(gain2)
   gain2.connect(gain)
   osc2.start()
@@ -124,7 +124,7 @@ export function playCollectPling(): void {
   osc.frequency.exponentialRampToValueAtTime(baseFreq * 1.5, now + 0.05)
 
   const gain = ctx.createGain()
-  gain.gain.setValueAtTime(0.15 * getSfxVolume(), now)
+  gain.gain.setValueAtTime(0.07 * getSfxVolume(), now)
   gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25)
 
   osc.connect(gain)
