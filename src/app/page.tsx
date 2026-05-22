@@ -179,7 +179,15 @@ export default function Home() {
             ? 3
             : Math.min(
                 upgrades[type] + 1,
-                type === 'missiles' ? 8 : type === 'options' ? 2 : type === 'ripple' ? 1 : 5,
+                type === 'missiles'
+                  ? 8
+                  : type === 'options'
+                    ? 2
+                    : type === 'ripple'
+                      ? 1
+                      : type === 'armor'
+                        ? 3
+                        : 5,
               ),
       }
       buyUpgrade(type, cost, (ok) => {
@@ -230,6 +238,14 @@ export default function Home() {
   const handleShieldChanged = useCallback(
     (charges: number) => {
       setUpgradeLevel('shield', charges)
+      requestSave()
+    },
+    [setUpgradeLevel, requestSave],
+  )
+
+  const handleArmorChanged = useCallback(
+    (charges: number) => {
+      setUpgradeLevel('armor', charges)
       requestSave()
     },
     [setUpgradeLevel, requestSave],
@@ -485,6 +501,7 @@ export default function Home() {
         onArbiterEvent={handleArbiterEvent}
         onRunEnded={handleRunEnded}
         onShieldChanged={handleShieldChanged}
+        onArmorChanged={handleArmorChanged}
         onPrologueReady={tutorial.onPrologueReady}
         onFieldCleared={tutorial.onFieldCleared}
         onArbiterArrived={tutorial.onArbiterArrived}

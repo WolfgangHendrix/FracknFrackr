@@ -16,6 +16,8 @@ export const UpgradesSchema = z.object({
   missiles: z.number().int().min(0).max(8).default(0),
   ripple: z.number().int().min(0).max(1).default(0),
   options: z.number().int().min(0).max(2).default(0),
+  speed: z.number().int().min(0).max(5).default(0),
+  armor: z.number().int().min(0).max(3).default(0),
   shield: z.number().int().min(0).max(3).default(0),
 })
 export type Upgrades = z.infer<typeof UpgradesSchema>
@@ -60,6 +62,8 @@ export function defaultGameState(): GameState {
       missiles: 0,
       ripple: 0,
       options: 0,
+      speed: 0,
+      armor: 0,
       shield: 0,
     },
     cargo: { scrap: 0, fragments: 0, silver: 0, gold: 0, capacity: 50 },

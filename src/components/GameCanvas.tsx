@@ -44,6 +44,7 @@ interface GameCanvasProps {
   onArbiterEvent?: (event: ArbiterEvent) => void
   onRunEnded?: (stats: RunStats) => void
   onShieldChanged?: (charges: number) => void
+  onArmorChanged?: (charges: number) => void
   // Prologue callbacks
   onPrologueReady?: () => void
   onFieldCleared?: () => void
@@ -76,6 +77,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
     onArbiterEvent,
     onRunEnded,
     onShieldChanged,
+    onArmorChanged,
     onPrologueReady,
     onFieldCleared,
     onArbiterArrived,
@@ -108,6 +110,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
   const onArbiterEventRef = useRef(onArbiterEvent)
   const onRunEndedRef = useRef(onRunEnded)
   const onShieldChangedRef = useRef(onShieldChanged)
+  const onArmorChangedRef = useRef(onArmorChanged)
   const onPrologueReadyRef = useRef(onPrologueReady)
   const onFieldClearedRef = useRef(onFieldCleared)
   const onArbiterArrivedRef = useRef(onArbiterArrived)
@@ -228,6 +231,10 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
   }, [onShieldChanged])
 
   useEffect(() => {
+    onArmorChangedRef.current = onArmorChanged
+  }, [onArmorChanged])
+
+  useEffect(() => {
     onPrologueReadyRef.current = onPrologueReady
   }, [onPrologueReady])
 
@@ -275,6 +282,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
           onArbiterEvent: (event: ArbiterEvent) => onArbiterEventRef.current?.(event),
           onRunEnded: (stats: RunStats) => onRunEndedRef.current?.(stats),
           onShieldChanged: (charges: number) => onShieldChangedRef.current?.(charges),
+          onArmorChanged: (charges: number) => onArmorChangedRef.current?.(charges),
           onPrologueReady: () => onPrologueReadyRef.current?.(),
           onFieldCleared: () => onFieldClearedRef.current?.(),
           onArbiterArrived: () => onArbiterArrivedRef.current?.(),

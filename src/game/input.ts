@@ -7,6 +7,7 @@ export interface InputState {
   down: boolean
   left: boolean
   right: boolean
+  boost: boolean
   /** Precise joystick angle in radians (Three.js rotation.z convention), or null when joystick is inactive. */
   joystickAngle: number | null
 }
@@ -25,7 +26,7 @@ export interface AimState {
 }
 
 export function createInputState(): InputState {
-  return { up: false, down: false, left: false, right: false, joystickAngle: null }
+  return { up: false, down: false, left: false, right: false, boost: false, joystickAngle: null }
 }
 
 export function createAimState(): AimState {
@@ -55,12 +56,19 @@ export function createInputHandler(state: InputState): {
       state[dir] = true
       e.preventDefault()
     }
+    if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+      state.boost = true
+      e.preventDefault()
+    }
   }
 
   function onKeyUp(e: KeyboardEvent): void {
     const dir = KEY_MAP[e.code]
     if (dir) {
       state[dir] = false
+    }
+    if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+      state.boost = false
     }
   }
 
@@ -77,6 +85,7 @@ export function createInputHandler(state: InputState): {
       state.down = false
       state.left = false
       state.right = false
+      state.boost = false
     },
   }
 }

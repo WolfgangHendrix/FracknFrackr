@@ -18,6 +18,8 @@ const UPGRADE_MAX: Record<keyof Upgrades, number> = {
   missiles: 8,
   ripple: 1,
   options: 2,
+  speed: 5,
+  armor: 3,
   shield: 3,
 }
 

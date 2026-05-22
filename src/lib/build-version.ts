@@ -1,1 +1,1 @@
-export const BUILD_VERSION = '0522260114'
+export const BUILD_VERSION = '0522260128'

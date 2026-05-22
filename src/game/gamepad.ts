@@ -11,6 +11,8 @@ const AXIS_LEFT_X = 0
 const AXIS_LEFT_Y = 1
 const AXIS_RIGHT_X = 2
 const AXIS_RIGHT_Y = 3
+const BUTTON_Y = 3
+const BUTTON_LT = 6
 const BUTTON_RT = 7
 
 export interface GamepadSnapshot {
@@ -18,6 +20,8 @@ export interface GamepadSnapshot {
   leftY: number
   rightX: number
   rightY: number
+  yPressed: boolean
+  ltPressed: boolean
   rtPressed: boolean
 }
 
@@ -26,6 +30,7 @@ export interface GamepadHandlerState {
   fireLocked: boolean
   /** Previous-frame RT pressed state for edge detection. */
   prevRt: boolean
+  prevY: boolean
   /** Last non-deadzone aim direction (gamepad space, +X right / +Y down). */
   lockedAimX: number
   lockedAimY: number
@@ -43,15 +48,14 @@ export function createGamepadHandlerState(): GamepadHandlerState {
     lockedAimY: 0,
     droveMovement: false,
     droveAim: false,
+    prevY: false,
   }
 }
 
 /**
  * Pull a snapshot for the first connected gamepad, or null if none are connected.
  */
-export function readGamepadSnapshot(
-  getPads: () => (Gamepad | null)[],
-): GamepadSnapshot | null {
+export function readGamepadSnapshot(getPads: () => (Gamepad | null)[]): GamepadSnapshot | null {
   const pads = getPads()
   for (const pad of pads) {
     if (pad && pad.connected) {
@@ -60,6 +64,8 @@ export function readGamepadSnapshot(
         leftY: pad.axes[AXIS_LEFT_Y] ?? 0,
         rightX: pad.axes[AXIS_RIGHT_X] ?? 0,
         rightY: pad.axes[AXIS_RIGHT_Y] ?? 0,
+        yPressed: pad.buttons[BUTTON_Y]?.pressed ?? false,
+        ltPressed: (pad.buttons[BUTTON_LT]?.value ?? 0) > TRIGGER_THRESHOLD,
         rtPressed: (pad.buttons[BUTTON_RT]?.value ?? 0) > TRIGGER_THRESHOLD,
       }
     }
@@ -87,7 +93,11 @@ export function applyGamepadFrame(
   aimState: AimState,
   canvasWidth: number,
   canvasHeight: number,
-): { firing: boolean } {
+): { firing: boolean; toolToggle: boolean } {
+  let toolToggle = false
+  if (snapshot?.yPressed && !state.prevY) toolToggle = true
+  state.prevY = snapshot?.yPressed ?? false
+
   // RT edge → toggle fire-lock
   if (snapshot) {
     if (snapshot.rtPressed && !state.prevRt) {
@@ -98,6 +108,7 @@ export function applyGamepadFrame(
     state.prevRt = false
     state.fireLocked = false
   }
+  inputState.boost = !!snapshot && (snapshot.ltPressed || snapshot.rtPressed)
 
   // --- Movement (left stick) ---
   const lx = snapshot?.leftX ?? 0
@@ -158,14 +169,14 @@ export function applyGamepadFrame(
     state.droveAim = false
   }
 
-  return { firing }
+  return { firing, toolToggle }
 }
 
 export interface GamepadHandler {
   attach: () => void
   detach: () => void
   /** Poll the connected gamepad and write to inputState/aimState. Returns whether to fire this frame. */
-  poll: () => { firing: boolean }
+  poll: () => { firing: boolean; toolToggle: boolean }
   isFireLocked: () => boolean
 }
 
@@ -190,6 +201,7 @@ export function createGamepadHandler(
       state.fireLocked = false
       state.droveMovement = false
       state.droveAim = false
+      inputState.boost = false
     },
     poll() {
       const getPads = (): (Gamepad | null)[] => {

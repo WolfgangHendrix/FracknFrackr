@@ -155,6 +155,8 @@ export interface TickState {
   missileTier: number
   rippleUnlocked: boolean
   optionCount: number
+  speedTier: number
+  armorCharges: number
   shieldCharges: number
 
   // Fire/aim state — tick() clears these on unpause
@@ -321,6 +323,7 @@ export interface TickResult {
   stripComplete: boolean
   prologuePlayerKilled: boolean
   shieldHit: boolean
+  armorHit: boolean
   // Endless mode
   /** Current Ledger value (always set, even outside endless mode). */
   ledger: number
@@ -354,6 +357,8 @@ export interface TickStateConfig {
   missileTier?: number
   rippleUnlocked?: boolean
   optionCount?: number
+  speedTier?: number
+  armorCharges?: number
   shieldCharges?: number
   asteroids?: Asteroid[]
   stationPosition?: { x: number; y: number }
@@ -398,6 +403,8 @@ export function createTickState(config?: TickStateConfig): TickState {
     missileTier: config?.missileTier ?? 0,
     rippleUnlocked: config?.rippleUnlocked ?? false,
     optionCount: config?.optionCount ?? 0,
+    speedTier: config?.speedTier ?? 0,
+    armorCharges: config?.armorCharges ?? 0,
     shieldCharges: config?.shieldCharges ?? 0,
 
     fireTarget: null,
@@ -506,6 +513,7 @@ function emptyResult(): TickResult {
     stripComplete: false,
     prologuePlayerKilled: false,
     shieldHit: false,
+    armorHit: false,
     ledger: 0,
     newAsteroids: [],
     expiredAsteroidIds: [],
@@ -698,6 +706,13 @@ function absorbDamageWithShield(state: TickState, result: TickResult): boolean {
   return true
 }
 
+function absorbDamageWithArmor(state: TickState, result: TickResult): boolean {
+  if (state.armorCharges <= 0) return false
+  state.armorCharges -= 1
+  result.armorHit = true
+  return true
+}
+
 function damagePlayer(
   state: TickState,
   result: TickResult,
@@ -705,6 +720,7 @@ function damagePlayer(
   oneHitKill: boolean,
 ): void {
   if (absorbDamageWithShield(state, result)) return
+  if (oneHitKill && absorbDamageWithArmor(state, result)) return
   state.playerHp = oneHitKill ? 0 : Math.max(0, state.playerHp - damage)
   result.playerDamaged = true
 }
@@ -837,6 +853,8 @@ function prologueTick(state: TickState, input: TickInput, result: TickResult): v
       state.missileTier = PROLOGUE_SHIP.missileTier
       state.rippleUnlocked = true
       state.optionCount = PROLOGUE_SHIP.optionCount
+      state.speedTier = 5
+      state.armorCharges = 3
       state.shieldCharges = PROLOGUE_SHIP.shieldCharges
     }
     // Clear any stale Arbiter-approach state so the scripted fly-in always
@@ -1011,7 +1029,8 @@ export function tick(state: TickState, input: TickInput): TickResult {
   const effectiveInput = state.prologueAutoPilotForward
     ? { ...input.inputState, up: true }
     : input.inputState
-  updateShip(state.ship, effectiveInput, dt)
+  const speedMultiplier = 1 + state.speedTier * 0.1
+  updateShip(state.ship, effectiveInput, dt, speedMultiplier)
   if (endlessActive && input.blackHole) {
     applyBlackHolePullToBody(state.ship, input.blackHole, dt, BLACK_HOLE_PLAYER_PULL_MULT)
   }

@@ -60,17 +60,20 @@ export function aimToRotation(
  * @param input - Current keyboard input state
  * @param dt - Delta time in seconds
  */
-export function updateShip(ship: Ship, input: InputState, dt: number): void {
+export function updateShip(ship: Ship, input: InputState, dt: number, speedMultiplier = 1): void {
   const [dx, dy] = inputToDirection(input)
+  const boostMultiplier = input.boost ? 1.55 : 1
+  const accelMultiplier = speedMultiplier * boostMultiplier
 
   // Apply acceleration
-  ship.velocityX += dx * SHIP_ACCELERATION * dt
-  ship.velocityY += dy * SHIP_ACCELERATION * dt
+  ship.velocityX += dx * SHIP_ACCELERATION * accelMultiplier * dt
+  ship.velocityY += dy * SHIP_ACCELERATION * accelMultiplier * dt
 
   // Clamp to max speed
   const speed = Math.sqrt(ship.velocityX ** 2 + ship.velocityY ** 2)
-  if (speed > SHIP_MAX_SPEED) {
-    const scale = SHIP_MAX_SPEED / speed
+  const maxSpeed = SHIP_MAX_SPEED * speedMultiplier * boostMultiplier
+  if (speed > maxSpeed) {
+    const scale = maxSpeed / speed
     ship.velocityX *= scale
     ship.velocityY *= scale
   }

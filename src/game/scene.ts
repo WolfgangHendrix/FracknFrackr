@@ -156,6 +156,7 @@ export interface GameSceneOptions {
   /** Endless mode — fired once when the player's hull is lost. */
   onRunEnded?: (stats: RunStats) => void
   onShieldChanged?: (charges: number) => void
+  onArmorChanged?: (charges: number) => void
   // Prologue callbacks
   onPrologueReady?: () => void
   onFieldCleared?: () => void
@@ -203,6 +204,7 @@ export function createGameScene(
   const onArbiterEvent = options?.onArbiterEvent
   const onRunEnded = options?.onRunEnded
   const onShieldChanged = options?.onShieldChanged
+  const onArmorChanged = options?.onArmorChanged
   const onPrologueReady = options?.onPrologueReady
   const onFieldCleared = options?.onFieldCleared
   const onArbiterArrived = options?.onArbiterArrived
@@ -502,6 +504,14 @@ export function createGameScene(
     onToolChange?.(newTool)
   }
 
+  function selectMiningTool(tool: MiningTool): void {
+    if (tool === 'lazer' && !lazerUnlocked) return
+    if (tool === 'ripple' && !tickState.rippleUnlocked) return
+    tickState.activeMiningTool = tool
+    toolToggleButton?.setTool(tool)
+    onToolChange?.(tool)
+  }
+
   if (hasTouch) {
     toolToggleButton = createToolToggleButton(container, () => {
       if (getPaused()) return
@@ -514,6 +524,9 @@ export function createGameScene(
     if (e.code === 'KeyQ') {
       toggleMiningTool()
     }
+    if (e.code === 'Digit1' || e.code === 'Numpad1') selectMiningTool('blaster')
+    if (e.code === 'Digit2' || e.code === 'Numpad2') selectMiningTool('lazer')
+    if (e.code === 'Digit3' || e.code === 'Numpad3') selectMiningTool('ripple')
   }
   window.addEventListener('keydown', onToolToggleKeyDown)
 
@@ -675,6 +688,7 @@ export function createGameScene(
 
     // --- Gamepad poll: writes to inputState/aimState, returns firing intent ---
     const gamepadResult = gamepad.poll()
+    if (!paused && gamepadResult.toolToggle) toggleMiningTool()
 
     // --- Aim joystick poll: writes to aimState, returns firing intent ---
     const aimJoystickResult = aimJoystick.poll()
@@ -1360,6 +1374,10 @@ export function createGameScene(
         addTrauma(screenShake, 0.35)
         onShieldChanged?.(tickState.shieldCharges)
       }
+      if (result.armorHit) {
+        addTrauma(screenShake, 0.5)
+        onArmorChanged?.(tickState.armorCharges)
+      }
 
       // --- Turret rotation — tracks the player's aim (mouse / right stick).
       // Arrow barrel points in local +Y at rest; setting local rotation.z =
@@ -1575,6 +1593,8 @@ export function createGameScene(
     tickState.missileTier = upgrades.missiles
     tickState.rippleUnlocked = upgrades.ripple > 0
     tickState.optionCount = upgrades.options
+    tickState.speedTier = upgrades.speed
+    tickState.armorCharges = upgrades.armor
     tickState.shieldCharges = upgrades.shield
   }
 
@@ -1599,6 +1619,8 @@ export function createGameScene(
     tickState.missileTier = 0
     tickState.rippleUnlocked = false
     tickState.optionCount = 0
+    tickState.speedTier = 0
+    tickState.armorCharges = 0
     tickState.shieldCharges = 0
     toolToggleButton?.setTool('blaster')
     onToolChange?.('blaster')

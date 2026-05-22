@@ -167,6 +167,8 @@ export function HUD({
             {upgrades.options > 0 && (
               <div className="text-cyan-200">OPTION x{upgrades.options}</div>
             )}
+            {upgrades.speed > 0 && <div className="text-lime-300">ENGINE Mk{upgrades.speed}</div>}
+            {upgrades.armor > 0 && <div className="text-orange-300">ARMOR {upgrades.armor}</div>}
             {upgrades.shield > 0 && <div className="text-sky-300">SHIELD {upgrades.shield}</div>}
           </div>
           <button

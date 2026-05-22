@@ -42,6 +42,18 @@ const UPGRADE_CATALOG = [
     description: 'Orbital duplicate primary weapon',
   },
   {
+    type: 'speed' as const,
+    label: 'Engine Tuning',
+    cost: 160,
+    description: '+10% base ship speed',
+  },
+  {
+    type: 'armor' as const,
+    label: 'Armor Plating',
+    cost: 120,
+    description: '+1 emergency hull hit',
+  },
+  {
     type: 'shield' as const,
     label: 'Life-Force Shield',
     cost: 180,
@@ -256,8 +268,12 @@ function BuyPanel({
               ? 2
               : item.type === 'ripple'
                 ? 1
-                : 5
-        const maxed = item.type === 'shield' ? currentLevel >= 3 : currentLevel >= maxLevel
+                : item.type === 'speed'
+                  ? 5
+                  : item.type === 'armor' || item.type === 'shield'
+                    ? 3
+                    : 5
+        const maxed = currentLevel >= maxLevel
         const canAfford = scrap >= item.cost && !maxed
         const isFireRate = item.type === 'blaster'
         const highlight = isTutorial && isFireRate
@@ -279,7 +295,9 @@ function BuyPanel({
               </div>
               <div className="text-sm text-white/40">
                 {maxed ? 'MAX LEVEL' : item.description} —{' '}
-                {item.type === 'shield' ? `${currentLevel}/3` : `Mk${currentLevel}`}
+                {item.type === 'armor' || item.type === 'shield'
+                  ? `${currentLevel}/3`
+                  : `Mk${currentLevel}`}
               </div>
             </div>
             <button
