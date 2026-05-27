@@ -19,14 +19,18 @@ export const UpgradesSchema = z.object({
   speed: z.number().int().min(0).max(5).default(0),
   armor: z.number().int().min(0).max(3).default(0),
   shield: z.number().int().min(0).max(3).default(0),
+  smartBomb: z.number().int().min(0).max(1).default(0),
 })
 export type Upgrades = z.infer<typeof UpgradesSchema>
 
 export const CargoSchema = z.object({
   scrap: z.number().min(0),
   fragments: z.number().min(0),
-  silver: z.number().int().min(0),
-  gold: z.number().int().min(0),
+  carbon: z.number().int().min(0),
+  silicates: z.number().int().min(0),
+  platinum: z.number().int().min(0),
+  titanium: z.number().int().min(0),
+  exotics: z.number().int().min(0),
   capacity: z.number().int().min(1),
 })
 export type Cargo = z.infer<typeof CargoSchema>
@@ -40,6 +44,16 @@ export const GameStateSchema = z.object({
   // written before endless mode still load cleanly.
   highScore: z.number().min(0).default(0),
   timestamp: z.number(),
+  // Achievement/Leaderboard prep
+  achievements: z.array(z.string()).default([]),
+  metrics: z
+    .object({
+      totalScrapMined: z.number().default(0),
+      totalArbitersDefeated: z.number().default(0),
+      totalRuns: z.number().default(0),
+      maxLedgerReached: z.number().default(0),
+    })
+    .default({}),
 })
 export type GameState = z.infer<typeof GameStateSchema>
 
@@ -65,10 +79,27 @@ export function defaultGameState(): GameState {
       speed: 0,
       armor: 0,
       shield: 0,
+      smartBomb: 0,
     },
-    cargo: { scrap: 0, fragments: 0, silver: 0, gold: 0, capacity: 50 },
+    cargo: {
+      scrap: 0,
+      fragments: 0,
+      carbon: 0,
+      silicates: 0,
+      platinum: 0,
+      titanium: 0,
+      exotics: 0,
+      capacity: 50,
+    },
     hp: 100,
     highScore: 0,
     timestamp: Date.now(),
+    achievements: [],
+    metrics: {
+      totalScrapMined: 0,
+      totalArbitersDefeated: 0,
+      totalRuns: 0,
+      maxLedgerReached: 0,
+    },
   }
 }

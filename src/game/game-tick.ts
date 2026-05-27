@@ -145,6 +145,7 @@ export interface TickState {
   blasterState: BlasterState
   lazerState: LazerState
   missileCooldown: number
+  missileData: Map<string, { phase: 'deploy' | 'homing'; timer: number; targetId: string | null }>
   projectileElapsed: Map<string, number>
   asteroidHitCounts: Map<string, number>
   blasterTier: number
@@ -158,6 +159,8 @@ export interface TickState {
   speedTier: number
   armorCharges: number
   shieldCharges: number
+  smartBombCount: number
+  invulnerabilityTimer: number
 
   // Fire/aim state — tick() clears these on unpause
   fireTarget: { x: number; y: number } | null
@@ -187,6 +190,8 @@ export interface TickState {
   ambushEnemies: EnemyShip[]
   ambushSpawned: boolean
   playerKilledFired: boolean
+
+  positionHistory: { x: number; y: number; rotation: number }[]
 
   // Station position
   stationX: number
@@ -250,7 +255,8 @@ export interface TickInput {
   blackHole: { x: number; y: number } | null
 }
 
-export type MetalVariant = 'silver' | 'gold'
+import type { MetalVariant } from './types'
+export type { MetalVariant }
 
 /** Events produced by a single tick, consumed by renderer or test harness. */
 export interface TickResult {
@@ -324,6 +330,8 @@ export interface TickResult {
   prologuePlayerKilled: boolean
   shieldHit: boolean
   armorHit: boolean
+  /** The tick a Smart Bomb detonates (auto-bomb on death). */
+  smartBombDetonated: boolean
   // Endless mode
   /** Current Ledger value (always set, even outside endless mode). */
   ledger: number
@@ -360,6 +368,8 @@ export interface TickStateConfig {
   speedTier?: number
   armorCharges?: number
   shieldCharges?: number
+  smartBombCount?: number
+  invulnerabilityTimer?: number
   asteroids?: Asteroid[]
   stationPosition?: { x: number; y: number }
 }
@@ -394,6 +404,7 @@ export function createTickState(config?: TickStateConfig): TickState {
     blasterState: createBlasterState(),
     lazerState: createLazerState(),
     missileCooldown: 0,
+    missileData: new Map(),
     projectileElapsed: new Map(),
     asteroidHitCounts: hitCounts,
     blasterTier: config?.blasterTier ?? 1,
@@ -406,6 +417,8 @@ export function createTickState(config?: TickStateConfig): TickState {
     speedTier: config?.speedTier ?? 0,
     armorCharges: config?.armorCharges ?? 0,
     shieldCharges: config?.shieldCharges ?? 0,
+    smartBombCount: config?.smartBombCount ?? 0,
+    invulnerabilityTimer: config?.invulnerabilityTimer ?? 0,
 
     fireTarget: null,
     mouseHoldingFire: false,
@@ -425,6 +438,8 @@ export function createTickState(config?: TickStateConfig): TickState {
     ambushEnemies: [],
     ambushSpawned: false,
     playerKilledFired: false,
+
+    positionHistory: [],
 
     stationX: station.x,
     stationY: station.y,
@@ -514,6 +529,7 @@ function emptyResult(): TickResult {
     prologuePlayerKilled: false,
     shieldHit: false,
     armorHit: false,
+    smartBombDetonated: false,
     ledger: 0,
     newAsteroids: [],
     expiredAsteroidIds: [],
@@ -650,13 +666,17 @@ function optionMuzzlePositions(state: TickState): { x: number; y: number }[] {
   const positions: { x: number; y: number }[] = []
   const count = Math.max(0, Math.min(2, state.optionCount))
   if (count === 0) return positions
-  const time = state.elapsedTime * 1.8
+
+  // Life-Force style trailing options
+  const spacing = 18
   for (let i = 0; i < count; i++) {
-    const angle = time + (i * Math.PI * 2) / count
-    positions.push({
-      x: state.ship.x + Math.cos(angle) * 12,
-      y: state.ship.y + Math.sin(angle) * 12,
-    })
+    const historyIndex = state.positionHistory.length - 1 - (i + 1) * spacing
+    if (historyIndex >= 0) {
+      const hist = state.positionHistory[historyIndex]
+      positions.push({ x: hist.x, y: hist.y })
+    } else {
+      positions.push({ x: state.ship.x, y: state.ship.y })
+    }
   }
   return positions
 }
@@ -681,21 +701,89 @@ function nearestHomingTarget(state: TickState, x: number, y: number): PositionBo
 }
 
 function steerMissiles(state: TickState, dt: number): void {
+  const missileSpeed = 160
+
+  // Collect all valid targets once per frame
+  const targets: (PositionBody & { id: string })[] = []
+  if (state.enemy?.alive) targets.push({ x: state.enemy.x, y: state.enemy.y, id: state.enemy.id })
+  for (const e of state.ambushEnemies) if (e.alive) targets.push({ x: e.x, y: e.y, id: e.id })
+  if (state.arbiter && state.arbiter.hp > 0 && state.arbiter.mode === 'hunting') {
+    targets.push({ x: state.arbiter.x, y: state.arbiter.y, id: 'arbiter' })
+  }
+  // Add some asteroids as fallback targets
+  if (targets.length < 5) {
+    for (const a of state.asteroids) {
+      if (a.hp > 0 && a.size > 12) {
+        targets.push({ x: a.x, y: a.y, id: a.id })
+        if (targets.length >= 10) break
+      }
+    }
+  }
+
   for (const p of state.projectiles) {
     if (p.tool !== 'missile') continue
-    const target = nearestHomingTarget(state, p.x, p.y)
-    if (!target) continue
-    const speed = Math.hypot(p.velocityX, p.velocityY)
-    if (speed < 1) continue
-    const desired = Math.atan2(target.y - p.y, target.x - p.x)
-    const current = Math.atan2(p.velocityY, p.velocityX)
-    let diff = desired - current
-    while (diff > Math.PI) diff -= Math.PI * 2
-    while (diff < -Math.PI) diff += Math.PI * 2
-    const maxTurn = 4.8 * dt
-    const next = current + Math.max(-maxTurn, Math.min(maxTurn, diff))
-    p.velocityX = Math.cos(next) * speed
-    p.velocityY = Math.sin(next) * speed
+
+    let data = state.missileData.get(p.id)
+    if (!data) {
+      data = { phase: 'deploy', timer: 0.3, targetId: null }
+      state.missileData.set(p.id, data)
+    }
+
+    if (data.phase === 'deploy') {
+      data.timer -= dt
+      p.velocityX *= 0.95
+      p.velocityY *= 0.95
+      if (data.timer <= 0) {
+        data.phase = 'homing'
+        if (targets.length > 0) {
+          // Spread targets among missiles
+          const targetIndex = Math.floor(Math.random() * targets.length)
+          data.targetId = targets[targetIndex].id
+        }
+      }
+    }
+
+    if (data.phase === 'homing') {
+      let target: PositionBody | null = null
+      if (data.targetId) {
+        if (data.targetId === 'arbiter') {
+          if (state.arbiter && state.arbiter.hp > 0) target = state.arbiter
+        } else if (data.targetId === state.enemy?.id) {
+          if (state.enemy.alive) target = state.enemy
+        } else {
+          const ae = state.ambushEnemies.find((e) => e.id === data.targetId)
+          if (ae && ae.alive) target = ae
+          else {
+            const a = state.asteroids.find((a) => a.id === data.targetId)
+            if (a && a.hp > 0) target = a
+          }
+        }
+      }
+
+      if (!target && targets.length > 0) {
+        const nt = nearestHomingTarget(state, p.x, p.y)
+        if (nt) target = nt
+      }
+
+      if (target) {
+        const dx = target.x - p.x
+        const dy = target.y - p.y
+        const speed = Math.hypot(p.velocityX, p.velocityY)
+        const targetSpeed = Math.max(speed, missileSpeed)
+        const desired = Math.atan2(dy, dx)
+        const current = Math.atan2(p.velocityY, p.velocityX)
+        let diff = desired - current
+        while (diff > Math.PI) diff -= Math.PI * 2
+        while (diff < -Math.PI) diff += Math.PI * 2
+
+        const turnSpeed = 8.0
+        const next = current + Math.max(-turnSpeed * dt, Math.min(turnSpeed * dt, diff))
+
+        const newSpeed = Math.min(targetSpeed, speed + 240 * dt)
+        p.velocityX = Math.cos(next) * newSpeed
+        p.velocityY = Math.sin(next) * newSpeed
+      }
+    }
   }
 }
 
@@ -719,10 +807,69 @@ function damagePlayer(
   damage: number,
   oneHitKill: boolean,
 ): void {
+  if (state.invulnerabilityTimer > 0) return
   if (absorbDamageWithShield(state, result)) return
   if (oneHitKill && absorbDamageWithArmor(state, result)) return
-  state.playerHp = oneHitKill ? 0 : Math.max(0, state.playerHp - damage)
+
+  const nextHp = oneHitKill ? 0 : Math.max(0, state.playerHp - damage)
+
+  if (nextHp <= 0 && state.smartBombCount > 0) {
+    state.smartBombCount = 0
+    state.playerHp = 1
+    state.invulnerabilityTimer = 2.0
+    result.smartBombDetonated = true
+    result.playerDamaged = true
+    detonateSmartBomb(state, result)
+    return
+  }
+
+  state.playerHp = nextHp
   result.playerDamaged = true
+}
+
+function detonateSmartBomb(state: TickState, result: TickResult): void {
+  const BOMB_RADIUS = 300
+  const BOMB_DAMAGE = 1000
+
+  for (const a of state.asteroids) {
+    const dx = a.x - state.ship.x
+    const dy = a.y - state.ship.y
+    const d2 = dx * dx + dy * dy
+    if (d2 < BOMB_RADIUS * BOMB_RADIUS) {
+      a.hp = 0
+      result.asteroidHit = true
+    }
+  }
+
+  const damageEnemy = (e: EnemyShip | null) => {
+    if (!e || !e.alive) return
+    const dx = e.x - state.ship.x
+    const dy = e.y - state.ship.y
+    const d2 = dx * dx + dy * dy
+    if (d2 < BOMB_RADIUS * BOMB_RADIUS) {
+      e.hp -= BOMB_DAMAGE
+      result.enemyDamaged.push({
+        enemy: e,
+        damage: BOMB_DAMAGE,
+        x: e.x,
+        y: e.y,
+        source: 'projectile',
+      })
+    }
+  }
+
+  damageEnemy(state.enemy)
+  for (const ae of state.ambushEnemies) damageEnemy(ae)
+
+  if (state.arbiter && state.arbiter.hp > 0) {
+    const dx = state.arbiter.x - state.ship.x
+    const dy = state.arbiter.y - state.ship.y
+    const d2 = dx * dx + dy * dy
+    if (d2 < BOMB_RADIUS * BOMB_RADIUS) {
+      state.arbiter.hp -= BOMB_DAMAGE
+      result.arbiterHit = true
+    }
+  }
 }
 
 type PositionBody = { x: number; y: number }
@@ -985,6 +1132,9 @@ export function tick(state: TickState, input: TickInput): TickResult {
     state.fireTarget = null
     state.aimActive = false
   }
+  if (state.invulnerabilityTimer > 0) {
+    state.invulnerabilityTimer = Math.max(0, state.invulnerabilityTimer - dt)
+  }
 
   // --- Prologue auto-behavior ---
   const isPrologue = input.tutorialStep.startsWith('prologue-')
@@ -1058,6 +1208,16 @@ export function tick(state: TickState, input: TickInput): TickResult {
 
   if (Math.sqrt(state.ship.x ** 2 + state.ship.y ** 2) > 2) {
     result.shipMoved = true
+  }
+
+  // Record history for trailing options
+  state.positionHistory.push({
+    x: state.ship.x,
+    y: state.ship.y,
+    rotation: state.ship.rotation,
+  })
+  if (state.positionHistory.length > 100) {
+    state.positionHistory.shift()
   }
 
   // --- Arbiter tractor beam: haul the ship in while caught in the cone ---
@@ -1170,31 +1330,35 @@ export function tick(state: TickState, input: TickInput): TickResult {
   }
 
   if (state.missileTier > 0 && state.missileCooldown <= 0 && firingAllowed) {
-    const target = nearestHomingTarget(state, state.ship.x, state.ship.y)
-    if (target) {
-      const dx = target.x - state.ship.x
-      const dy = target.y - state.ship.y
-      const base = Math.atan2(dy, dx)
-      const count = Math.max(1, Math.min(8, state.missileTier))
-      const damage = 2 + Math.floor(state.blasterTier / 2)
-      for (let i = 0; i < count; i++) {
-        const side = i % 2 === 0 ? -1 : 1
-        const row = Math.floor(i / 2)
-        const sideAngle = state.ship.rotation + (side < 0 ? Math.PI : 0)
-        const ox = Math.cos(sideAngle) * (5 + row * 1.2)
-        const oy = Math.sin(sideAngle) * (5 + row * 1.2)
-        const spread = side * (0.38 + row * 0.08)
-        const missile = createMissileProjectile(
-          state.ship.x + ox,
-          state.ship.y + oy,
-          base + spread,
-          damage,
-        )
-        state.projectiles.push(missile)
-        result.newProjectiles.push(missile)
-      }
-      state.missileCooldown = 1.3
+    const count = Math.max(1, Math.min(8, state.missileTier))
+    const damage = 2 + Math.floor(state.blasterTier / 2)
+    for (let i = 0; i < count; i++) {
+      const side = i % 2 === 0 ? -1 : 1
+      const row = Math.floor(i / 2)
+      // Shoot out sideways in a formation
+      const deployAngle = state.ship.rotation + (side < 0 ? Math.PI : 0)
+      const ox = Math.cos(deployAngle) * 2
+      const oy = Math.sin(deployAngle) * 2
+      const missile = createMissileProjectile(
+        state.ship.x + ox,
+        state.ship.y + oy,
+        deployAngle,
+        damage,
+      )
+      // Initial burst speed
+      missile.velocityX = Math.cos(deployAngle) * (80 + row * 20)
+      missile.velocityY = Math.sin(deployAngle) * (80 + row * 20)
+
+      state.projectiles.push(missile)
+      result.newProjectiles.push(missile)
+
+      state.missileData.set(missile.id, {
+        phase: 'deploy',
+        timer: 0.3 + row * 0.1,
+        targetId: null,
+      })
     }
+    state.missileCooldown = 1.3
   }
 
   // --- Fire ---
@@ -1249,7 +1413,7 @@ export function tick(state: TickState, input: TickInput): TickResult {
                 const d = Math.sqrt(ddx * ddx + ddy * ddy)
                 const nx = d > 0.01 ? ddx / d : Math.random() - 0.5
                 const ny = d > 0.01 ? ddy / d : Math.random() - 0.5
-                const metal = createMetalChunk(hit.x, hit.y, nx, ny)
+                const metal = createMetalChunk(hit.x, hit.y, nx, ny, hitAsteroid?.type)
                 state.metalChunks.push(metal)
                 result.newMetalChunks.push(metal)
                 result.metalSpawned = true
@@ -1534,6 +1698,7 @@ export function tick(state: TickState, input: TickInput): TickResult {
   for (const id of prevIds) {
     if (!currentIds.has(id)) {
       result.expiredProjectileIds.push(id)
+      state.missileData.delete(id)
     }
   }
 
@@ -1569,7 +1734,7 @@ export function tick(state: TickState, input: TickInput): TickResult {
           const d = Math.sqrt(ddx * ddx + ddy * ddy)
           const nx = d > 0.01 ? ddx / d : Math.random() - 0.5
           const ny = d > 0.01 ? ddy / d : Math.random() - 0.5
-          const metal = createMetalChunk(hit.x, hit.y, nx, ny)
+          const metal = createMetalChunk(hit.x, hit.y, nx, ny, hitAsteroid?.type)
           state.metalChunks.push(metal)
           result.newMetalChunks.push(metal)
           result.metalSpawned = true

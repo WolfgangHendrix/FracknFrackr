@@ -54,9 +54,9 @@ export function LazerTutorialPopup({ visible, onDismiss }: LazerTutorialPopupPro
         <div className="text-3xl mb-3" aria-hidden="true">
           &#x26A0;
         </div>
-        <p className="text-hud-blue text-sm sm:text-base font-bold mb-2">CRYSTALLINE ASTEROID</p>
+        <p className="text-hud-blue text-sm sm:text-base font-bold mb-2">BASALTIC ASTEROID</p>
         <p className="text-white/70 text-sm sm:text-base leading-relaxed">
-          This asteroid is too hard for your blaster! You need a{' '}
+          This rock is too hard for your blaster! You need a{' '}
           <span className="text-hud-blue font-bold">Lazer</span> to mine it.
         </p>
         <p className="text-white/70 text-xs sm:text-sm leading-relaxed mt-1">

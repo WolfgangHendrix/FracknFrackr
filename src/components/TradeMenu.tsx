@@ -3,7 +3,20 @@
 import { useState } from 'react'
 import type { Cargo, Upgrades } from '@/lib/schemas'
 import type { TutorialStep } from '@/hooks/useTutorial'
-import { SILVER_SCRAP_VALUE, GOLD_SCRAP_VALUE } from '@/hooks/useGameState'
+import { SCRAP_VALUE_BY_MINERAL } from '@/hooks/useGameState'
+
+/**
+ * Display rows for the sell panel — one per mineral, ordered common→legendary
+ * so the eye reads down a rarity ladder. Color mirrors the HUD badge palette
+ * and the in-world fragment voxels in metal-chunk.ts (MINERAL_COLORS).
+ */
+const SELL_ROWS = [
+  { key: 'carbon' as const, label: 'Carbon', color: '#9098a0' },
+  { key: 'silicates' as const, label: 'Silicates', color: '#c89c70' },
+  { key: 'platinum' as const, label: 'Platinum', color: '#e0e8f0' },
+  { key: 'titanium' as const, label: 'Titanium', color: '#e0a060' },
+  { key: 'exotics' as const, label: 'Exotics', color: '#ff66ff' },
+]
 
 /** Cost to purchase the Lazer mining tool. */
 export const LAZER_COST = 200
@@ -59,6 +72,12 @@ const UPGRADE_CATALOG = [
     cost: 180,
     description: 'Restores a 3-hit damage shield',
   },
+  {
+    type: 'smartBomb' as const,
+    label: 'Emergency Core Detonator',
+    cost: 250,
+    description: 'Auto-bomb on fatal hit (one-use)',
+  },
 ]
 
 interface TradeMenuProps {
@@ -92,10 +111,11 @@ export function TradeMenu({
   const [manualTab, setManualTab] = useState<'sell' | 'buy'>('sell')
   const activeTab = isTutorialSell ? 'sell' : isTutorialBuy ? 'buy' : manualTab
 
-  const silverValue = cargo.silver * SILVER_SCRAP_VALUE
-  const goldValue = cargo.gold * GOLD_SCRAP_VALUE
-  const totalSellValue = silverValue + goldValue
-  const hasMaterials = cargo.silver > 0 || cargo.gold > 0
+  const totalSellValue = SELL_ROWS.reduce(
+    (sum, r) => sum + cargo[r.key] * SCRAP_VALUE_BY_MINERAL[r.key],
+    0,
+  )
+  const hasMaterials = SELL_ROWS.some((r) => cargo[r.key] > 0)
 
   return (
     <div className="absolute inset-0 flex items-center justify-center z-50 pointer-events-none p-3 sm:p-4">
@@ -149,8 +169,6 @@ export function TradeMenu({
           {activeTab === 'sell' ? (
             <SellPanel
               cargo={cargo}
-              silverValue={silverValue}
-              goldValue={goldValue}
               totalSellValue={totalSellValue}
               hasMaterials={hasMaterials}
               isTutorial={isTutorialSell}
@@ -190,32 +208,37 @@ export function TradeMenu({
 
 function SellPanel({
   cargo,
-  silverValue,
-  goldValue,
   totalSellValue,
   hasMaterials,
   isTutorial,
   onSell,
 }: {
   cargo: Cargo
-  silverValue: number
-  goldValue: number
   totalSellValue: number
   hasMaterials: boolean
   isTutorial: boolean
   onSell: () => void
 }) {
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-2">
       <div className="text-white/60 text-sm mb-1">YOUR MATERIALS</div>
-      <div className="flex justify-between text-sm">
-        <span style={{ color: '#c0c0c0' }}>Silver x{cargo.silver}</span>
-        <span className="text-hud-amber">+{silverValue} scrap</span>
-      </div>
-      <div className="flex justify-between text-sm">
-        <span style={{ color: '#ffd700' }}>Gold x{cargo.gold}</span>
-        <span className="text-hud-amber">+{goldValue} scrap</span>
-      </div>
+      {SELL_ROWS.map((row) => {
+        const count = cargo[row.key]
+        const value = count * SCRAP_VALUE_BY_MINERAL[row.key]
+        const dim = count === 0
+        return (
+          <div
+            key={row.key}
+            className="flex justify-between text-sm"
+            style={{ opacity: dim ? 0.4 : 1 }}
+          >
+            <span style={{ color: row.color }}>
+              {row.label} x{count}
+            </span>
+            <span className="text-hud-amber">+{value} scrap</span>
+          </div>
+        )
+      })}
       <div className="border-t border-white/10 pt-2 flex justify-between text-sm font-bold">
         <span className="text-white/80">Total</span>
         <span className="text-hud-amber">+{totalSellValue} scrap</span>
@@ -272,7 +295,10 @@ function BuyPanel({
                   ? 5
                   : item.type === 'armor' || item.type === 'shield'
                     ? 3
-                    : 5
+                    : item.type === 'smartBomb'
+                      ? 1
+                      : 5
+
         const maxed = currentLevel >= maxLevel
         const canAfford = scrap >= item.cost && !maxed
         const isFireRate = item.type === 'blaster'
@@ -332,7 +358,7 @@ function BuyPanel({
             Lazer
           </div>
           <div className="text-sm text-white/40">
-            {hasLazer ? 'OWNED' : 'Mines crystalline asteroids, +50% damage to all'}
+            {hasLazer ? 'OWNED' : 'Mines basaltic asteroids, +50% damage to all'}
           </div>
         </div>
         <button

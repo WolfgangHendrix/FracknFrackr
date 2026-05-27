@@ -239,8 +239,8 @@ export function checkProjectileAsteroidCollisions(
       if (a.hp <= 0) continue
       const aRadius = ASTEROID_SIZE_RADIUS[a.size] ?? ASTEROID_COLLISION_RADIUS
       if (circlesOverlap(p.x, p.y, PROJECTILE_RADIUS, a.x, a.y, aRadius)) {
-        if (a.type === 'crystalline' && p.tool !== 'lazer') {
-          // Blaster can't damage crystalline — deflect (still nudges slightly)
+        if (a.type === 'v-type' && p.tool !== 'lazer') {
+          // Blaster can't damage V-type basaltic rock — deflect (still nudges slightly)
           const vmag = Math.hypot(p.velocityX, p.velocityY)
           if (vmag > 0.001) {
             nudgeAsteroid(a, p.velocityX / vmag, p.velocityY / vmag, PROJECTILE_IMPULSE * 0.3)

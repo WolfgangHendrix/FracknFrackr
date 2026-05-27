@@ -1,6 +1,13 @@
 'use client'
 
-import { useRef, useEffect, useCallback, useImperativeHandle, forwardRef } from 'react'
+import {
+  useRef,
+  useEffect,
+  useCallback,
+  useImperativeHandle,
+  forwardRef,
+  useState,
+} from 'react'
 import type { GameScene, MetalVariant } from '@/game/scene'
 import type { TutorialStep } from '@/hooks/useTutorial'
 import type { MiningTool } from '@/game/types'
@@ -45,6 +52,7 @@ interface GameCanvasProps {
   onRunEnded?: (stats: RunStats) => void
   onShieldChanged?: (charges: number) => void
   onArmorChanged?: (charges: number) => void
+  onSmartBomb?: () => void
   // Prologue callbacks
   onPrologueReady?: () => void
   onFieldCleared?: () => void
@@ -78,6 +86,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
     onRunEnded,
     onShieldChanged,
     onArmorChanged,
+    onSmartBomb,
     onPrologueReady,
     onFieldCleared,
     onArbiterArrived,
@@ -87,6 +96,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
 ) {
   const containerRef = useRef<HTMLDivElement>(null)
   const sceneRef = useRef<GameScene | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
   const pausedRef = useRef(paused)
   const frozenRef = useRef(frozen)
   const tutorialStepRef = useRef(tutorialStep)
@@ -111,6 +121,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
   const onRunEndedRef = useRef(onRunEnded)
   const onShieldChangedRef = useRef(onShieldChanged)
   const onArmorChangedRef = useRef(onArmorChanged)
+  const onSmartBombRef = useRef(onSmartBomb)
   const onPrologueReadyRef = useRef(onPrologueReady)
   const onFieldClearedRef = useRef(onFieldCleared)
   const onArbiterArrivedRef = useRef(onArbiterArrived)
@@ -235,6 +246,10 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
   }, [onArmorChanged])
 
   useEffect(() => {
+    onSmartBombRef.current = onSmartBomb
+  }, [onSmartBomb])
+
+  useEffect(() => {
     onPrologueReadyRef.current = onPrologueReady
   }, [onPrologueReady])
 
@@ -283,11 +298,14 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
           onRunEnded: (stats: RunStats) => onRunEndedRef.current?.(stats),
           onShieldChanged: (charges: number) => onShieldChangedRef.current?.(charges),
           onArmorChanged: (charges: number) => onArmorChangedRef.current?.(charges),
+          onSmartBomb: () => onSmartBombRef.current?.(),
           onPrologueReady: () => onPrologueReadyRef.current?.(),
           onFieldCleared: () => onFieldClearedRef.current?.(),
           onArbiterArrived: () => onArbiterArrivedRef.current?.(),
           onStripComplete: () => onStripCompleteRef.current?.(),
         })
+        // Allow a few frames for the first render
+        setTimeout(() => setIsLoading(false), 200)
       })
       .catch((err: unknown) => {
         console.error('Failed to load game scene:', err)
@@ -301,6 +319,25 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
   }, [getPaused])
 
   return (
-    <div ref={containerRef} id="game-canvas" className="absolute inset-0" data-paused={paused} />
+    <div className="absolute inset-0 bg-space-950">
+      <div
+        ref={containerRef}
+        id="game-canvas"
+        className="absolute inset-0"
+        data-paused={paused}
+      />
+      {isLoading && (
+        <div className="absolute inset-0 flex items-center justify-center bg-space-950 z-[100] transition-opacity duration-700 pointer-events-none">
+          <div className="flex flex-col items-center gap-4">
+            <div className="font-mono text-hud-green text-sm tracking-[0.3em] animate-pulse">
+              SYSTEMS INITIALIZING...
+            </div>
+            <div className="w-48 h-1 bg-space-800 rounded-full overflow-hidden">
+              <div className="h-full bg-hud-green animate-[loading-bar_2s_infinite]" />
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   )
 })

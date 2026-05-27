@@ -12,7 +12,32 @@ export interface Asteroid {
   size: number
 }
 
-export type AsteroidType = 'common' | 'dense' | 'precious' | 'comet' | 'crystalline'
+export type AsteroidType = 'c-type' | 's-type' | 'm-type' | 'v-type' | 'd-type' | 'comet'
+
+/**
+ * Mineral fragment dropped when an asteroid is broken. One mineral per spectral
+ * class, plus comet which drops carbon (carbonaceous/volatile composition).
+ *
+ * Each mineral has a fixed scrap value reflecting the real-world rarity tier
+ * of its source class — see SCRAP_VALUE_BY_MINERAL in useGameState.
+ */
+export type MetalVariant = 'carbon' | 'silicates' | 'platinum' | 'titanium' | 'exotics'
+
+/**
+ * Deterministic asteroid → mineral mapping. Used by createMetalChunk to pick
+ * the fragment variant at spawn time.
+ */
+export const MINERAL_BY_ASTEROID: Record<AsteroidType, MetalVariant> = {
+  'c-type': 'carbon',
+  's-type': 'silicates',
+  'm-type': 'platinum',
+  'v-type': 'titanium',
+  'd-type': 'exotics',
+  comet: 'carbon',
+}
+
+/** Mineral dropped by sources without a spectral class (enemy debris, etc). */
+export const DEFAULT_MINERAL: MetalVariant = 'silicates'
 
 export type MiningTool = 'blaster' | 'lazer' | 'ripple'
 export type ProjectileTool = MiningTool | 'missile'

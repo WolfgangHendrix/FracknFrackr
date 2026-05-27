@@ -90,9 +90,9 @@ export function TitleScreen({ onBegin }: TitleScreenProps) {
 
       <div className="relative z-10 flex flex-col items-center px-6">
         <h1 className="menu-title font-mono text-4xl sm:text-5xl md:text-7xl font-bold text-hud-green tracking-widest">
-          FRACKING
+          FRAK&apos;N
           <br />
-          ASTEROIDS
+          FRAK&apos;R
         </h1>
         <p className="mt-8 font-mono text-sm sm:text-base md:text-lg tracking-[0.28em] text-hud-amber/80">
           CLICK, TAP, OR PRESS ENTER

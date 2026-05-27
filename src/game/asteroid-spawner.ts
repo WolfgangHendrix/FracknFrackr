@@ -9,28 +9,40 @@ const MIN_STATION_DISTANCE = 80
 /** Maximum spawn distance from station center. */
 const MAX_SPAWN_DISTANCE = 350
 
-/** Crystalline asteroids spawn closer to the station so players discover them early. */
-const CRYSTALLINE_MAX_DISTANCE = 180
+/** V-type (basaltic) asteroids spawn closer to the station so players discover them early. */
+const V_TYPE_MAX_DISTANCE = 180
 
 /** Minimum spacing between asteroids. */
 const MIN_ASTEROID_SPACING = 20
 
-/** HP values per asteroid type and size. Size 0 = moon (prologue only). */
+/**
+ * HP values per asteroid type and size. Size 0 = moon (prologue only).
+ *
+ * Types map to real-world spectral classes: C (carbonaceous), S (silicaceous),
+ * M (metallic), V (vestoid/basaltic), D (dark/organic). Comet is kept as a
+ * non-spectral icy outlier alongside the five classes.
+ */
 const HP_TABLE: Record<AsteroidType, Record<number, number>> = {
-  common: { 0: 40, 1: 15, 2: 8, 3: 4 },
-  dense: { 0: 60, 1: 25, 2: 14, 3: 8 },
-  precious: { 0: 25, 1: 10, 2: 6, 3: 3 },
+  'c-type': { 0: 40, 1: 15, 2: 8, 3: 4 },
+  's-type': { 0: 30, 1: 12, 2: 7, 3: 4 },
+  'm-type': { 0: 60, 1: 25, 2: 14, 3: 8 },
+  'v-type': { 0: 80, 1: 30, 2: 18, 3: 10 },
+  'd-type': { 0: 50, 1: 22, 2: 13, 3: 7 },
   comet: { 0: 45, 1: 18, 2: 10, 3: 5 },
-  crystalline: { 0: 80, 1: 30, 2: 18, 3: 10 },
 }
 
-/** Weighted type distribution for random selection. */
+/**
+ * Weighted type distribution. Weights track real belt abundance with mild
+ * game-feel softening on the rare tiers so high-multiplier loot is reachable
+ * within a normal run.
+ */
 const TYPE_WEIGHTS: { type: AsteroidType; weight: number }[] = [
-  { type: 'common', weight: 50 },
-  { type: 'dense', weight: 25 },
-  { type: 'precious', weight: 15 },
+  { type: 'c-type', weight: 75 },
+  { type: 's-type', weight: 17 },
+  { type: 'm-type', weight: 10 },
+  { type: 'v-type', weight: 5 },
+  { type: 'd-type', weight: 2 },
   { type: 'comet', weight: 10 },
-  { type: 'crystalline', weight: 8 },
 ]
 
 /** Weighted size distribution (1=large, 2=medium, 3=small). */
@@ -81,8 +93,8 @@ export function spawnAsteroidField(stationX: number, stationY: number, seed?: nu
     const typeIdx = pickWeighted(TYPE_WEIGHTS, rand)
     const type = TYPE_WEIGHTS[typeIdx].type
 
-    // Crystalline asteroids spawn closer to the station
-    const maxDist = type === 'crystalline' ? CRYSTALLINE_MAX_DISTANCE : MAX_SPAWN_DISTANCE
+    // V-type (basaltic) asteroids spawn closer to the station
+    const maxDist = type === 'v-type' ? V_TYPE_MAX_DISTANCE : MAX_SPAWN_DISTANCE
 
     // Random position in a ring around the station
     const angle = rand() * Math.PI * 2

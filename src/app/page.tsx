@@ -24,7 +24,7 @@ import { useTutorial } from '@/hooks/useTutorial'
 import { playMenuLoop, enterGameplay } from '@/lib/menu-music'
 import { useGamepadMenu } from '@/hooks/useGamepadMenu'
 import { useGamepadButton } from '@/hooks/useGamepadButton'
-import type { MiningTool } from '@/game/types'
+import type { MiningTool, MetalVariant } from '@/game/types'
 import type { Upgrades, SaveSlotId } from '@/lib/schemas'
 import { getSfxVolume } from '@/game/volume-control'
 
@@ -71,12 +71,16 @@ export default function Home() {
     setUpgradeLevel,
     spendScrap,
     resetRunCargo,
+    achievements,
+    metrics,
   } = useGameState()
   const { save, load } = useGamePersistence(activeSlot)
   const tutorial = useTutorial(isNewGame && screen === 'game')
 
   // --- Auto-save on state changes triggered by game events ---
   const [saveSeq, setSaveSeq] = useState(0)
+  const [isSaving, setIsSaving] = useState(false)
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   /** Request a save after the current state updates have been applied. */
   const requestSave = useCallback(() => {
@@ -87,6 +91,9 @@ export default function Home() {
   // Skip the initial render (saveSeq === 0).
   useEffect(() => {
     if (saveSeq === 0) return
+    setIsSaving(true)
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
+
     void save({
       ship: { x: 0, y: 0, rotation: 0, velocityX: 0, velocityY: 0 },
       upgrades,
@@ -94,6 +101,12 @@ export default function Home() {
       hp: playerHp,
       highScore,
       timestamp: Date.now(),
+      achievements,
+      metrics,
+    }).then(() => {
+      saveTimeoutRef.current = setTimeout(() => {
+        setIsSaving(false)
+      }, 2000)
     })
   }, [saveSeq]) // eslint-disable-line react-hooks/exhaustive-deps -- save reads latest state at trigger time
 
@@ -127,7 +140,7 @@ export default function Home() {
   }, [])
 
   const handleCollect = useCallback(
-    (variant: 'silver' | 'gold') => {
+    (variant: MetalVariant) => {
       onCollect(variant)
       requestSave()
     },
@@ -250,6 +263,11 @@ export default function Home() {
     },
     [setUpgradeLevel, requestSave],
   )
+
+  const handleSmartBomb = useCallback(() => {
+    setUpgradeLevel('smartBomb', 0)
+    requestSave()
+  }, [setUpgradeLevel, requestSave])
 
   const handleArbiterEvent = useCallback((event: ArbiterEvent) => {
     const text =
@@ -418,10 +436,26 @@ export default function Home() {
 
   useEffect(() => {
     if (!tutorialActive) return
-    if (tutorialStep === 'trade-sell' && cargo.silver === 0 && cargo.gold === 0) {
+    if (
+      tutorialStep === 'trade-sell' &&
+      cargo.carbon === 0 &&
+      cargo.silicates === 0 &&
+      cargo.platinum === 0 &&
+      cargo.titanium === 0 &&
+      cargo.exotics === 0
+    ) {
       onSoldMaterials()
     }
-  }, [tutorialActive, tutorialStep, cargo.silver, cargo.gold, onSoldMaterials])
+  }, [
+    tutorialActive,
+    tutorialStep,
+    cargo.carbon,
+    cargo.silicates,
+    cargo.platinum,
+    cargo.titanium,
+    cargo.exotics,
+    onSoldMaterials,
+  ])
 
   useEffect(() => {
     if (!tutorialActive) return
@@ -502,6 +536,7 @@ export default function Home() {
         onRunEnded={handleRunEnded}
         onShieldChanged={handleShieldChanged}
         onArmorChanged={handleArmorChanged}
+        onSmartBomb={handleSmartBomb}
         onPrologueReady={tutorial.onPrologueReady}
         onFieldCleared={tutorial.onFieldCleared}
         onArbiterArrived={tutorial.onArbiterArrived}
@@ -518,6 +553,7 @@ export default function Home() {
         hasLazer={hasLazer}
         ledger={ledger}
         arbiter={arbiterHud}
+        isSaving={isSaving}
         onPause={togglePause}
       />
       {!inPrologue && <ArbiterBanner banner={arbiterBanner} />}

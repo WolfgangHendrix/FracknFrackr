@@ -6,10 +6,21 @@ import type { Cargo, Upgrades } from '@/lib/schemas'
 import type { MetalVariant } from '@/game/scene'
 import { PLAYER_MAX_HP } from '@/game/scene'
 
-/** Scrap value per unit of silver ore. */
-export const SILVER_SCRAP_VALUE = 5
-/** Scrap value per unit of gold ore. */
-export const GOLD_SCRAP_VALUE = 15
+/**
+ * Scrap value per unit of each mineral fragment. Ratios track the real-world
+ * rarity ladder of the source spectral classes (~1× / 3.5× / 12× / 25× / 50×)
+ * scaled to a base that keeps a full asteroid field roughly economy-neutral
+ * versus the old silver/gold drop balance.
+ */
+export const SCRAP_VALUE_BY_MINERAL: Record<MetalVariant, number> = {
+  carbon: 3,
+  silicates: 11,
+  platinum: 36,
+  titanium: 75,
+  exotics: 150,
+}
+
+const MINERAL_KEYS = ['carbon', 'silicates', 'platinum', 'titanium', 'exotics'] as const
 
 const UPGRADE_MAX: Record<keyof Upgrades, number> = {
   blaster: 5,
@@ -21,6 +32,7 @@ const UPGRADE_MAX: Record<keyof Upgrades, number> = {
   speed: 5,
   armor: 3,
   shield: 3,
+  smartBomb: 1,
 }
 
 export interface GameStateHook {
@@ -39,6 +51,22 @@ export interface GameStateHook {
   setUpgradeLevel: (type: keyof Upgrades, value: number) => void
   spendScrap: (amount: number) => boolean
   resetRunCargo: () => void
+  achievements: string[]
+  setAchievements: React.Dispatch<React.SetStateAction<string[]>>
+  metrics: {
+    totalScrapMined: number
+    totalArbitersDefeated: number
+    totalRuns: number
+    maxLedgerReached: number
+  }
+  setMetrics: React.Dispatch<
+    React.SetStateAction<{
+      totalScrapMined: number
+      totalArbitersDefeated: number
+      totalRuns: number
+      maxLedgerReached: number
+    }>
+  >
 }
 
 export function useGameState(): GameStateHook {
@@ -47,6 +75,8 @@ export function useGameState(): GameStateHook {
   const [scrap, setScrap] = useState(0)
   const [playerHp, setPlayerHp] = useState(PLAYER_MAX_HP)
   const [upgrades, setUpgrades] = useState(() => defaultGameState().upgrades)
+  const [achievements, setAchievements] = useState<string[]>([])
+  const [metrics, setMetrics] = useState(() => defaultGameState().metrics)
 
   const togglePause = useCallback(() => {
     setPaused((p) => !p)
@@ -56,8 +86,7 @@ export function useGameState(): GameStateHook {
     setCargo((prev) => ({
       ...prev,
       fragments: prev.fragments + 1,
-      silver: prev.silver + (variant === 'silver' ? 1 : 0),
-      gold: prev.gold + (variant === 'gold' ? 1 : 0),
+      [variant]: prev[variant] + 1,
     }))
   }, [])
 
@@ -69,12 +98,16 @@ export function useGameState(): GameStateHook {
     setScrap((prev) => prev + amount)
   }, [])
 
-  /** Sell all silver and gold for scrap. Returns scrap earned. */
+  /** Sell all mineral fragments for scrap. Returns scrap earned. */
   const sellMaterials = useCallback((): number => {
     let earned = 0
     setCargo((prev) => {
-      earned = prev.silver * SILVER_SCRAP_VALUE + prev.gold * GOLD_SCRAP_VALUE
-      return { ...prev, silver: 0, gold: 0, fragments: 0 }
+      earned = MINERAL_KEYS.reduce((sum, k) => sum + prev[k] * SCRAP_VALUE_BY_MINERAL[k], 0)
+      const cleared = MINERAL_KEYS.reduce(
+        (acc, k) => ({ ...acc, [k]: 0 }),
+        {} as Record<(typeof MINERAL_KEYS)[number], number>,
+      )
+      return { ...prev, ...cleared, fragments: 0 }
     })
     setScrap((prev) => prev + earned)
     return earned
@@ -96,7 +129,11 @@ export function useGameState(): GameStateHook {
         setUpgrades((prev) => ({
           ...prev,
           [type]:
-            type === 'shield' ? UPGRADE_MAX.shield : Math.min(prev[type] + 1, UPGRADE_MAX[type]),
+            type === 'shield'
+              ? UPGRADE_MAX.shield
+              : type === 'smartBomb'
+                ? UPGRADE_MAX.smartBomb
+                : Math.min(prev[type] + 1, UPGRADE_MAX[type]),
         }))
         setTimeout(() => onPurchased?.(true), 0)
         return prevScrap - cost
@@ -105,9 +142,15 @@ export function useGameState(): GameStateHook {
     [],
   )
 
-  /** Wipe uncashed cargo (silver/gold/fragments) — used by the death respawn. */
+  /** Wipe uncashed cargo (all minerals + fragments) — used by the death respawn. */
   const resetRunCargo = useCallback(() => {
-    setCargo((prev) => ({ ...prev, fragments: 0, silver: 0, gold: 0 }))
+    setCargo((prev) => {
+      const cleared = MINERAL_KEYS.reduce(
+        (acc, k) => ({ ...acc, [k]: 0 }),
+        {} as Record<(typeof MINERAL_KEYS)[number], number>,
+      )
+      return { ...prev, ...cleared, fragments: 0 }
+    })
   }, [])
 
   /** Deduct scrap if affordable. Returns true on success. */
@@ -146,5 +189,9 @@ export function useGameState(): GameStateHook {
     setUpgradeLevel,
     spendScrap,
     resetRunCargo,
+    achievements,
+    setAchievements,
+    metrics,
+    setMetrics,
   }
 }

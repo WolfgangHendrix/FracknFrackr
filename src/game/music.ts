@@ -13,10 +13,12 @@ import { getMusicVolume } from './volume-control'
 
 let ctx: AudioContext | null = null
 let masterGain: GainNode | null = null
+let lowPassFilter: BiquadFilterNode | null = null
 let layers: MusicLayer[] = []
 let started = false
 let currentIntensity = 0
 let targetIntensity = 0
+let isMuffled = false
 
 /** How fast intensity lerps toward target (per second). */
 const INTENSITY_LERP_SPEED = 1.5
@@ -38,6 +40,14 @@ function getContext(): AudioContext | null {
     return null
   }
   return ctx
+}
+
+/** Toggle a muffled low-pass filter effect on the music. */
+export function setMusicFilter(muffled: boolean): void {
+  isMuffled = muffled
+  if (!ctx || !lowPassFilter) return
+  const freq = muffled ? 600 : 20000
+  lowPassFilter.frequency.setTargetAtTime(freq, ctx.currentTime, 0.1)
 }
 
 // --- Bass Drone Layer ---
@@ -233,7 +243,13 @@ export function startMusic(): void {
   masterGain = ac.createGain()
   masterGain.gain.setValueAtTime(0, ac.currentTime)
   masterGain.gain.linearRampToValueAtTime(0.25, ac.currentTime + 2)
-  masterGain.connect(ac.destination)
+
+  lowPassFilter = ac.createBiquadFilter()
+  lowPassFilter.type = 'lowpass'
+  lowPassFilter.frequency.setValueAtTime(isMuffled ? 600 : 20000, ac.currentTime)
+
+  masterGain.connect(lowPassFilter)
+  lowPassFilter.connect(ac.destination)
 
   layers = [
     createBassDrone(ac, masterGain),

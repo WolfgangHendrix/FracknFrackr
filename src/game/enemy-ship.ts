@@ -134,6 +134,7 @@ const WRECK_COLORS = [0xaa3333, 0xff6600, 0x884422, 0xff4444, 0x663322] as const
 // ---------------------------------------------------------------------------
 
 export interface EnemyShip {
+  id: string
   mesh: THREE.Group
   /** Behavioural class — drives which AI runs in updateEnemyShip. */
   kind: EnemyKind
@@ -485,6 +486,7 @@ export function createEnemyShip(
   const stats = KIND_STATS[kind]
 
   return {
+    id: `enemy-${nextEnemyId++}`,
     mesh,
     kind,
     collisionRadius: stats.collisionRadius,
@@ -1261,6 +1263,13 @@ export function disposeShipwreckDebris(debris: ShipwreckDebris): void {
 // ---------------------------------------------------------------------------
 // Dispose enemy ship
 // ---------------------------------------------------------------------------
+
+let nextEnemyId = 0
+
+/** Reset enemy ID counter (for testing). */
+export function resetEnemyIdCounter(): void {
+  nextEnemyId = 0
+}
 
 export function disposeEnemyShip(enemy: EnemyShip): void {
   enemy.mesh.traverse((child) => {

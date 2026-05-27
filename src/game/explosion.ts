@@ -1,18 +1,9 @@
 import * as THREE from 'three'
 
-/** Number of particle cubes per explosion. */
 const PARTICLE_COUNT = 8
-
-/** How long the explosion animation lasts in seconds. */
 export const EXPLOSION_DURATION = 0.4
-
-/** Speed particles fly outward in units/sec. */
 const PARTICLE_SPEED = 40
-
-/** Size of each particle cube. */
 const PARTICLE_SIZE = 0.6
-
-/** Explosion colors — amber/orange energy burst. */
 const EXPLOSION_COLORS = [0xffaa00, 0xffdd44, 0xff6600, 0xffcc22] as const
 
 export interface Explosion {
@@ -21,10 +12,6 @@ export interface Explosion {
   elapsed: number
 }
 
-/**
- * Create an explosion effect at the given position.
- * Returns an Explosion that must be updated each frame and removed when done.
- */
 export function createExplosion(x: number, y: number): Explosion {
   const group = new THREE.Group()
   group.position.set(x, y, 0)
@@ -56,9 +43,6 @@ export function createExplosion(x: number, y: number): Explosion {
   return { group, particles, elapsed: 0 }
 }
 
-/**
- * Update an explosion animation. Returns true if the explosion is still active.
- */
 export function updateExplosion(explosion: Explosion, dt: number): boolean {
   explosion.elapsed += dt
   if (explosion.elapsed >= EXPLOSION_DURATION) return false
@@ -69,17 +53,20 @@ export function updateExplosion(explosion: Explosion, dt: number): boolean {
     p.mesh.position.x += p.vx * dt
     p.mesh.position.y += p.vy * dt
 
-    // Fade out by shrinking
     const scale = 1 - progress
     p.mesh.scale.setScalar(scale)
+
+    const mat = p.mesh.material as THREE.MeshStandardMaterial
+    mat.emissiveIntensity = 0.8 * (1 - progress)
+    if (progress > 0.5) {
+      mat.opacity = 1 - (progress - 0.5) * 2
+      mat.transparent = true
+    }
   }
 
   return true
 }
 
-/**
- * Dispose all geometries and materials in an explosion.
- */
 export function disposeExplosion(explosion: Explosion): void {
   for (const p of explosion.particles) {
     p.mesh.geometry.dispose()

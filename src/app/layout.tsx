@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'FrackingAsteroids',
+  title: "Frak'n Frak'r",
   description: 'Blast asteroids, collect fragments, scrap resources, upgrade your ship.',
 }
 

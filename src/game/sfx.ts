@@ -348,6 +348,46 @@ export function stopArbiterSiren(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Klaxon — emergency warning siren
+// ---------------------------------------------------------------------------
+
+/**
+ * Play a short emergency warning blip.
+ * @param variant - 'low' for low-HP warning, 'high' for Arbiter jump warning.
+ */
+export function playKlaxon(variant: 'low' | 'high' = 'low'): void {
+  const ctx = getContext()
+  if (!ctx) return
+
+  const now = ctx.currentTime
+  const duration = 0.6
+  const freq = variant === 'low' ? 140 : 520
+
+  const osc = ctx.createOscillator()
+  osc.type = 'sawtooth'
+  osc.frequency.setValueAtTime(freq, now)
+  // Slight pitch slide for that classic siren feel
+  osc.frequency.exponentialRampToValueAtTime(freq * 1.2, now + duration * 0.4)
+  osc.frequency.exponentialRampToValueAtTime(freq, now + duration)
+
+  const filter = ctx.createBiquadFilter()
+  filter.type = 'lowpass'
+  filter.frequency.setValueAtTime(freq * 3, now)
+
+  const gain = ctx.createGain()
+  gain.gain.setValueAtTime(0, now)
+  gain.gain.linearRampToValueAtTime(0.08 * getSfxVolume(), now + 0.05)
+  gain.gain.linearRampToValueAtTime(0, now + duration)
+
+  osc.connect(filter)
+  filter.connect(gain)
+  gain.connect(ctx.destination)
+
+  osc.start(now)
+  osc.stop(now + duration)
+}
+
+// ---------------------------------------------------------------------------
 // UI / menu sounds — all procedurally synthesized
 // ---------------------------------------------------------------------------
 

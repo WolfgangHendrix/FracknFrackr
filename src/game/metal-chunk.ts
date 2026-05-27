@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { Ship } from '@/lib/schemas'
-import type { Asteroid } from './types'
+import type { Asteroid, AsteroidType, MetalVariant } from './types'
+import { DEFAULT_MINERAL, MINERAL_BY_ASTEROID } from './types'
 import { SHIP_COLLISION_RADIUS, ASTEROID_COLLISION_RADIUS } from './collision-constants'
 import { ASTEROID_SIZE_RADIUS } from './asteroid-model'
 
@@ -25,13 +26,17 @@ const METAL_RESTITUTION = 0.7
 /** Chance (0–1) that a debris break-off spawns a metal chunk. */
 export const METAL_SPAWN_CHANCE = 0.7
 
-/** Metal colors — silver and gold. */
-const METAL_COLORS = {
-  silver: 0xc0c0c0,
-  silverLight: 0xe8e8e8,
-  gold: 0xffd700,
-  goldDark: 0xdaa520,
-} as const
+/**
+ * Visual colors per mineral fragment. Picked to read cleanly against the
+ * starfield: low-value carbon is muted, high-value exotics glow magenta.
+ */
+export const MINERAL_COLORS: Record<MetalVariant, { primary: number; accent: number }> = {
+  carbon: { primary: 0x505058, accent: 0x707078 },
+  silicates: { primary: 0xc89c70, accent: 0xe0bc90 },
+  platinum: { primary: 0xd0d8e0, accent: 0xfafafa },
+  titanium: { primary: 0xd07a40, accent: 0xe8a868 },
+  exotics: { primary: 0xc040c0, accent: 0xff66ff },
+}
 
 let nextMetalId = 0
 
@@ -43,18 +48,26 @@ export interface MetalChunk {
   vx: number
   vy: number
   rotSpeed: number
-  variant: 'silver' | 'gold'
+  variant: MetalVariant
 }
 
 /**
- * Create a shiny metal chunk at the given position, drifting outward.
+ * Create a shiny metal chunk at the given position, drifting outward. When
+ * `asteroidType` is provided the fragment variant is determined by the source
+ * rock's spectral class via MINERAL_BY_ASTEROID; omit it (e.g. enemy debris
+ * drops) to default to DEFAULT_MINERAL.
  */
-export function createMetalChunk(x: number, y: number, dirX: number, dirY: number): MetalChunk {
-  const variant = Math.random() < 0.5 ? 'silver' : 'gold'
+export function createMetalChunk(
+  x: number,
+  y: number,
+  dirX: number,
+  dirY: number,
+  asteroidType?: AsteroidType,
+): MetalChunk {
+  const variant: MetalVariant = asteroidType ? MINERAL_BY_ASTEROID[asteroidType] : DEFAULT_MINERAL
   const group = new THREE.Group()
 
-  const primary = variant === 'silver' ? METAL_COLORS.silver : METAL_COLORS.gold
-  const accent = variant === 'silver' ? METAL_COLORS.silverLight : METAL_COLORS.goldDark
+  const { primary, accent } = MINERAL_COLORS[variant]
 
   // 2x2 voxel nugget with a highlight
   const voxels: [number, number, number, number][] = [

@@ -1,4 +1,4 @@
-# FrackingAsteroids
+# Frak'n Frak'r
 
 Standalone browser game. Three.js voxel asteroid mining.
 

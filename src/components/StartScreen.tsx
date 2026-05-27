@@ -114,7 +114,21 @@ export function clearSlotSummary(slotId: SaveSlotId): void {
   localStorage.setItem(SLOTS_STORAGE_KEY, JSON.stringify([...map.values()]))
 }
 
-type ScreenMode = 'main' | 'new-game' | 'load-game'
+type ScreenMode = 'main' | 'new-game' | 'load-game' | 'credits'
+
+/** A single credit block: a role heading and one or more attribution lines. */
+function CreditSection({ role, lines }: { role: string; lines: string[] }) {
+  return (
+    <div className="flex flex-col items-center gap-1">
+      <p className="font-mono text-xs tracking-[0.22em] text-hud-amber/70 uppercase">{role}</p>
+      {lines.map((line) => (
+        <p key={line} className="font-mono text-sm md:text-base text-white/85 text-center">
+          {line}
+        </p>
+      ))}
+    </div>
+  )
+}
 
 function formatDate(timestamp: number): string {
   return new Date(timestamp).toLocaleDateString(undefined, {
@@ -283,9 +297,9 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
 
       {/* Title */}
       <h1 className="menu-title font-mono text-4xl md:text-6xl font-bold text-hud-green mb-2 tracking-widest text-center relative">
-        FRACKING
+        FRAK&apos;N
         <br />
-        ASTEROIDS
+        FRAK&apos;R
       </h1>
       <p className="font-mono text-sm md:text-base text-hud-amber/70 mb-12 relative">
         Blast. Collect. Scrap. Upgrade.
@@ -308,6 +322,44 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
             className="px-8 py-4 bg-space-800/80 border border-hud-blue/50 rounded text-hud-blue font-mono text-lg hover:bg-space-700/80 hover:border-hud-blue focus:bg-space-700/80 focus:border-hud-blue focus:outline-none focus:ring-2 focus:ring-hud-blue focus:scale-[1.02] active:scale-95 transition-all min-w-[220px] disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-space-800/80 disabled:hover:border-hud-blue/50"
           >
             LOAD GAME
+          </button>
+          <button
+            data-menu-item
+            onClick={() => setMode('credits')}
+            className="px-8 py-4 bg-space-800/80 border border-hud-amber/50 rounded text-hud-amber font-mono text-lg hover:bg-space-700/80 hover:border-hud-amber focus:bg-space-700/80 focus:border-hud-amber focus:outline-none focus:ring-2 focus:ring-hud-amber focus:scale-[1.02] active:scale-95 transition-all min-w-[220px]"
+          >
+            CREDITS
+          </button>
+        </div>
+      )}
+
+      {/* Credits */}
+      {mode === 'credits' && (
+        <div className="flex flex-col gap-5 items-center relative w-full max-w-sm px-4">
+          <CreditSection role="Developer" lines={['Santiago Salvador']} />
+          <CreditSection
+            role="Original Concept & Base Code"
+            lines={['Randy Lutcavich (Randroid.dev)']}
+          />
+          <CreditSection
+            role="Music & Audio"
+            lines={[
+              'Thinking Overture by DSTechnician',
+              '(via Pixabay)',
+              'Arranged & Implemented by Santiago Salvador',
+            ]}
+          />
+          <CreditSection
+            role="Voiceovers"
+            lines={['Generated via RObo-Voice Generator', 'by Santiago Salvador']}
+          />
+          <button
+            data-menu-item
+            data-menu-back
+            onClick={handleBack}
+            className="mt-2 px-6 py-3 min-h-[44px] text-white/40 font-mono text-base hover:text-white/70 focus:text-white focus:outline-none focus:ring-2 focus:ring-white/40 rounded transition-colors"
+          >
+            BACK
           </button>
         </div>
       )}

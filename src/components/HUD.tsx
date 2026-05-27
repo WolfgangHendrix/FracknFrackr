@@ -19,44 +19,54 @@ interface HUDProps {
   ledger: number
   /** Active Arbiter boss, or null. Replaces the Ledger readout when present. */
   arbiter: ArbiterHudInfo | null
+  isSaving: boolean
   onPause: () => void
 }
 
-function SilverIcon({ size = 16 }: { size?: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 16 16"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      className="inline-block"
-      aria-hidden="true"
-    >
-      <rect x="2" y="4" width="5" height="5" rx="1" fill="#c0c0c0" />
-      <rect x="7" y="4" width="5" height="5" rx="1" fill="#e8e8e8" />
-      <rect x="4" y="7" width="5" height="5" rx="1" fill="#c0c0c0" />
-      <rect x="5" y="2" width="4" height="4" rx="1" fill="#e8e8e8" opacity="0.7" />
-    </svg>
-  )
-}
+/**
+ * Display config for the five mineral fragments — color + single-letter
+ * monogram badge shown in the resource readout. Order is rarity-ascending so
+ * the eye reads left-to-right from common to legendary.
+ */
+const MINERAL_DISPLAY = [
+  { key: 'carbon', letter: 'C', color: '#9098a0' },
+  { key: 'silicates', letter: 'S', color: '#c89c70' },
+  { key: 'platinum', letter: 'P', color: '#e0e8f0' },
+  { key: 'titanium', letter: 'T', color: '#e0a060' },
+  { key: 'exotics', letter: 'X', color: '#ff66ff' },
+] as const
 
-function GoldIcon({ size = 16 }: { size?: number }) {
+function MineralBadge({
+  letter,
+  color,
+  count,
+}: {
+  letter: string
+  color: string
+  count: number
+}) {
+  const dim = count === 0
   return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 16 16"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      className="inline-block"
-      aria-hidden="true"
+    <span
+      className="flex items-center gap-0.5 sm:gap-1 font-mono"
+      style={{ color, opacity: dim ? 0.35 : 1 }}
+      aria-label={`${letter} ${count}`}
     >
-      <rect x="2" y="4" width="5" height="5" rx="1" fill="#ffd700" />
-      <rect x="7" y="4" width="5" height="5" rx="1" fill="#daa520" />
-      <rect x="4" y="7" width="5" height="5" rx="1" fill="#ffd700" />
-      <rect x="5" y="2" width="4" height="4" rx="1" fill="#ffd700" opacity="0.7" />
-    </svg>
+      <span
+        className="inline-flex items-center justify-center font-bold rounded-sm"
+        style={{
+          width: '0.95em',
+          height: '0.95em',
+          fontSize: '0.65em',
+          color: '#000',
+          backgroundColor: color,
+        }}
+        aria-hidden="true"
+      >
+        {letter}
+      </span>
+      {count}
+    </span>
   )
 }
 
@@ -100,6 +110,7 @@ export function HUD({
   hasLazer,
   ledger,
   arbiter,
+  isSaving,
   onPause,
 }: HUDProps) {
   const cargoPercent = cargo.capacity > 0 ? Math.round((cargo.fragments / cargo.capacity) * 100) : 0
@@ -120,15 +131,10 @@ export function HUD({
           <div className="text-hud-blue font-mono truncate">
             CARGO: {cargo.fragments}/{cargo.capacity} ({cargoPercent}%)
           </div>
-          <div className="flex items-center gap-2 sm:gap-3 font-mono text-[clamp(0.75rem,2vw,0.9375rem)]">
-            <span className="flex items-center gap-1" style={{ color: '#c0c0c0' }}>
-              <SilverIcon size={14} />
-              {cargo.silver}
-            </span>
-            <span className="flex items-center gap-1" style={{ color: '#ffd700' }}>
-              <GoldIcon size={14} />
-              {cargo.gold}
-            </span>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[clamp(0.75rem,2vw,0.9375rem)]">
+            {MINERAL_DISPLAY.map((m) => (
+              <MineralBadge key={m.key} letter={m.letter} color={m.color} count={cargo[m.key]} />
+            ))}
           </div>
           {showHealth && (
             <div className="flex flex-col gap-1">
@@ -170,6 +176,11 @@ export function HUD({
             {upgrades.speed > 0 && <div className="text-lime-300">ENGINE Mk{upgrades.speed}</div>}
             {upgrades.armor > 0 && <div className="text-orange-300">ARMOR {upgrades.armor}</div>}
             {upgrades.shield > 0 && <div className="text-sky-300">SHIELD {upgrades.shield}</div>}
+            {upgrades.smartBomb > 0 && (
+              <div className="text-red-400 animate-pulse text-[clamp(0.6rem,1.5vw,0.75rem)]">
+                \u2622 CORE ARMED \u2622
+              </div>
+            )}
           </div>
           <button
             onClick={onPause}
@@ -231,6 +242,16 @@ export function HUD({
             style={{ color: ledgerInfo.color }}
           >
             {ledgerInfo.label}
+          </div>
+        </div>
+      )}
+
+      {/* Save indicator */}
+      {isSaving && (
+        <div className="absolute bottom-4 right-4 flex items-center gap-2 pointer-events-none">
+          <div className="w-2 h-2 rounded-full bg-hud-blue animate-pulse" />
+          <div className="font-mono text-[0.65rem] text-hud-blue/80 tracking-widest uppercase">
+            Data Saved
           </div>
         </div>
       )}

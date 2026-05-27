@@ -42,8 +42,13 @@ import {
 import type { DebrisChunk } from './asteroid-debris'
 import { disposeMetalChunk } from './metal-chunk'
 import type { MiningTool } from './types'
-import { tick, createTickState, PLAYER_MAX_HP, collectorRangeForTier } from './game-tick'
-import type { TickState, TickInput } from './game-tick'
+import {
+  tick,
+  createTickState,
+  PLAYER_MAX_HP,
+  collectorRangeForTier,
+} from './game-tick'
+import type { TickState, TickInput, TickResult } from './game-tick'
 import { FIRST_PATROL_DELAY, ASTEROID_REPLENISH_INTERVAL, computeScore } from './ledger-config'
 import type { RunStats } from './ledger-config'
 import type { ArbiterHudInfo } from './arbiter-comms'
@@ -56,9 +61,19 @@ import {
   disposeAudio,
 } from './audio'
 import {
+  startMusic,
+  setMusicIntensity,
+  updateMusic,
+  suspendMusic,
+  resumeMusic,
+  disposeMusic,
+  setMusicFilter,
+} from './music'
+import {
   playLaserFire,
   playExplosion,
   playPlayerHit,
+  playKlaxon,
   startEngineSound,
   updateEngineSound,
   suspendEngineSound,
@@ -71,6 +86,12 @@ import { createRadar, updateRadar, disposeRadar } from './radar'
 import type { Radar, RadarBlip } from './radar'
 import { createScreenShake, addTrauma, updateScreenShake } from './screen-shake'
 import type { ScreenShake } from './screen-shake'
+import {
+  createShockwave,
+  updateShockwave,
+  disposeShockwave,
+} from './shockwave'
+import type { Shockwave } from './shockwave'
 import {
   createTwinkleStars,
   updateTwinkleStars,
@@ -101,6 +122,14 @@ import {
 } from './enemy-damage-vfx'
 import type { EnemyDamageSparks } from './enemy-damage-vfx'
 import { disposeScrapBox } from './scrap-box'
+import { createBloom } from './post-processing'
+import { createCinematicCamera } from './cinematic-camera'
+import { createParticleSystem } from './particle-system'
+import { createDynamicLights } from './dynamic-lights'
+import { createDustMotes, createGalaxySpiral } from './environment'
+import { createProjectileTrails } from './projectile-trail'
+import { createShipDamageVfx } from './ship-damage-vfx'
+
 import type { TutorialStep } from '@/hooks/useTutorial'
 import type { Upgrades } from '@/lib/schemas'
 
@@ -122,14 +151,14 @@ function disposeMesh(obj: THREE.Object3D): void {
 }
 
 const CAMERA_HEIGHT = 150
-const CAMERA_LERP = 0.08
 const STAR_COUNT = 400
 const BLACK_HOLE_ALERT_RADIUS = 120
 const BLACK_HOLE_EVENT_HORIZON_RADIUS = 12
 
 export { PLAYER_MAX_HP } from './game-tick'
 
-export type MetalVariant = 'silver' | 'gold'
+import type { MetalVariant } from './types'
+export type { MetalVariant }
 
 export interface GameSceneOptions {
   onCollect?: (variant: MetalVariant) => void
@@ -157,6 +186,7 @@ export interface GameSceneOptions {
   onRunEnded?: (stats: RunStats) => void
   onShieldChanged?: (charges: number) => void
   onArmorChanged?: (charges: number) => void
+  onSmartBomb?: () => void
   // Prologue callbacks
   onPrologueReady?: () => void
   onFieldCleared?: () => void
@@ -205,6 +235,7 @@ export function createGameScene(
   const onRunEnded = options?.onRunEnded
   const onShieldChanged = options?.onShieldChanged
   const onArmorChanged = options?.onArmorChanged
+  const onSmartBomb = options?.onSmartBomb
   const onPrologueReady = options?.onPrologueReady
   const onFieldCleared = options?.onFieldCleared
   const onArbiterArrived = options?.onArbiterArrived
@@ -216,6 +247,8 @@ export function createGameScene(
   renderer.setSize(container.clientWidth, container.clientHeight)
   renderer.setClearColor(0x0a0a1a)
   container.appendChild(renderer.domElement)
+
+  startMusic()
 
   // --- Radar mini-map (lower-left overlay canvas) ---
   const radar: Radar | null = createRadar(container)
@@ -229,12 +262,43 @@ export function createGameScene(
   camera.position.set(0, 0, CAMERA_HEIGHT)
   camera.lookAt(0, 0, 0)
 
+  // --- Bloom Post-Processing ---
+  const bloom = createBloom(
+    renderer, scene, camera,
+    container.clientWidth, container.clientHeight,
+  )
+
+  // --- Cinematic Camera ---
+  const cineCam = createCinematicCamera(camera)
+
   // --- Lighting ---
   const ambient = new THREE.AmbientLight(0xffffff, 0.6)
   scene.add(ambient)
   const directional = new THREE.DirectionalLight(0xffffff, 0.8)
   directional.position.set(20, 40, 60)
   scene.add(directional)
+
+  // --- Dynamic Point Lights ---
+  const dynamicLights = createDynamicLights()
+  scene.add(dynamicLights.engineLight)
+  scene.add(dynamicLights.shipLight)
+  for (const el of dynamicLights.explosionLights) scene.add(el.light)
+
+  // --- GPU Particle Systems ---
+  const explosionGlowParticles = createParticleSystem({ maxParticles: 300 })
+  scene.add(explosionGlowParticles.points)
+  const engineGlowParticles = createParticleSystem({ maxParticles: 150 })
+  scene.add(engineGlowParticles.points)
+  const projectileTrails = createProjectileTrails()
+  scene.add(projectileTrails.system.points)
+  const shipDamageVfx = createShipDamageVfx()
+  scene.add(shipDamageVfx.sparkSystem.points)
+
+  // --- Environment Upgrades ---
+  const dustMotes = createDustMotes()
+  scene.add(dustMotes.points)
+  const galaxySpiral = createGalaxySpiral()
+  scene.add(galaxySpiral.points)
 
   // --- Starfield ---
   const starGeo = new THREE.BufferGeometry()
@@ -256,16 +320,18 @@ export function createGameScene(
   const optionOrbs = new THREE.Group()
   scene.add(optionOrbs)
   const shieldVisual = new THREE.Mesh(
-    new THREE.SphereGeometry(10, 32, 16),
-    new THREE.MeshBasicMaterial({
-      color: 0x66ddff,
+    new THREE.SphereGeometry(10, 32, 24),
+    new THREE.MeshStandardMaterial({
+      color: 0x00ffff,
       transparent: true,
-      opacity: 0.16,
-      side: THREE.DoubleSide,
+      opacity: 0.3,
+      emissive: 0x0088ff,
+      emissiveIntensity: 2,
+      side: THREE.FrontSide,
       blending: THREE.AdditiveBlending,
-      depthWrite: false,
     }),
   )
+
   shieldVisual.visible = false
   scene.add(shieldVisual)
 
@@ -576,6 +642,7 @@ export function createGameScene(
     camera.aspect = w / h
     camera.updateProjectionMatrix()
     renderer.setSize(w, h)
+    bloom.resize(w, h)
   }
   window.addEventListener('resize', onResize)
 
@@ -659,8 +726,10 @@ export function createGameScene(
           transparent: true,
           opacity: 0.9,
           blending: THREE.AdditiveBlending,
+          depthTest: false,
         }),
       )
+      orb.renderOrder = 10
       optionOrbs.add(orb)
     }
     while (optionOrbs.children.length > count) {
@@ -668,13 +737,26 @@ export function createGameScene(
       if (orb) orb.traverse(disposeMesh)
     }
     for (let i = 0; i < optionOrbs.children.length; i++) {
-      const angle = tickState.elapsedTime * 1.8 + (i * Math.PI * 2) / Math.max(1, count)
-      optionOrbs.children[i].position.set(
-        ship.x + Math.cos(angle) * 12,
-        ship.y + Math.sin(angle) * 12,
-        2.5,
-      )
+      const spacing = 18
+      const historyIndex = tickState.positionHistory.length - 1 - (i + 1) * spacing
+      if (historyIndex >= 0) {
+        const hist = tickState.positionHistory[historyIndex]
+        optionOrbs.children[i].position.set(hist.x, hist.y, 2.5)
+      } else {
+        optionOrbs.children[i].position.set(ship.x, ship.y, 2.5)
+      }
     }
+  }
+
+  let impactFlashTimer = 0
+  const shockwaves: Shockwave[] = []
+  let lastKlaxonTime = 0
+
+  /** Toggle a muffled low-pass filter effect on the music. */
+  function updateMusicMuffle(result: TickResult): void {
+    const isStationRange = result.nearStation
+    const isPaused = getPaused()
+    setMusicFilter(isPaused || isStationRange)
   }
 
   function loop(): void {
@@ -753,12 +835,61 @@ export function createGameScene(
     const enemyBeforeTick = tickState.enemy
 
     const result = tick(tickState, tickInput)
+    updateMusicMuffle(result)
+
+    // --- Update Music Intensity ---
+    let musicIntensity = 0
+    if (tickState.enemy && tickState.enemy.alive) musicIntensity = 0.6
+    if (tickState.ambushEnemies.some((e) => e.alive)) musicIntensity = 0.8
+    if (tickState.arbiter && tickState.arbiter.mode === 'hunting') musicIntensity = 1.0
+    // Subtle build-up based on asteroid proximity
+    if (musicIntensity === 0) {
+      const nearest = asteroids.find((a) => a.hp > 0)
+      if (nearest) {
+        const d = Math.hypot(nearest.x - ship.x, nearest.y - ship.y)
+        musicIntensity = Math.max(0, 0.4 * (1 - d / 150))
+      }
+    }
+    setMusicIntensity(musicIntensity)
+    updateMusic(dt)
 
     // Sync cleared aim/fire state back to scene-level variables
     aimState.active = tickState.aimActive
     mouseHoldingFire = tickState.mouseHoldingFire
 
+    let speedNorm = 0
     if (!paused) {
+      if (impactFlashTimer > 0) {
+        impactFlashTimer -= dt
+        bloom.setBloom(0.6 + impactFlashTimer * 4, true)
+        if (impactFlashTimer <= 0) {
+          bloom.setBloom(0.3)
+        }
+      }
+
+      const hpRatio = tickState.playerHp / PLAYER_MAX_HP
+      bloom.setVignette(Math.max(0, (1 - hpRatio) * 0.6))
+      if (hpRatio < 0.3) {
+        bloom.setChromaticAberration((0.3 - hpRatio) * 0.8)
+      } else {
+        bloom.setChromaticAberration(0)
+      }
+
+      if (hpRatio < 0.25 && now - lastKlaxonTime > 2000) {
+        playKlaxon('low')
+        lastKlaxonTime = now
+      }
+
+      // Update shockwaves
+      for (let i = shockwaves.length - 1; i >= 0; i--) {
+        const sw = shockwaves[i]
+        if (!updateShockwave(sw, dt)) {
+          scene.remove(sw.mesh)
+          disposeShockwave(sw)
+          shockwaves.splice(i, 1)
+        }
+      }
+
       // --- Process tick result for rendering ---
 
       // Recharge meter (rendering-only)
@@ -771,6 +902,7 @@ export function createGameScene(
       )
 
       // Lazer beam visual
+      const beamElapsed = tickState.elapsedTime
       updateLazerBeam(
         lazerBeam,
         result.beamActive,
@@ -778,6 +910,7 @@ export function createGameScene(
         result.beamStartY,
         result.beamEndX,
         result.beamEndY,
+        beamElapsed,
       )
       for (let i = 0; i < optionLazerBeams.length; i++) {
         const optionBeam = result.optionBeams[i]
@@ -788,6 +921,7 @@ export function createGameScene(
           optionBeam?.startY ?? 0,
           optionBeam?.endX ?? 0,
           optionBeam?.endY ?? 0,
+          beamElapsed,
         )
       }
       updateRippleBeam(
@@ -822,6 +956,11 @@ export function createGameScene(
           scene.add(explosion.group)
           explosions.push(explosion)
           playExplosion()
+          dynamicLights.flashExplosion(hit.x, hit.y)
+          explosionGlowParticles.emit(hit.x, hit.y, 6, {
+            lifetime: 0.4, speed: 25, size: 1.5,
+            colors: [0xffaa00, 0xff6600, 0xffdd44], spread: Math.PI * 2,
+          })
 
           const hitModel = asteroidModels.get(hit.asteroidId)?.model
           if (hitModel) {
@@ -866,6 +1005,11 @@ export function createGameScene(
         scene.add(explosion.group)
         explosions.push(explosion)
         playExplosion()
+        dynamicLights.flashExplosion(hit.x, hit.y)
+        explosionGlowParticles.emit(hit.x, hit.y, 8, {
+          lifetime: 0.4, speed: 30, size: 1.8,
+          colors: [0xffaa00, 0xff6600, 0xffdd44], spread: Math.PI * 2,
+        })
 
         // Break off visual debris chunks
         const hitCount = tickState.asteroidHitCounts.get(hit.asteroidId) ?? 0
@@ -989,14 +1133,21 @@ export function createGameScene(
         const hitExplosion = createExplosion(hit.x, hit.y)
         scene.add(hitExplosion.group)
         explosions.push(hitExplosion)
-        addTrauma(screenShake, 0.4 + (hit.damage / PLAYER_MAX_HP) * 0.4)
+        dynamicLights.flashExplosion(hit.x, hit.y)
+        explosionGlowParticles.emit(hit.x, hit.y, 10, {
+          lifetime: 0.4, speed: 35, size: 1.5,
+          colors: [0xff3322, 0xff6644, 0xffaa22], spread: Math.PI * 2,
+        })
+        shipDamageVfx.hitFlash()
+        const dx = hit.x - ship.x
+        const dy = hit.y - ship.y
+        const angle = Math.atan2(dy, dx)
+        addTrauma(screenShake, 0.4 + (hit.damage / PLAYER_MAX_HP) * 0.4, angle)
+        impactFlashTimer = 0.05
+        cineCam.impactPulse()
         playPlayerHit()
       }
 
-      // Single (tutorial) enemy destroyed — remove mesh and spawn VFX.
-      // Detected by "existed before the tick, now gone" so a patrol enemy
-      // dying the same tick (which also sets result.enemyDestroyed) can't
-      // wrongly dispose a still-alive tutorial enemy.
       if (enemyBeforeTick && !tickState.enemy) {
         scene.remove(enemyBeforeTick.mesh)
         disposeEnemyShip(enemyBeforeTick)
@@ -1008,6 +1159,11 @@ export function createGameScene(
         scene.add(bigExplosion.group)
         explosions.push(bigExplosion)
         playExplosion()
+        dynamicLights.flashExplosion(enemyBeforeTick.x, enemyBeforeTick.y)
+        explosionGlowParticles.emit(enemyBeforeTick.x, enemyBeforeTick.y, 16, {
+          lifetime: 0.6, speed: 40, size: 2,
+          colors: [0xff6600, 0xffaa00, 0xff3322, 0xffcc44], spread: Math.PI * 2,
+        })
       }
 
       // Ambush / patrol enemies — add meshes + health meters for newly spawned
@@ -1033,6 +1189,11 @@ export function createGameScene(
         scene.add(bigExplosion.group)
         explosions.push(bigExplosion)
         playExplosion()
+        dynamicLights.flashExplosion(ae.x, ae.y)
+        explosionGlowParticles.emit(ae.x, ae.y, 14, {
+          lifetime: 0.5, speed: 38, size: 2,
+          colors: [0xff6600, 0xffaa00, 0xff3322], spread: Math.PI * 2,
+        })
       }
 
       // Scavengers that escaped with loot — remove their meshes quietly
@@ -1069,6 +1230,35 @@ export function createGameScene(
       if (result.nearStation) onNearStation?.()
       if (result.stationRangeChanged !== null) onStationRange?.(result.stationRangeChanged)
       if (result.stationRepaired) onStationDriveThrough?.()
+
+      if (result.smartBombDetonated) {
+        addTrauma(screenShake, 1.2)
+        impactFlashTimer = 0.12
+        bloom.setBloom(1.0, true)
+        cineCam.impactPulse()
+        playExplosion()
+        const sw = createShockwave(ship.x, ship.y)
+        scene.add(sw.mesh)
+        shockwaves.push(sw)
+
+        for (let i = 0; i < 12; i++) {
+          const angle = (i / 12) * Math.PI * 2
+          const dist = 4 + Math.random() * 20
+          const boom = createExplosion(
+            ship.x + Math.cos(angle) * dist,
+            ship.y + Math.sin(angle) * dist,
+          )
+          scene.add(boom.group)
+          explosions.push(boom)
+        }
+        dynamicLights.flashExplosion(ship.x, ship.y, 2)
+        explosionGlowParticles.emit(ship.x, ship.y, 40, {
+          lifetime: 0.6, speed: 60, size: 2,
+          colors: [0x00ffff, 0x88eeff, 0xffffff], spread: Math.PI * 2,
+        })
+        onSmartBomb?.()
+      }
+
       // --- Prologue events ---
       if (result.prologueReady) onPrologueReady?.()
       if (result.fieldCleared) onFieldCleared?.()
@@ -1105,11 +1295,15 @@ export function createGameScene(
       // --- Arbiter encounter events ---
       if (result.arbiterSpawned) {
         addTrauma(screenShake, 0.6)
+        bloom.setBloom(0.8, true)
+        cineCam.zoomIn(4, 0.5)
         onArbiterEvent?.({ type: 'arrives', mark: result.arbiterSpawned.mark })
+        playKlaxon('high')
       }
       if (result.arbiterDefeated) {
         const { x, y, mark } = result.arbiterDefeated
         addTrauma(screenShake, 1.0)
+        bloom.setBloom(0.9, true)
         for (let i = 0; i < 6; i++) {
           const boom = createExplosion(
             x + (Math.random() - 0.5) * 24,
@@ -1121,6 +1315,11 @@ export function createGameScene(
         const wreck = createShipwreckDebris(x, y)
         scene.add(wreck.group)
         shipwreckDebrisList.push(wreck)
+        dynamicLights.flashExplosion(x, y, 3)
+        explosionGlowParticles.emit(x, y, 30, {
+          lifetime: 0.8, speed: 50, size: 2.5,
+          colors: [0x00ffff, 0x88eeff, 0xffffff, 0xff6600],
+        })
         playExplosion()
         onArbiterEvent?.({ type: 'defeated', mark })
       }
@@ -1307,9 +1506,21 @@ export function createGameScene(
 
       // --- Engine Trail & Sound ---
       const shipSpeed = Math.sqrt(ship.velocityX * ship.velocityX + ship.velocityY * ship.velocityY)
-      const speedNorm = Math.min(1, shipSpeed / 50)
+      speedNorm = Math.min(1, shipSpeed / 50)
       updateEngineTrail(engineTrail, dt, ship.x, ship.y, ship.rotation, speedNorm)
       updateEngineSound(speedNorm)
+
+      if (speedNorm > 0.1) {
+        const facingAngle = ship.rotation + Math.PI / 2
+        const rearAngle = facingAngle + Math.PI
+        const spawnX = ship.x + Math.cos(rearAngle) * 5
+        const spawnY = ship.y + Math.sin(rearAngle) * 5
+        engineGlowParticles.emit(spawnX, spawnY, Math.ceil(speedNorm * 2), {
+          lifetime: 0.3, speed: 5 + speedNorm * 15, size: 0.8 + speedNorm,
+          colors: [0xff6600, 0xff4400, 0xffaa00], spread: 0.8, zRange: 0.2,
+          inheritVelocity: { vx: ship.velocityX * 0.1, vy: ship.velocityY * 0.1 },
+        })
+      }
 
       // --- Warp Streaks (active when Arbiter takes control) ---
       const currentStep = getTutorialStep()
@@ -1350,12 +1561,13 @@ export function createGameScene(
         arrowGroup.position.z = 5 + Math.sin((now / 1000) * 2.5) * 2
       }
 
-      // --- Sync projectile positions ---
+      // --- Sync projectile positions + trails ---
       for (const p of tickState.projectiles) {
         const model = projectileModels.get(p.id)
         if (model) {
           model.position.set(p.x, p.y, 0)
         }
+        projectileTrails.addTrail(p.x, p.y, p.velocityX, p.velocityY)
       }
 
       // Sync ship model
@@ -1365,10 +1577,11 @@ export function createGameScene(
       syncOptionOrbs()
       shieldVisual.visible = tickState.shieldCharges > 0
       shieldVisual.position.set(ship.x, ship.y, 1.3)
-      shieldVisual.scale.setScalar(1 + tickState.shieldCharges * 0.15 + Math.sin(now / 120) * 0.04)
+      shieldVisual.scale.setScalar(1 + tickState.shieldCharges * 0.12 + Math.sin(now / 120) * 0.04)
       const shieldMat = shieldVisual.material
-      if (shieldMat instanceof THREE.MeshBasicMaterial) {
-        shieldMat.opacity = 0.12 + tickState.shieldCharges * 0.045 + Math.sin(now / 160) * 0.025
+      if (shieldMat instanceof THREE.MeshStandardMaterial) {
+        shieldMat.opacity = 0.15 + tickState.shieldCharges * 0.05 + Math.sin(now / 160) * 0.02
+        shieldMat.emissiveIntensity = 1.5 + Math.sin(now / 100) * 0.5
       }
       if (result.shieldHit) {
         addTrauma(screenShake, 0.35)
@@ -1397,13 +1610,13 @@ export function createGameScene(
         }
       }
 
-      // Camera follows ship
-      const lerpFactor = 1 - Math.pow(1 - CAMERA_LERP, dt * 60)
-      camera.position.x += (ship.x - camera.position.x) * lerpFactor
-      camera.position.y += (ship.y - camera.position.y) * lerpFactor
+      let combatIntensity = 0
+      if (tickState.enemy && tickState.enemy.alive) combatIntensity = 0.4
+      if (tickState.ambushEnemies.some((e) => e.alive)) combatIntensity = 0.6
+      if (tickState.arbiter && tickState.arbiter.mode === 'hunting') combatIntensity = 1.0
+      combatIntensity = Math.max(combatIntensity, tickState.ambushEnemies.filter((e) => e.alive).length * 0.15)
 
-      camera.position.x += screenShake.offsetX
-      camera.position.y += screenShake.offsetY
+      cineCam.update(dt, ship.x, ship.y, ship.velocityX, ship.velocityY, combatIntensity, screenShake)
 
       stars.position.x = camera.position.x * 0.5
       stars.position.y = camera.position.y * 0.5
@@ -1460,6 +1673,7 @@ export function createGameScene(
       }
 
       wasPaused = false
+      resumeMusic()
     } else {
       // --- Paused: mute all looping audio ---
       if (!wasPaused) {
@@ -1467,10 +1681,29 @@ export function createGameScene(
         suspendEngineSound()
         stopCollectorHum()
         stopArbiterSiren()
+        suspendMusic()
       }
     }
 
-    renderer.render(scene, camera)
+    // --- Update particle systems ---
+    if (!paused) {
+      explosionGlowParticles.update(dt)
+      engineGlowParticles.update(dt)
+      projectileTrails.update(dt)
+      shipDamageVfx.sparkSystem.update(dt)
+    }
+
+    // --- Update dynamic lights ---
+    dynamicLights.update(dt, ship.x, ship.y, speedNorm)
+
+    // --- Update bloom ---
+    bloom.update(dt)
+
+    // --- Update environment ---
+    dustMotes.update(dt, camera.position.x, camera.position.y)
+    galaxySpiral.update(now / 1000, camera.position.x, camera.position.y)
+
+    bloom.composer.render()
   }
   loop()
 
@@ -1553,6 +1786,7 @@ export function createGameScene(
     disposeCollectorVfx(collectorVfx)
     disposeAudio()
     disposeSfx()
+    disposeMusic()
 
     // Remove the radar overlay canvas
     if (radar) disposeRadar(radar)
@@ -1563,6 +1797,17 @@ export function createGameScene(
     disposeBlackHole(blackHole)
     disposeEngineTrail(engineTrail)
     disposeWarpStreaks(warpStreaks)
+
+    // Clean up new visual systems
+    bloom.dispose()
+    cineCam.dispose()
+    explosionGlowParticles.dispose()
+    engineGlowParticles.dispose()
+    projectileTrails.dispose()
+    shipDamageVfx.dispose()
+    dynamicLights.dispose()
+    dustMotes.dispose()
+    galaxySpiral.dispose()
 
     // Dispose all Three.js geometries and materials
     scene.traverse(disposeMesh)
@@ -1596,6 +1841,7 @@ export function createGameScene(
     tickState.speedTier = upgrades.speed
     tickState.armorCharges = upgrades.armor
     tickState.shieldCharges = upgrades.shield
+    tickState.smartBombCount = upgrades.smartBomb
   }
 
   /** Reset ship to just north of station with full HP, swap to normal ship, clear prologue. */

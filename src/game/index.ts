@@ -1,5 +1,5 @@
 /**
- * FrackingAsteroids — Game Engine Entry Point
+ * Frak'n Frak'r — Game Engine Entry Point
  */
 
 export { BLASTER_COSTS, COLLECTOR_COSTS, STORAGE_COSTS } from './types'
@@ -94,11 +94,13 @@ export {
   suspendMusic,
   resumeMusic,
   disposeMusic,
+  setMusicFilter,
 } from './music'
 export {
   playLaserFire,
   playExplosion,
   playPlayerHit,
+  playKlaxon,
   startEngineSound,
   updateEngineSound,
   suspendEngineSound,
