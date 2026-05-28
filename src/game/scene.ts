@@ -667,6 +667,14 @@ export function createGameScene(
   let fireTarget: { x: number; y: number } | null = null
   let mouseHoldingFire = false
 
+  // Death sequence: once the hull is lost we want a beat of "the ship just
+  // blew up" before the HUD-level Game Over UI appears. While this timer is
+  // counting down, gameplay input is suppressed and the ship is hidden — the
+  // wreckage debris and explosion handle the spectacle.
+  const DEATH_SEQUENCE_DURATION = 2.5
+  let deathSequenceTimer: number | null = null
+  let pendingRunStats: RunStats | null = null
+
   // Detect touch support to decide between mobile buttons and mouse controls
   const hasTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0
 
@@ -934,26 +942,30 @@ export function createGameScene(
       aimWorldPosition = { x: w.x, y: w.y }
     }
 
+    // During the death sequence, suppress all fire input — the ship is
+    // already exploded so any stray clicks shouldn't conjure new shots.
+    const inputLocked = deathSequenceTimer !== null
+
     // Sync fire state from DOM event handlers into tickState
-    if (fireTarget) {
+    if (fireTarget && !inputLocked) {
       tickState.fireTarget = fireTarget
       fireTarget = null
     }
 
     // Gamepad fire (right stick past deadzone OR fire-lock engaged with last aim)
-    if (!paused && gamepadResult.firing && aimState.active) {
+    if (!paused && !inputLocked && gamepadResult.firing && aimState.active) {
       const w = screenToWorld(aimState.screenX, aimState.screenY)
       tickState.fireTarget = { x: w.x, y: w.y }
     }
 
     // Touch twin-stick fire (right-side aim joystick)
-    if (!paused && aimJoystickResult.firing && aimState.active) {
+    if (!paused && !inputLocked && aimJoystickResult.firing && aimState.active) {
       const w = screenToWorld(aimState.screenX, aimState.screenY)
       tickState.fireTarget = { x: w.x, y: w.y }
     }
 
     // Always sync from DOM — tick's input cooldown handles stale events
-    tickState.mouseHoldingFire = mouseHoldingFire
+    tickState.mouseHoldingFire = inputLocked ? false : mouseHoldingFire
     tickState.aimActive = aimState.active
 
     // Auto-toggle: when the upgrade is owned and the player is aiming, pick
@@ -1528,13 +1540,73 @@ export function createGameScene(
       }
 
       // --- Run ended — hull lost ---
-      if (result.playerKilled) {
-        onRunEnded?.({
+      // Defer the Game Over UI until after the death animation plays. We
+      // spawn the explosion + shipwreck debris + glow particles here, hide
+      // the ship model, and start a timer; the run-ended callback fires
+      // when the timer elapses (see the deathSequenceTimer block below).
+      if (result.playerKilled && deathSequenceTimer === null) {
+        pendingRunStats = {
           marksDefeated: tickState.marksDefeated,
           peakLedger: Math.round(tickState.peakLedger),
           runTime: tickState.runTime,
           score: computeScore(tickState.peakLedger, tickState.marksDefeated),
+        }
+        deathSequenceTimer = DEATH_SEQUENCE_DURATION
+
+        // Big primary blast at the ship.
+        const primary = createExplosion(ship.x, ship.y)
+        scene.add(primary.group)
+        explosions.push(primary)
+
+        // Hull fragments flying outward — same debris module the enemy
+        // ships use when they pop, so the player blast reads consistently.
+        const wreck = createShipwreckDebris(ship.x, ship.y)
+        scene.add(wreck.group)
+        shipwreckDebrisList.push(wreck)
+
+        // Two staggered glow puffs in the ship's accent colors.
+        explosionGlowParticles.emit(ship.x, ship.y, 22, {
+          lifetime: 0.7,
+          speed: 55,
+          size: 2.4,
+          colors: [0xffaa00, 0xff6600, 0xffdd44, 0xffffff],
+          spread: Math.PI * 2,
         })
+        explosionGlowParticles.emit(ship.x, ship.y, 14, {
+          lifetime: 0.9,
+          speed: 30,
+          size: 1.8,
+          colors: [0x00ccff, 0x88ccff, 0x77ffcc],
+          spread: Math.PI * 2,
+        })
+
+        playExplosion()
+        dynamicLights.flashExplosion(ship.x, ship.y)
+        addTrauma(screenShake, 0.95)
+
+        // Hide the ship for the duration of the sequence and freeze any
+        // residual motion so we don't see a ghost ship sliding around.
+        shipModel.visible = false
+        rechargeMeter.visible = false
+        ship.velocityX = 0
+        ship.velocityY = 0
+        tickState.fireTarget = null
+        tickState.mouseHoldingFire = false
+      }
+
+      if (deathSequenceTimer !== null) {
+        deathSequenceTimer -= dt
+        // Keep the wreck where it died — don't let the input loop nudge
+        // physics in the next iteration.
+        ship.velocityX = 0
+        ship.velocityY = 0
+        if (deathSequenceTimer <= 0) {
+          deathSequenceTimer = null
+          if (pendingRunStats) {
+            onRunEnded?.(pendingRunStats)
+            pendingRunStats = null
+          }
+        }
       }
 
       // --- Arbiter HUD sync (only when Mark / hull / phase changes) ---
@@ -1836,7 +1908,7 @@ export function createGameScene(
 
       // Aim guide — line from ship to aim point, with reticle ring at the
       // tip. Hidden while paused or when no aim is being tracked.
-      if (!paused && aimWorldPosition) {
+      if (!paused && !inputLocked && aimWorldPosition) {
         const pos = aimLineGeom.attributes.position as THREE.BufferAttribute
         pos.setXYZ(0, ship.x, ship.y, 0.5)
         pos.setXYZ(1, aimWorldPosition.x, aimWorldPosition.y, 0.5)
@@ -1850,7 +1922,7 @@ export function createGameScene(
         aimLine.visible = false
         aimReticle.visible = false
       }
-      shieldVisual.visible = tickState.shieldCharges > 0
+      shieldVisual.visible = tickState.shieldCharges > 0 && !inputLocked
       shieldVisual.position.set(ship.x, ship.y, 1.3)
       shieldVisual.scale.setScalar(1 + tickState.shieldCharges * 0.12 + Math.sin(now / 120) * 0.04)
       const shieldMat = shieldVisual.material
@@ -2286,6 +2358,12 @@ export function createGameScene(
    * cargo wipe and high-score on the React side.
    */
   function respawnAfterDeath() {
+    // Clear any in-flight death animation and reveal the ship again.
+    deathSequenceTimer = null
+    pendingRunStats = null
+    shipModel.visible = true
+    rechargeMeter.visible = true
+
     ship.x = GAS_STATION_X
     ship.y = GAS_STATION_Y + STATION_ENTER_DISTANCE - 10
     ship.velocityX = 0
