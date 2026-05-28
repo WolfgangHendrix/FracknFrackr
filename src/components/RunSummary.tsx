@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type { RunStats } from '@/game/ledger-config'
 import { recordScore, wouldMakeBoard } from '@/lib/leaderboard'
+import { submitOnlineScore } from '@/lib/online-leaderboard'
+import { isSupabaseConfigured } from '@/lib/supabase'
 
 interface RunSummaryProps {
   stats: RunStats
@@ -41,6 +43,13 @@ export function RunSummary({ stats, highScore, isNewBest, onContinue }: RunSumma
   const [rank, setRank] = useState<number | null>(null)
   const [initials, setInitials] = useState('')
   const inputRef = useRef<HTMLInputElement | null>(null)
+  // Online-submit status, fire-and-forget. 'idle' until the player submits;
+  // 'sending' while the POST is in flight; 'ok' or 'err' when it resolves.
+  // Shown as a small line of microcopy below the rank so the player gets
+  // confirmation the score actually left their machine.
+  const [onlineStatus, setOnlineStatus] = useState<'idle' | 'sending' | 'ok' | 'err'>(
+    'idle',
+  )
 
   // Prefill with the player's last-used initials so repeat-runners don't
   // have to retype every time.
@@ -91,6 +100,15 @@ export function RunSummary({ stats, highScore, isNewBest, onContinue }: RunSumma
     const { rank: newRank } = recordScore(trimmed, stats.score)
     setRank(newRank)
     setSubmitted(true)
+    // Best-effort online post. We don't block Continue on this — if the
+    // network is down or the build has no Supabase config, the local
+    // submission still completed successfully.
+    if (isSupabaseConfigured()) {
+      setOnlineStatus('sending')
+      void submitOnlineScore(trimmed, stats.score).then((res) => {
+        setOnlineStatus(res.ok ? 'ok' : 'err')
+      })
+    }
   }
 
   return (
@@ -166,7 +184,24 @@ export function RunSummary({ stats, highScore, isNewBest, onContinue }: RunSumma
           )}
           {submitted && rank !== null && (
             <p className="text-hud-amber text-xs tracking-[0.2em] mt-1">
-              LEADERBOARD RANK #{rank}
+              LOCAL RANK #{rank}
+            </p>
+          )}
+          {submitted && onlineStatus !== 'idle' && (
+            <p
+              className={`text-xs tracking-[0.18em] mt-0.5 ${
+                onlineStatus === 'sending'
+                  ? 'text-white/45'
+                  : onlineStatus === 'ok'
+                    ? 'text-hud-green/85'
+                    : 'text-hud-red/85'
+              }`}
+            >
+              {onlineStatus === 'sending'
+                ? 'POSTING TO GLOBAL…'
+                : onlineStatus === 'ok'
+                  ? 'POSTED TO GLOBAL BOARD'
+                  : 'GLOBAL POST FAILED'}
             </p>
           )}
         </div>
