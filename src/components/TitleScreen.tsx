@@ -7,6 +7,16 @@ interface TitleScreenProps {
   onBegin: () => void
 }
 
+// Orbiting drone-like glow dots. Hex colors pulled from the in-game palette
+// (blaster orange, lazer cyan, ripple mint, hud-amber) so the menu reads as
+// "this is the same game" before the first frame of gameplay loads.
+const ORBIT_DOTS = [
+  { color: '#ffaa00', radius: 220, duration: 24, delay: 0 },
+  { color: '#00ccff', radius: 260, duration: 32, delay: 6 },
+  { color: '#77ffcc', radius: 200, duration: 19, delay: 12 },
+  { color: '#ffd866', radius: 290, duration: 40, delay: 3 },
+]
+
 export function TitleScreen({ onBegin }: TitleScreenProps) {
   const beganRef = useRef(false)
 
@@ -32,6 +42,7 @@ export function TitleScreen({ onBegin }: TitleScreenProps) {
       className="absolute inset-0 z-50 flex flex-col items-center justify-center overflow-hidden bg-space-900 text-center focus:outline-none"
       aria-label="Begin"
     >
+      {/* Parallax starfield — three depth layers drift at different speeds. */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden="true">
         <div className="menu-starfield-far absolute" style={{ inset: '0 -30% 0 0' }}>
           {Array.from({ length: 70 }, (_, i) => (
@@ -83,7 +94,49 @@ export function TitleScreen({ onBegin }: TitleScreenProps) {
         <div className="menu-shooting-star" style={{ animationDelay: '5.8s', top: '48%' }} />
       </div>
 
+      {/* Bloom halo + concentric rings — sits between the starfield and the
+          title and gives the wordmark something to glow against. Matches the
+          in-game UnrealBloomPass / dynamic-light palette. */}
+      <div
+        className="menu-bloom-halo pointer-events-none absolute inset-0"
+        aria-hidden="true"
+      />
+      <div
+        className="menu-orbit-ring pointer-events-none absolute"
+        aria-hidden="true"
+      />
+      <div
+        className="menu-orbit-ring-2 pointer-events-none absolute"
+        aria-hidden="true"
+      />
+
+      {/* Orbiting drone-like indicators around the title. */}
+      <div
+        className="menu-orbit-stage pointer-events-none absolute"
+        aria-hidden="true"
+      >
+        {ORBIT_DOTS.map((dot, i) => (
+          <span
+            key={`orbit-${i}`}
+            className="menu-orbit-dot"
+            style={{
+              animationDuration: `${dot.duration}s`,
+              animationDelay: `${-dot.delay}s`,
+              ['--orbit-radius' as string]: `${dot.radius}px`,
+              ['--orbit-color' as string]: dot.color,
+            }}
+          />
+        ))}
+      </div>
+
+      {/* Occasional cyan sweep — evokes the lazer beam sweeping across. */}
+      <div className="menu-sweep pointer-events-none absolute inset-0" aria-hidden="true" />
+
+      {/* Vignette + scanlines (post-process echo). Vignette mounts last so it
+          sits above the bloom halo for the same depth feel as in-game. */}
       <div className="menu-scanlines" aria-hidden="true" />
+      <div className="menu-vignette pointer-events-none absolute inset-0" aria-hidden="true" />
+
       <div className="absolute bottom-3 left-3 z-10 font-mono text-[10px] sm:text-xs tracking-[0.18em] text-white/35">
         v{BUILD_VERSION}
       </div>
@@ -94,10 +147,13 @@ export function TitleScreen({ onBegin }: TitleScreenProps) {
           <br />
           FRAK&apos;R
         </h1>
-        <p className="mt-8 font-sans text-sm sm:text-base md:text-lg tracking-[0.28em] text-hud-amber/80">
-          CLICK, TAP, OR PRESS ENTER
+        <div className="menu-divider" aria-hidden="true" />
+        <p className="mt-6 font-sans text-sm sm:text-base md:text-lg tracking-[0.28em] text-hud-amber/85 menu-cta">
+          PRESS ENTER · CLICK · TAP
         </p>
-        <p className="mt-3 font-sans text-xs sm:text-sm tracking-[0.2em] text-white/45">TO BEGIN</p>
+        <p className="mt-3 font-sans text-[10px] sm:text-xs tracking-[0.32em] text-white/40">
+          TO BEGIN
+        </p>
       </div>
     </button>
   )

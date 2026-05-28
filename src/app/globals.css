@@ -207,13 +207,206 @@ body {
 }
 
 .menu-title {
-  /* Baseline glow + chromatic aberration so the title looks lit pre-animation */
+  /* Bloom-stacked glow + soft chromatic split. Five layered text-shadow
+     blurs mimic the in-game UnrealBloomPass radius so the wordmark reads as
+     part of the same lit world rather than a flat HTML headline. */
   text-shadow:
-    -1px 0 0 rgba(255, 70, 70, 0.55),
-    1px 0 0 rgba(70, 170, 255, 0.55),
-    0 0 6px rgba(0, 255, 136, 0.6),
-    0 0 18px rgba(0, 255, 136, 0.3);
+    -1.5px 0 0 rgba(255, 70, 70, 0.55),
+    1.5px 0 0 rgba(70, 170, 255, 0.55),
+    0 0 4px rgba(0, 255, 136, 0.9),
+    0 0 14px rgba(0, 255, 136, 0.55),
+    0 0 32px rgba(0, 255, 136, 0.4),
+    0 0 64px rgba(0, 255, 136, 0.25);
   animation: title-pulse 3.2s ease-in-out infinite;
+  filter: drop-shadow(0 0 6px rgba(0, 255, 136, 0.25));
+}
+
+/* Soft accent line under the title — picks up the hud-amber CTA color and
+   acts like a "selected" underline that's always lit. */
+.menu-divider {
+  width: 180px;
+  max-width: 50vw;
+  height: 1px;
+  margin-top: 1.25rem;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 216, 102, 0.85) 50%,
+    transparent 100%
+  );
+  box-shadow: 0 0 8px rgba(255, 216, 102, 0.6);
+  animation: divider-breath 4s ease-in-out infinite;
+}
+
+@keyframes divider-breath {
+  0%, 100% { opacity: 0.6; transform: scaleX(0.9); }
+  50% { opacity: 1; transform: scaleX(1.05); }
+}
+
+.menu-cta {
+  animation: cta-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes cta-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+/* Big radial bloom centered on the title — fakes the in-game emissive bloom
+   pass that lights up the player ship + weapons. */
+.menu-bloom-halo {
+  background:
+    radial-gradient(
+      circle at 50% 50%,
+      rgba(0, 255, 136, 0.18) 0%,
+      rgba(0, 255, 136, 0.08) 22%,
+      rgba(0, 100, 80, 0.06) 38%,
+      transparent 60%
+    ),
+    radial-gradient(
+      circle at 50% 50%,
+      rgba(0, 200, 255, 0.08) 0%,
+      transparent 45%
+    );
+  mix-blend-mode: screen;
+  animation: halo-breath 5.5s ease-in-out infinite;
+  z-index: 1;
+}
+
+@keyframes halo-breath {
+  0%, 100% { opacity: 0.75; transform: scale(1); }
+  50%      { opacity: 1;    transform: scale(1.05); }
+}
+
+/* Concentric station-targeting rings — the same scopey look the in-game HUD
+   uses for radar and aim. Two of them at different speeds so the eye sees
+   motion without anything jittery. */
+.menu-orbit-ring,
+.menu-orbit-ring-2 {
+  top: 50%;
+  left: 50%;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 255, 136, 0.18);
+  box-shadow: 0 0 24px rgba(0, 255, 136, 0.12) inset;
+  z-index: 1;
+}
+.menu-orbit-ring {
+  width: 520px;
+  height: 520px;
+  margin-left: -260px;
+  margin-top: -260px;
+  animation: ring-rotate 90s linear infinite;
+}
+.menu-orbit-ring::before {
+  /* A short bright arc that travels around the ring so the line reads as
+     "scanning" rather than static. */
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: 50%;
+  border: 1px solid transparent;
+  border-top-color: rgba(0, 255, 136, 0.85);
+  filter: drop-shadow(0 0 6px rgba(0, 255, 136, 0.7));
+}
+.menu-orbit-ring-2 {
+  width: 700px;
+  height: 700px;
+  margin-left: -350px;
+  margin-top: -350px;
+  border-color: rgba(0, 200, 255, 0.12);
+  animation: ring-rotate-reverse 140s linear infinite;
+}
+.menu-orbit-ring-2::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: 50%;
+  border: 1px solid transparent;
+  border-left-color: rgba(0, 200, 255, 0.7);
+  filter: drop-shadow(0 0 6px rgba(0, 200, 255, 0.55));
+}
+
+@keyframes ring-rotate {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+@keyframes ring-rotate-reverse {
+  from { transform: rotate(360deg); }
+  to   { transform: rotate(0deg); }
+}
+
+/* Orbiting drone-like dots. Each dot reads CSS variables for radius/color
+   so the React component can spread them out without bespoke keyframes. */
+.menu-orbit-stage {
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  z-index: 1;
+}
+.menu-orbit-dot {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 6px;
+  height: 6px;
+  margin: -3px;
+  border-radius: 50%;
+  background: var(--orbit-color, #00ff88);
+  box-shadow:
+    0 0 8px var(--orbit-color, #00ff88),
+    0 0 22px var(--orbit-color, #00ff88);
+  animation-name: dot-orbit;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  transform-origin: 0 0;
+}
+
+@keyframes dot-orbit {
+  from {
+    transform: rotate(0deg) translateX(var(--orbit-radius, 200px)) rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg) translateX(var(--orbit-radius, 200px)) rotate(-360deg);
+  }
+}
+
+/* Slow cyan sweep across the screen — feels like a lazer beam scanning. */
+.menu-sweep {
+  z-index: 1;
+  background: linear-gradient(
+    100deg,
+    transparent 0%,
+    transparent 42%,
+    rgba(0, 220, 255, 0.0) 48%,
+    rgba(0, 220, 255, 0.18) 50%,
+    rgba(0, 220, 255, 0.0) 52%,
+    transparent 58%,
+    transparent 100%
+  );
+  background-size: 250% 100%;
+  mix-blend-mode: screen;
+  animation: sweep-scan 11s ease-in-out infinite;
+  opacity: 0.7;
+}
+
+@keyframes sweep-scan {
+  0%   { background-position: -120% 0; opacity: 0; }
+  10%  { opacity: 0.6; }
+  50%  { background-position: 120% 0;  opacity: 0.6; }
+  60%  { opacity: 0; }
+  100% { background-position: 120% 0;  opacity: 0; }
+}
+
+/* Radial vignette that mirrors the in-game UnrealBloomPass + vignette. */
+.menu-vignette {
+  background: radial-gradient(
+    ellipse at center,
+    transparent 40%,
+    rgba(0, 0, 0, 0.45) 80%,
+    rgba(0, 0, 0, 0.75) 100%
+  );
+  z-index: 2;
 }
 
 .menu-starfield-far {
@@ -309,6 +502,13 @@ body {
   .menu-star-twinkle,
   .menu-asteroid-track,
   .menu-shooting-star,
+  .menu-bloom-halo,
+  .menu-divider,
+  .menu-cta,
+  .menu-orbit-ring,
+  .menu-orbit-ring-2,
+  .menu-orbit-dot,
+  .menu-sweep,
   [data-menu-item]:focus::before,
   [data-menu-item]:focus-visible::before,
   [data-menu-item]:focus::after,
