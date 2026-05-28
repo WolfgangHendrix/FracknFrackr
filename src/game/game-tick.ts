@@ -1190,7 +1190,10 @@ function prologueTick(state: TickState, input: TickInput, result: TickResult): v
       state.thrustersUnlocked = true
       state.sensorTier = 3
       state.droneRepairUnlocked = true
-      state.drillNoseTier = 3
+      // Drill Nose intentionally left off in the prologue — the intro is
+      // about firepower, not ramming, and an auto-piloted ship with the
+      // drill on pegs the drill loop SFX into a continuous harsh tone.
+      state.drillNoseTier = 0
       // Mining-drone fleet at cap so the player sees the full RTS layer.
       state.miningDroneCap = 4
       const needed = state.miningDroneCap - state.miningDrones.length
@@ -1496,18 +1499,31 @@ export function tick(state: TickState, input: TickInput): TickResult {
   // --- Ship-asteroid collision ---
   // The Drill Nose upgrade gates the ramming damage. Tier 1-3 scales the
   // damage; tier 0 is contact-only (still bounces the ship off, no harm to
-  // the rock). The prologue ship is fully maxed so it always drills.
+  // the rock).
+  //
+  // Drill activation requires the ship's velocity to be aimed INTO the
+  // asteroid (positive dot product). Without that check, the intro's
+  // auto-piloted ship glances off rocks constantly and pegs the drill SFX
+  // permanently — and even in normal play a passive contact would sustain
+  // the harsh drill loop. The prologue is intentionally NOT a drill demo;
+  // the intro already shows off the rest of the loadout.
   for (const a of state.asteroids) {
-    if (a.hp > 0) {
-      const drilling = resolveShipAsteroidCollision(state.ship, a)
-      if (drilling && (isPrologue || state.drillNoseTier > 0)) {
-        const tierMult = isPrologue ? 3 : state.drillNoseTier
-        const drillDamage = 8 * tierMult * dt
-        a.hp = Math.max(0, a.hp - drillDamage)
-        result.asteroidHit = true
-        result.drillNoseActive = true
-      }
-    }
+    if (a.hp <= 0) continue
+    if (!resolveShipAsteroidCollision(state.ship, a)) continue
+    if (isPrologue || state.drillNoseTier <= 0) continue
+
+    const toAsteroidX = a.x - state.ship.x
+    const toAsteroidY = a.y - state.ship.y
+    const velDot =
+      state.ship.velocityX * toAsteroidX + state.ship.velocityY * toAsteroidY
+    if (velDot <= 0) continue
+    const shipSpeed = Math.hypot(state.ship.velocityX, state.ship.velocityY)
+    if (shipSpeed < 6) continue
+
+    const drillDamage = 8 * state.drillNoseTier * dt
+    a.hp = Math.max(0, a.hp - drillDamage)
+    result.asteroidHit = true
+    result.drillNoseActive = true
   }
 
   // --- Blaster cooldown ---
