@@ -513,30 +513,56 @@ export function playKlaxon(variant: 'low' | 'high' = 'low'): void {
 // ---------------------------------------------------------------------------
 
 /** Soft blip when the active menu highlight moves. */
+/**
+ * Cached AudioBuffer for the hover blip, rendered once on first play.
+ * BufferSourceNode is the cheapest WebAudio playback path — far less
+ * overhead than allocating + connecting an oscillator + gain envelope each
+ * frame, which matters because this fires every time the cursor crosses
+ * a menu item. Stored at unit volume; per-play gain applies the volume
+ * control multiplier.
+ */
+let menuMoveBuffer: AudioBuffer | null = null
+
+function buildMenuMoveBuffer(ctx: AudioContext): AudioBuffer {
+  // 100ms of audio at the context's native rate. Generates a triangle
+  // wave sweeping 420Hz → 640Hz with an exponential gain decay, matching
+  // the procedural version we used to allocate per-play.
+  const duration = 0.1
+  const samples = Math.floor(ctx.sampleRate * duration)
+  const buf = ctx.createBuffer(1, samples, ctx.sampleRate)
+  const data = buf.getChannelData(0)
+  // Triangle wave synthesis: phase accumulator + signed-folded ramp.
+  let phase = 0
+  for (let i = 0; i < samples; i++) {
+    const t = i / samples
+    const freq = 420 * Math.pow(640 / 420, Math.min(1, t / 0.5))
+    phase += freq / ctx.sampleRate
+    phase -= Math.floor(phase)
+    // Triangle: 2 * |2 * (phase - 0.5)| - 1 in [-1, 1]
+    const tri = 2 * Math.abs(2 * (phase - 0.5)) - 1
+    // Exponential decay from 1 → ~0.014 over 90ms.
+    const env = Math.exp(-t * 47.5)
+    data[i] = tri * env
+  }
+  return buf
+}
+
 export function playMenuMove(): void {
   const ctx = getContext()
   if (!ctx) return
+  if (!menuMoveBuffer) menuMoveBuffer = buildMenuMoveBuffer(ctx)
 
-  // If the context still hasn't finished resuming, schedule a single audio
-  // frame into the future. AudioContext.currentTime can lag the render
-  // cursor on cold-start, and a `start(now)` call on a graph that hasn't
-  // settled tends to drop the first ~10ms. 8ms ≈ one render quantum at 48k.
+  // Cold-start guard — same logic as primeAudio's reasoning. Once steady-
+  // state running, lead is 0.
   const lead = ctx.state === 'running' ? 0 : 0.008
   const start = ctx.currentTime + lead
 
-  const osc = ctx.createOscillator()
-  osc.type = 'triangle'
-  osc.frequency.setValueAtTime(420, start)
-  osc.frequency.exponentialRampToValueAtTime(640, start + 0.05)
-
+  const src = ctx.createBufferSource()
+  src.buffer = menuMoveBuffer
   const gain = ctx.createGain()
   gain.gain.setValueAtTime(0.07 * getSfxVolume(), start)
-  gain.gain.exponentialRampToValueAtTime(0.001, start + 0.09)
-
-  osc.connect(gain)
-  gain.connect(ctx.destination)
-  osc.start(start)
-  osc.stop(start + 0.1)
+  src.connect(gain).connect(ctx.destination)
+  src.start(start)
 }
 
 /**

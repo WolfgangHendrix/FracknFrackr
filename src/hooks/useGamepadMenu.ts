@@ -113,7 +113,15 @@ export function useGamepadMenu({ enabled, resetKey }: UseGamepadMenuOptions): vo
     const onPointerOut = (e: Event): void => {
       if (!(e.target instanceof Element)) return
       const item = e.target.closest('[data-menu-item]')
-      if (item && item === lastHover) lastHover = null
+      if (!item || item !== lastHover) return
+      // pointerout fires every time the cursor crosses a child boundary
+      // inside the same button. Only clear lastHover if the cursor is
+      // actually leaving the menu-item element — otherwise the next
+      // pointerover fires a duplicate blip on the same option.
+      const pe = e as PointerEvent
+      const into = pe.relatedTarget
+      if (into instanceof Node && item.contains(into)) return
+      lastHover = null
     }
     const onFocusIn = (e: Event): void => {
       if (!(e.target instanceof Element)) return

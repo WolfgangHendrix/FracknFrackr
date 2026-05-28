@@ -23,7 +23,10 @@ export const PROLOGUE_SHIP = {
 export const PROLOGUE_ASTEROID_COUNT = 30
 export const PROLOGUE_MOON_COUNT = 3
 export const PROLOGUE_ENEMY_FLEET_SIZE = 6
-export const PROLOGUE_MINING_TARGET = 25
+// Bumped 4× since the intro ship now runs every upgrade — drone fleet,
+// tri-bolt spread, drill nose, missiles, etc. — and was clearing the
+// asteroid field too fast to give the cutscene room to breathe.
+export const PROLOGUE_MINING_TARGET = 100
 
 /**
  * Radius of the prologue containment bubble (world units, centered on origin).
