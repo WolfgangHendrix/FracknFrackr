@@ -18,6 +18,7 @@ import { PrologueOverlay } from '@/components/PrologueOverlay'
 import { TradeMenu, LAZER_COST, MINING_DRONE_BUILD_COST } from '@/components/TradeMenu'
 import { LazerTutorialPopup } from '@/components/LazerTutorialPopup'
 import { PauseOverlay } from '@/components/PauseOverlay'
+import { DebugPanel } from '@/components/DebugPanel'
 import { ShopFab } from '@/components/ShopFab'
 import { useGameState } from '@/hooks/useGameState'
 import { useGamePersistence } from '@/hooks/useGamePersistence'
@@ -667,6 +668,21 @@ export default function Home() {
       )}
       <LazerTutorialPopup visible={lazerPopupVisible} onDismiss={handleDismissLazerPopup} />
       <PauseOverlay visible={paused} onResume={togglePause} />
+      <DebugPanel
+        canvasRef={gameCanvasRef}
+        onRequestSave={requestSave}
+        state={{
+          scrap,
+          cargo,
+          upgrades,
+          playerHp,
+          achievements,
+          metrics,
+          onScrapCollect,
+          setUpgradeLevel,
+          hydrateFromSave,
+        }}
+      />
       {paused && <SoundFab />}
       {runOver && runStats && (
         <RunSummary

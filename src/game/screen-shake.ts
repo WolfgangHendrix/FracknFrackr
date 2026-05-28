@@ -9,6 +9,8 @@ export interface ScreenShake {
   trauma: number
   biasX: number
   biasY: number
+  /** When false (debug-only), updateScreenShake zeroes the offset each frame. */
+  enabled: boolean
 }
 
 /** Decay rate per second — trauma halves roughly every 0.3 seconds. */
@@ -24,7 +26,7 @@ const MAX_OFFSET = 4.0
 const SHAKE_FREQUENCY = 25
 
 export function createScreenShake(): ScreenShake {
-  return { offsetX: 0, offsetY: 0, trauma: 0, biasX: 0, biasY: 0 }
+  return { offsetX: 0, offsetY: 0, trauma: 0, biasX: 0, biasY: 0, enabled: true }
 }
 
 /** Add trauma (0–1). Multiple hits stack, clamped to 1. */
@@ -39,6 +41,14 @@ export function addTrauma(shake: ScreenShake, amount: number, angle?: number): v
 
 /** Update shake each frame. Returns current offset to apply to camera. */
 export function updateScreenShake(shake: ScreenShake, dt: number, time: number): void {
+  if (!shake.enabled) {
+    shake.trauma = 0
+    shake.biasX = 0
+    shake.biasY = 0
+    shake.offsetX = 0
+    shake.offsetY = 0
+    return
+  }
   // Decay trauma
   shake.trauma = Math.max(0, shake.trauma - DECAY_RATE * dt)
   

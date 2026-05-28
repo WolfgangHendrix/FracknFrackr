@@ -167,6 +167,16 @@ export interface TickState {
   rallyPoint: { x: number; y: number } | null
   /** Spread-shot upgrade tier. 0 = single bolt, 1 = 3-bolt fan. */
   spreadTier: number
+
+  // --- Debug-only knobs. Always present on the type so the tick code
+  // doesn't have to thread `DEBUG_ENABLED` everywhere, but only ever
+  // toggled away from defaults when the debug build is active.
+  /** When true, damagePlayer is a no-op. */
+  debugGodMode: boolean
+  /** Multiplier on the simulation dt — 0.25 = slow-mo, 2 = fast-forward. */
+  debugDtMultiplier: number
+  /** When true, periodic patrol / Arbiter spawns are suppressed. */
+  debugDisableEnemySpawns: boolean
   optionCount: number
   speedTier: number
   armorCharges: number
@@ -436,6 +446,9 @@ export function createTickState(config?: TickStateConfig): TickState {
     miningDrones: [],
     rallyPoint: null,
     spreadTier: 0,
+    debugGodMode: false,
+    debugDtMultiplier: 1,
+    debugDisableEnemySpawns: false,
     optionCount: config?.optionCount ?? 0,
     speedTier: config?.speedTier ?? 0,
     armorCharges: config?.armorCharges ?? 0,
@@ -873,6 +886,7 @@ function damagePlayer(
   damage: number,
   oneHitKill: boolean,
 ): void {
+  if (state.debugGodMode) return
   if (state.invulnerabilityTimer > 0) return
   if (absorbDamageWithShield(state, result)) return
   if (oneHitKill && absorbDamageWithArmor(state, result)) return
@@ -1167,7 +1181,9 @@ function prologueTick(state: TickState, input: TickInput, result: TickResult): v
  */
 export function tick(state: TickState, input: TickInput): TickResult {
   const result = emptyResult()
-  const { dt } = input
+  // Apply the debug dt multiplier (default 1) so slow-mo / fast-forward is a
+  // single knob on tickState rather than threaded through every subsystem.
+  const dt = input.dt * state.debugDtMultiplier
 
   state.elapsedTime += dt
 
@@ -2253,7 +2269,10 @@ function updateEndlessMode(
         state.arbiter = null
       }
     }
-  } else if (state.ledger >= arbiterThreshold(state.arbiterMark + 1)) {
+  } else if (
+    state.ledger >= arbiterThreshold(state.arbiterMark + 1) &&
+    !state.debugDisableEnemySpawns
+  ) {
     // The Ledger crossed the next threshold — summon the next Arbiter Mark.
     state.arbiterMark++
     const angle = Math.random() * Math.PI * 2
@@ -2267,7 +2286,7 @@ function updateEndlessMode(
   }
 
   // --- Enemy director: escalating patrols (paused while the Arbiter is here) ---
-  if (!state.arbiter) {
+  if (!state.arbiter && !state.debugDisableEnemySpawns) {
     state.patrolTimer -= dt
     if (state.patrolTimer <= 0) {
       state.patrolTimer = patrolInterval(state.ledger)

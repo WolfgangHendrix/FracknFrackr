@@ -27,6 +27,8 @@ export interface GameCanvasHandle {
   buildMiningDrone: () => boolean
   getMiningDroneCount: () => number
   respawnAfterDeath: () => void
+  /** Scene-side debug API (only meaningful when DEBUG_ENABLED). */
+  getDebugApi: () => import('@/game/scene').DebugApi | null
 }
 
 interface GameCanvasProps {
@@ -150,6 +152,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
     },
     buildMiningDrone: () => sceneRef.current?.buildMiningDrone() ?? false,
     getMiningDroneCount: () => sceneRef.current?.getMiningDroneCount() ?? 0,
+    getDebugApi: () => sceneRef.current?.debugApi ?? null,
     respawnAfterDeath: () => {
       sceneRef.current?.respawnAfterDeath()
     },

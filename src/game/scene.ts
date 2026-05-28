@@ -44,7 +44,7 @@ import { disposeMetalChunk } from './metal-chunk'
 import type { MiningTool } from './types'
 import { PREFERRED_TOOL } from './types'
 import { createMiningDrone } from './mining-drone'
-import type { MiningDroneState } from './mining-drone'
+import { updateCollisionDebugRings, hideCollisionDebugRings } from './debug-overlay'
 import {
   tick,
   createTickState,
@@ -111,6 +111,7 @@ import { createEngineTrail, updateEngineTrail, disposeEngineTrail } from './engi
 import type { EngineTrail } from './engine-trail'
 import { createWarpStreaks, updateWarpStreaks, disposeWarpStreaks } from './warp-streaks'
 import {
+  createEnemyShip,
   disposeEnemyProjectile,
   disposeEnemyShip,
   createShipwreckDebris,
@@ -118,6 +119,9 @@ import {
   disposeShipwreckDebris,
 } from './enemy-ship'
 import type { EnemyShip, ShipwreckDebris } from './enemy-ship'
+import { patrolEnemyDamage } from './ledger-config'
+import { createArbiterState } from './arbiter'
+import type { Asteroid } from './types'
 import {
   createEnemyDamageSparks,
   updateEnemyDamageSparks,
@@ -215,6 +219,78 @@ export interface GameScene {
   /** Current count of active mining drones (for the trade menu UI). */
   getMiningDroneCount: () => number
   respawnAfterDeath: () => void
+  /** Debug-only API. Stays in the build; webpack tree-shakes use-sites that
+   *  guard with DEBUG_ENABLED, but the methods themselves are always available
+   *  to keep scene.ts simple. Calling them in a production UI is a no-op
+   *  because the calling code (DebugPanel) is itself stripped out. */
+  debugApi: DebugApi
+}
+
+import type { EnemyKind } from './enemy-ship'
+import type { AsteroidType } from './types'
+import type { MiningDroneState } from './mining-drone'
+
+export interface DebugApi {
+  // Player state
+  setGodMode: (on: boolean) => void
+  getGodMode: () => boolean
+  setPlayerHp: (hp: number) => void
+  killPlayer: () => void
+  forceDeathSequence: () => void
+  refillShieldArmor: () => void
+
+  // Economy / progression
+  setUpgradesMaxed: () => void
+  unlockAllTools: () => void
+
+  // Enemies
+  spawnEnemyAtCursor: (kind: EnemyKind, worldX: number, worldY: number) => void
+  spawnArbiter: () => void
+  despawnAllEnemies: () => void
+
+  // Asteroids
+  spawnAsteroidAtCursor: (type: AsteroidType, worldX: number, worldY: number) => void
+  clearAsteroids: () => void
+
+  // Drones
+  buildDronesUpToCap: () => number
+  forceDroneState: (state: MiningDroneState) => void
+
+  // Camera / nav
+  teleportShip: (x: number, y: number) => void
+  teleportToStation: () => void
+  teleportToArbiter: () => void
+  teleportToNearestEnemy: () => void
+
+  // Time
+  setDtMultiplier: (mult: number) => void
+  getDtMultiplier: () => number
+
+  // Spawn director
+  setEnemySpawnsDisabled: (off: boolean) => void
+  getEnemySpawnsDisabled: () => boolean
+
+  // Post-process toggles
+  setBloomEnabled: (on: boolean) => void
+  setVignetteEnabled: (on: boolean) => void
+  setChromaticAberrationEnabled: (on: boolean) => void
+  setScreenShakeEnabled: (on: boolean) => void
+
+  // Collision debug overlay
+  setCollisionDebugEnabled: (on: boolean) => void
+  getCollisionDebugEnabled: () => boolean
+
+  // Perf overlay
+  setPerfOverlayEnabled: (on: boolean) => void
+  getPerfOverlayEnabled: () => boolean
+
+  // Ledger
+  addLedger: (amount: number) => void
+  setLedger: (amount: number) => void
+
+  // Snapshot
+  snapshotTickState: () => string
+  getCursorWorld: () => { x: number; y: number } | null
 }
 
 /**
@@ -506,6 +582,19 @@ export function createGameScene(
   // --- Asteroids ---
   // Map of asteroid id → { model, healthMeter } for all asteroids in the world
   const asteroidModels = new Map<string, { model: THREE.Group; healthMeter: THREE.Group }>()
+
+  // --- Debug flags. These default to "production" values and are only ever
+  //     mutated by the debug panel (which is itself excluded from production
+  //     builds via DEBUG_ENABLED). Reading them in hot paths is one branch
+  //     each, well below per-frame budget. ---
+  let debugBloomEnabled = true
+  let debugVignetteEnabled = true
+  let debugChromaticEnabled = true
+  let debugCollisionOverlay = false
+  let debugPerfOverlay = false
+  const collisionDebugGroup = new THREE.Group()
+  collisionDebugGroup.visible = false
+  scene.add(collisionDebugGroup)
 
   // --- Space Gas Station (north of the tutorial asteroid) ---
   const GAS_STATION_X = 30
@@ -2045,8 +2134,29 @@ export function createGameScene(
     // --- Update dynamic lights ---
     dynamicLights.update(dt, ship.x, ship.y, speedNorm)
 
+    // --- Debug collision overlay ---
+    if (debugCollisionOverlay) {
+      updateCollisionDebugRings(
+        collisionDebugGroup,
+        ship,
+        tickState.asteroids,
+        tickState.projectiles,
+        tickState.enemyProjectiles,
+        tickState.miningDrones,
+        tickState.enemy,
+        tickState.ambushEnemies,
+      )
+    } else if (collisionDebugGroup.visible) {
+      hideCollisionDebugRings(collisionDebugGroup)
+    }
+
     // --- Update bloom ---
     bloom.update(dt)
+    // Debug overrides — last write wins, so the panel can mute individual
+    // post-process stages without touching the game code that set them.
+    if (!debugBloomEnabled) bloom.setBloom(0, true)
+    if (!debugVignetteEnabled) bloom.setVignette(0)
+    if (!debugChromaticEnabled) bloom.setChromaticAberration(0)
 
     // --- Update environment ---
     dustMotes.update(dt, camera.position.x, camera.position.y)
@@ -2509,5 +2619,306 @@ export function createGameScene(
       return tickState.miningDrones.length
     },
     respawnAfterDeath,
+    debugApi: {
+      // --- Player state ---
+      setGodMode(on) {
+        tickState.debugGodMode = on
+      },
+      getGodMode() {
+        return tickState.debugGodMode
+      },
+      setPlayerHp(hp) {
+        tickState.playerHp = Math.max(0, Math.min(PLAYER_MAX_HP, Math.round(hp)))
+        onPlayerDamage?.(tickState.playerHp)
+      },
+      killPlayer() {
+        tickState.playerHp = 0
+        onPlayerDamage?.(0)
+      },
+      forceDeathSequence() {
+        // Setting HP to 0 + clearing the latch makes the next tick fire
+        // playerKilled, which then runs through the normal death sequence.
+        tickState.playerHp = 0
+        tickState.endlessDeathFired = false
+        onPlayerDamage?.(0)
+      },
+      refillShieldArmor() {
+        tickState.shieldCharges = 3
+        tickState.armorCharges = 3
+        onShieldChanged?.(tickState.shieldCharges)
+        onArmorChanged?.(tickState.armorCharges)
+      },
+
+      // --- Economy / progression ---
+      setUpgradesMaxed() {
+        // Push every tier to its cap. Scene mirrors react state via setCombatUpgrades,
+        // so the panel should call this *after* updating react state. This method
+        // just hits scene-internal flags for completeness.
+        tickState.blasterTier = 5
+        tickState.collectorTier = 5
+        tickState.fireRateBonus = 1
+        tickState.missileTier = 8
+        tickState.rippleUnlocked = true
+        tickState.optionCount = 2
+        tickState.speedTier = 5
+        tickState.armorCharges = 3
+        tickState.shieldCharges = 3
+        tickState.smartBombCount = 1
+        tickState.miningDroneCap = 4
+        tickState.spreadTier = 1
+        tickState.autoToolUnlocked = true
+        lazerUnlocked = true
+      },
+      unlockAllTools() {
+        lazerUnlocked = true
+        tickState.rippleUnlocked = true
+        tickState.autoToolUnlocked = true
+        tickState.spreadTier = 1
+      },
+
+      // --- Enemies ---
+      spawnEnemyAtCursor(kind, worldX, worldY) {
+        const damage = patrolEnemyDamage(tickState.ledger)
+        const enemy = createEnemyShip(worldX, worldY, damage, kind)
+        tickState.ambushEnemies.push(enemy)
+        // Mesh registration normally happens via result.ambushEnemiesSpawned —
+        // synthesize it here so the loop's "newly spawned" block adds the mesh
+        // and health meter on the next frame.
+        scene.add(enemy.mesh)
+        const hm = createHealthMeter(
+          -Math.max(HEALTH_BAR_OFFSET_Y, enemy.collisionRadius + 8),
+        )
+        enemy.mesh.add(hm)
+        enemy.mesh.userData.healthMeter = hm
+      },
+      spawnArbiter() {
+        // Bump to the next Mark and place the Arbiter just off-screen on a
+        // random heading — same logic as the natural director, but bypassing
+        // the ledger threshold.
+        tickState.arbiterMark++
+        const camHalfW = camera.position.z * Math.tan((camera.fov * Math.PI) / 360) * camera.aspect
+        const camHalfH = camera.position.z * Math.tan((camera.fov * Math.PI) / 360)
+        const viewDiag = Math.hypot(camHalfW, camHalfH)
+        const angle = Math.random() * Math.PI * 2
+        const r = viewDiag + 45
+        tickState.arbiter = createArbiterState(
+          tickState.arbiterMark,
+          ship.x + Math.cos(angle) * r,
+          ship.y + Math.sin(angle) * r,
+        )
+      },
+      despawnAllEnemies() {
+        for (const ae of tickState.ambushEnemies) {
+          scene.remove(ae.mesh)
+          disposeEnemyShip(ae)
+        }
+        tickState.ambushEnemies.length = 0
+        if (tickState.enemy) {
+          scene.remove(tickState.enemy.mesh)
+          disposeEnemyShip(tickState.enemy)
+          tickState.enemy = null
+        }
+        tickState.arbiter = null
+        tickState.arbiterMark = 0
+      },
+
+      // --- Asteroids ---
+      spawnAsteroidAtCursor(type, worldX, worldY) {
+        const id = `dbg-${Math.random().toString(36).slice(2, 9)}`
+        // Mid-size by default — biggest gives drones a meaningful target.
+        const size = 1
+        const baseHp = 12
+        const ast: Asteroid = {
+          id,
+          x: worldX,
+          y: worldY,
+          velocityX: 0,
+          velocityY: 0,
+          type,
+          hp: baseHp,
+          maxHp: baseHp,
+          size,
+        }
+        tickState.asteroids.push(ast)
+        const model = createAsteroidModel(type, size, hashString(id))
+        model.position.set(worldX, worldY, 0)
+        scene.add(model)
+        const hm = attachAsteroidHealthMeter(model, size)
+        asteroidModels.set(id, { model, healthMeter: hm })
+        tickState.asteroidHitCounts.set(id, 0)
+      },
+      clearAsteroids() {
+        for (const [, entry] of asteroidModels) {
+          scene.remove(entry.model)
+          entry.model.traverse((obj) => {
+            if (obj instanceof THREE.Mesh) {
+              obj.geometry.dispose()
+              if (obj.material instanceof THREE.Material) obj.material.dispose()
+            }
+          })
+        }
+        asteroidModels.clear()
+        tickState.asteroidHitCounts.clear()
+        tickState.asteroids.length = 0
+      },
+
+      // --- Drones ---
+      buildDronesUpToCap() {
+        let built = 0
+        while (tickState.miningDrones.length < tickState.miningDroneCap) {
+          const idx = tickState.miningDrones.length
+          const offset = (idx / 4) * Math.PI * 2
+          const d = createMiningDrone(
+            ship.x + Math.cos(offset) * 6,
+            ship.y + Math.sin(offset) * 6,
+          )
+          tickState.miningDrones.push(d)
+          built++
+        }
+        return built
+      },
+      forceDroneState(forced) {
+        for (const d of tickState.miningDrones) {
+          d.state = forced
+          if (forced === 'retreating') d.retreatTimer = 999
+          if (forced === 'returning') d.carriedScrap = 25
+        }
+      },
+
+      // --- Camera / nav ---
+      teleportShip(x, y) {
+        ship.x = x
+        ship.y = y
+        ship.velocityX = 0
+        ship.velocityY = 0
+      },
+      teleportToStation() {
+        ship.x = GAS_STATION_X
+        ship.y = GAS_STATION_Y + STATION_ENTER_DISTANCE - 10
+        ship.velocityX = 0
+        ship.velocityY = 0
+      },
+      teleportToArbiter() {
+        if (!tickState.arbiter) return
+        ship.x = tickState.arbiter.x - 30
+        ship.y = tickState.arbiter.y
+        ship.velocityX = 0
+        ship.velocityY = 0
+      },
+      teleportToNearestEnemy() {
+        const enemies = tickState.ambushEnemies.filter((e) => e.alive)
+        if (tickState.enemy && tickState.enemy.alive) enemies.push(tickState.enemy)
+        if (enemies.length === 0) return
+        let best = enemies[0]
+        let bestD = Infinity
+        for (const e of enemies) {
+          const d = Math.hypot(e.x - ship.x, e.y - ship.y)
+          if (d < bestD) {
+            bestD = d
+            best = e
+          }
+        }
+        ship.x = best.x - 20
+        ship.y = best.y
+        ship.velocityX = 0
+        ship.velocityY = 0
+      },
+
+      // --- Time ---
+      setDtMultiplier(mult) {
+        tickState.debugDtMultiplier = Math.max(0, mult)
+      },
+      getDtMultiplier() {
+        return tickState.debugDtMultiplier
+      },
+
+      // --- Spawn director ---
+      setEnemySpawnsDisabled(off) {
+        tickState.debugDisableEnemySpawns = off
+      },
+      getEnemySpawnsDisabled() {
+        return tickState.debugDisableEnemySpawns
+      },
+
+      // --- Post-process toggles ---
+      setBloomEnabled(on) {
+        debugBloomEnabled = on
+        if (!on) bloom.setBloom(0, true)
+      },
+      setVignetteEnabled(on) {
+        debugVignetteEnabled = on
+        if (!on) bloom.setVignette(0)
+      },
+      setChromaticAberrationEnabled(on) {
+        debugChromaticEnabled = on
+        if (!on) bloom.setChromaticAberration(0)
+      },
+      setScreenShakeEnabled(on) {
+        screenShake.enabled = on
+      },
+
+      // --- Collision overlay ---
+      setCollisionDebugEnabled(on) {
+        debugCollisionOverlay = on
+        if (!on) hideCollisionDebugRings(collisionDebugGroup)
+      },
+      getCollisionDebugEnabled() {
+        return debugCollisionOverlay
+      },
+
+      // --- Perf overlay ---
+      setPerfOverlayEnabled(on) {
+        debugPerfOverlay = on
+      },
+      getPerfOverlayEnabled() {
+        return debugPerfOverlay
+      },
+
+      // --- Ledger ---
+      addLedger(amount) {
+        tickState.ledger = Math.max(0, tickState.ledger + amount)
+      },
+      setLedger(amount) {
+        tickState.ledger = Math.max(0, amount)
+      },
+
+      // --- Snapshot ---
+      snapshotTickState() {
+        return JSON.stringify(
+          {
+            ship: { x: ship.x, y: ship.y, rotation: ship.rotation },
+            hp: tickState.playerHp,
+            ledger: tickState.ledger,
+            arbiterMark: tickState.arbiterMark,
+            blasterTier: tickState.blasterTier,
+            collectorTier: tickState.collectorTier,
+            missileTier: tickState.missileTier,
+            optionCount: tickState.optionCount,
+            speedTier: tickState.speedTier,
+            armorCharges: tickState.armorCharges,
+            shieldCharges: tickState.shieldCharges,
+            smartBombCount: tickState.smartBombCount,
+            miningDroneCap: tickState.miningDroneCap,
+            spreadTier: tickState.spreadTier,
+            lazerUnlocked,
+            rippleUnlocked: tickState.rippleUnlocked,
+            autoToolUnlocked: tickState.autoToolUnlocked,
+            asteroidCount: tickState.asteroids.filter((a) => a.hp > 0).length,
+            enemyCount:
+              (tickState.enemy?.alive ? 1 : 0) +
+              tickState.ambushEnemies.filter((e) => e.alive).length,
+            droneCount: tickState.miningDrones.length,
+            projectileCount: tickState.projectiles.length,
+            enemyProjectileCount: tickState.enemyProjectiles.length,
+          },
+          null,
+          2,
+        )
+      },
+      getCursorWorld() {
+        if (!aimState.active) return null
+        return screenToWorld(aimState.screenX, aimState.screenY)
+      },
+    },
   }
 }
