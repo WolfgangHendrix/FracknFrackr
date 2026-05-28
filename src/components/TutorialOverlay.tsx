@@ -200,7 +200,7 @@ export function TutorialOverlay({
 
   return (
     <div
-      className="absolute inset-0 pointer-events-none z-[55]"
+      className="absolute inset-0 pointer-events-none"
       data-testid="tutorial-overlay"
     >
       {/* Top-center prompt panel — sits below the HUD, clear of mobile controls at the bottom */}
