@@ -20,6 +20,7 @@ const SELL_ROWS = [
 
 /** Cost to purchase the Lazer mining tool. */
 export const LAZER_COST = 200
+export const AUTO_TOOL_COST = 600
 
 /** Upgrade catalog available at the trade station. */
 const UPGRADE_CATALOG = [
@@ -77,6 +78,12 @@ const UPGRADE_CATALOG = [
     label: 'Emergency Core Detonator',
     cost: 250,
     description: 'Auto-bomb on fatal hit (one-use)',
+  },
+  {
+    type: 'autoTool' as const,
+    label: 'Auto Targeting Assist',
+    cost: AUTO_TOOL_COST,
+    description: 'Auto-picks the right tool when aiming at an asteroid',
   },
 ]
 

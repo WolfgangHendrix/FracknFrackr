@@ -42,6 +42,32 @@ export const DEFAULT_MINERAL: MetalVariant = 'silicates'
 export type MiningTool = 'blaster' | 'lazer' | 'ripple'
 export type ProjectileTool = MiningTool | 'missile'
 
+/**
+ * Damage multiplier applied when a given tool hits a given asteroid type.
+ * 1.0 = preferred weapon, full damage. Lower values mean the rock is the
+ * "wrong tool for the job" — still mineable, just slower. Skilled players
+ * learn the matrix; the auto-toggle upgrade picks the preferred weapon for
+ * whatever the player is aiming at.
+ */
+export const WEAPON_AFFINITY: Record<AsteroidType, Record<MiningTool, number>> = {
+  'c-type': { blaster: 1.0, lazer: 0.7, ripple: 0.5 },
+  's-type': { blaster: 1.0, lazer: 0.8, ripple: 0.7 },
+  'm-type': { blaster: 0.4, lazer: 0.7, ripple: 1.0 },
+  'v-type': { blaster: 0.3, lazer: 1.0, ripple: 0.4 },
+  'd-type': { blaster: 0.5, lazer: 1.0, ripple: 0.6 },
+  comet: { blaster: 1.0, lazer: 0.8, ripple: 0.7 },
+}
+
+/** Tool that deals 100% damage to each asteroid type — used by auto-toggle. */
+export const PREFERRED_TOOL: Record<AsteroidType, MiningTool> = {
+  'c-type': 'blaster',
+  's-type': 'blaster',
+  'm-type': 'ripple',
+  'v-type': 'lazer',
+  'd-type': 'lazer',
+  comet: 'blaster',
+}
+
 export interface Fragment {
   id: string
   x: number

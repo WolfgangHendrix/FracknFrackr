@@ -42,6 +42,7 @@ import {
 import type { DebrisChunk } from './asteroid-debris'
 import { disposeMetalChunk } from './metal-chunk'
 import type { MiningTool } from './types'
+import { PREFERRED_TOOL } from './types'
 import {
   tick,
   createTickState,
@@ -319,16 +320,20 @@ export function createGameScene(
 
   const optionOrbs = new THREE.Group()
   scene.add(optionOrbs)
+  // Forcefield bubble — rendered BackSide with additive blending so the
+  // brightness concentrates at the silhouette rim instead of filling the
+  // interior and drowning the ship within the effect.
   const shieldVisual = new THREE.Mesh(
     new THREE.SphereGeometry(10, 32, 24),
     new THREE.MeshStandardMaterial({
       color: 0x00ffff,
       transparent: true,
-      opacity: 0.3,
+      opacity: 0.08,
       emissive: 0x0088ff,
-      emissiveIntensity: 2,
-      side: THREE.FrontSide,
+      emissiveIntensity: 0.8,
+      side: THREE.BackSide,
       blending: THREE.AdditiveBlending,
+      depthWrite: false,
     }),
   )
 
@@ -803,6 +808,54 @@ export function createGameScene(
     // Always sync from DOM — tick's input cooldown handles stale events
     tickState.mouseHoldingFire = mouseHoldingFire
     tickState.aimActive = aimState.active
+
+    // Auto-toggle: when the upgrade is owned and the player is aiming, pick
+    // the preferred tool for whatever asteroid is nearest the aim line from
+    // the ship. Holds the chosen tool until the aim moves off any rock.
+    if (tickState.autoToolUnlocked && aimWorldPosition) {
+      const sx = ship.x
+      const sy = ship.y
+      const ax = aimWorldPosition.x
+      const ay = aimWorldPosition.y
+      let dx = ax - sx
+      let dy = ay - sy
+      const len = Math.hypot(dx, dy)
+      if (len > 0.001) {
+        dx /= len
+        dy /= len
+        const AUTO_RANGE = 320
+        const AUTO_TOLERANCE_SQ = 60 * 60
+        let bestT = Infinity
+        let bestAsteroid: (typeof tickState.asteroids)[number] | null = null
+        for (const a of tickState.asteroids) {
+          if (a.hp <= 0) continue
+          const ox = a.x - sx
+          const oy = a.y - sy
+          const t = ox * dx + oy * dy
+          if (t < 0 || t > AUTO_RANGE) continue
+          const perpX = ox - t * dx
+          const perpY = oy - t * dy
+          const dSq = perpX * perpX + perpY * perpY
+          if (dSq > AUTO_TOLERANCE_SQ) continue
+          if (t < bestT) {
+            bestT = t
+            bestAsteroid = a
+          }
+        }
+        if (bestAsteroid) {
+          const want = PREFERRED_TOOL[bestAsteroid.type]
+          const available =
+            want === 'blaster' ||
+            (want === 'lazer' && lazerUnlocked) ||
+            (want === 'ripple' && tickState.rippleUnlocked)
+          if (available && want !== tickState.activeMiningTool) {
+            tickState.activeMiningTool = want
+            toolToggleButton?.setTool(want)
+            onToolChange?.(want)
+          }
+        }
+      }
+    }
 
     // Camera-visible world rectangle (camera looks straight down at the z=0
     // play plane). Used by tick() to gate fire to on-screen targets only.
@@ -1580,8 +1633,8 @@ export function createGameScene(
       shieldVisual.scale.setScalar(1 + tickState.shieldCharges * 0.12 + Math.sin(now / 120) * 0.04)
       const shieldMat = shieldVisual.material
       if (shieldMat instanceof THREE.MeshStandardMaterial) {
-        shieldMat.opacity = 0.15 + tickState.shieldCharges * 0.05 + Math.sin(now / 160) * 0.02
-        shieldMat.emissiveIntensity = 1.5 + Math.sin(now / 100) * 0.5
+        shieldMat.opacity = 0.06 + tickState.shieldCharges * 0.02 + Math.sin(now / 160) * 0.01
+        shieldMat.emissiveIntensity = 0.6 + Math.sin(now / 100) * 0.2
       }
       if (result.shieldHit) {
         addTrauma(screenShake, 0.35)
@@ -1842,6 +1895,20 @@ export function createGameScene(
     tickState.armorCharges = upgrades.armor
     tickState.shieldCharges = upgrades.shield
     tickState.smartBombCount = upgrades.smartBomb
+    lazerUnlocked = upgrades.lazer > 0
+    tickState.autoToolUnlocked = upgrades.autoTool > 0
+    // If the currently-selected tool is no longer unlocked, fall back to
+    // blaster so the player isn't stranded on a tool they can't fire.
+    if (tickState.activeMiningTool === 'lazer' && !lazerUnlocked) {
+      tickState.activeMiningTool = 'blaster'
+      toolToggleButton?.setTool('blaster')
+      onToolChange?.('blaster')
+    }
+    if (tickState.activeMiningTool === 'ripple' && !tickState.rippleUnlocked) {
+      tickState.activeMiningTool = 'blaster'
+      toolToggleButton?.setTool('blaster')
+      onToolChange?.('blaster')
+    }
   }
 
   /** Reset ship to just north of station with full HP, swap to normal ship, clear prologue. */

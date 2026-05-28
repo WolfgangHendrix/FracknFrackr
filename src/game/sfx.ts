@@ -413,39 +413,44 @@ export function playMenuMove(): void {
 }
 
 /**
- * Confirming two-note blip when a menu selection is made — a soft, low
- * rising fourth (G3 → C4) on a triangle voice through a lowpass, matching
- * the game's minimal low-frequency sound palette.
+ * Two-note menu confirmation, split across press and release:
+ *   - {@link playMenuSelectDown} plays the low G3 on press.
+ *   - {@link playMenuSelectUp} plays the high C4 on confirmed release.
+ * Both voices share the same warm triangle-through-lowpass character so the
+ * pair still reads as a single rising fourth when chained together.
  */
-export function playMenuSelect(): void {
+function playMenuSelectNote(freq: number): void {
   const ctx = getContext()
   if (!ctx) return
 
   const now = ctx.currentTime
   const vol = getSfxVolume()
 
-  // Shared lowpass keeps the blip warm and free of high-end fizz.
   const filter = ctx.createBiquadFilter()
   filter.type = 'lowpass'
   filter.frequency.setValueAtTime(700, now)
   filter.connect(ctx.destination)
 
-  const notes = [196, 262]
-  for (let i = 0; i < notes.length; i++) {
-    const t = now + i * 0.08
-    const osc = ctx.createOscillator()
-    osc.type = 'triangle'
-    osc.frequency.setValueAtTime(notes[i], t)
+  const osc = ctx.createOscillator()
+  osc.type = 'triangle'
+  osc.frequency.setValueAtTime(freq, now)
 
-    const gain = ctx.createGain()
-    gain.gain.setValueAtTime(0.055 * vol, t)
-    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.14)
+  const gain = ctx.createGain()
+  gain.gain.setValueAtTime(0.055 * vol, now)
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.14)
 
-    osc.connect(gain)
-    gain.connect(filter)
-    osc.start(t)
-    osc.stop(t + 0.15)
-  }
+  osc.connect(gain)
+  gain.connect(filter)
+  osc.start(now)
+  osc.stop(now + 0.15)
+}
+
+export function playMenuSelectDown(): void {
+  playMenuSelectNote(196)
+}
+
+export function playMenuSelectUp(): void {
+  playMenuSelectNote(262)
 }
 
 /** Bright cascade of coin pings when materials are sold. */

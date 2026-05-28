@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from 'react'
 import { defaultGameState } from '@/lib/schemas'
-import type { Cargo, Upgrades } from '@/lib/schemas'
+import type { Cargo, GameState, Upgrades } from '@/lib/schemas'
 import type { MetalVariant } from '@/game/scene'
 import { PLAYER_MAX_HP } from '@/game/scene'
 
@@ -33,6 +33,8 @@ const UPGRADE_MAX: Record<keyof Upgrades, number> = {
   armor: 3,
   shield: 3,
   smartBomb: 1,
+  lazer: 1,
+  autoTool: 1,
 }
 
 export interface GameStateHook {
@@ -51,6 +53,7 @@ export interface GameStateHook {
   setUpgradeLevel: (type: keyof Upgrades, value: number) => void
   spendScrap: (amount: number) => boolean
   resetRunCargo: () => void
+  hydrateFromSave: (state: GameState) => void
   achievements: string[]
   setAchievements: React.Dispatch<React.SetStateAction<string[]>>
   metrics: {
@@ -128,12 +131,15 @@ export function useGameState(): GameStateHook {
         // Can afford — also bump the upgrade level
         setUpgrades((prev) => ({
           ...prev,
+          // One-shot unlocks max out on purchase; everything else increments.
           [type]:
-            type === 'shield'
-              ? UPGRADE_MAX.shield
-              : type === 'smartBomb'
-                ? UPGRADE_MAX.smartBomb
-                : Math.min(prev[type] + 1, UPGRADE_MAX[type]),
+            type === 'shield' ||
+            type === 'smartBomb' ||
+            type === 'lazer' ||
+            type === 'autoTool' ||
+            type === 'ripple'
+              ? UPGRADE_MAX[type]
+              : Math.min(prev[type] + 1, UPGRADE_MAX[type]),
         }))
         setTimeout(() => onPurchased?.(true), 0)
         return prevScrap - cost
@@ -166,6 +172,15 @@ export function useGameState(): GameStateHook {
     return success
   }, [])
 
+  const hydrateFromSave = useCallback((s: GameState): void => {
+    setCargo(s.cargo)
+    setScrap(s.cargo.scrap)
+    setUpgrades(s.upgrades)
+    setPlayerHp(s.hp)
+    setAchievements(s.achievements)
+    setMetrics(s.metrics)
+  }, [])
+
   const setUpgradeLevel = useCallback((type: keyof Upgrades, value: number): void => {
     setUpgrades((prev) => ({
       ...prev,
@@ -189,6 +204,7 @@ export function useGameState(): GameStateHook {
     setUpgradeLevel,
     spendScrap,
     resetRunCargo,
+    hydrateFromSave,
     achievements,
     setAchievements,
     metrics,

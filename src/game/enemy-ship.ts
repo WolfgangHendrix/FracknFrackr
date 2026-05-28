@@ -13,8 +13,8 @@ export { ENEMY_COLLISION_RADIUS } from './collision-constants'
 // Enemy ship constants
 // ---------------------------------------------------------------------------
 
-/** Enemy HP — takes 3 hits to destroy. */
-export const ENEMY_MAX_HP = 3
+/** Enemy HP — dies in 1 hit. */
+export const ENEMY_MAX_HP = 1
 
 /** Enemy movement speed (units/sec). */
 const ENEMY_SPEED = 18

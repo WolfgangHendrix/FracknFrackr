@@ -12,6 +12,7 @@
 
 import type { Ship } from '@/lib/schemas'
 import type { Asteroid, MiningTool, Projectile } from './types'
+import { WEAPON_AFFINITY } from './types'
 import type { InputState } from './input'
 import type { BlasterState, LazerState } from './blaster'
 import type { MetalChunk } from './metal-chunk'
@@ -155,6 +156,7 @@ export interface TickState {
   fireRateBonus: number
   missileTier: number
   rippleUnlocked: boolean
+  autoToolUnlocked: boolean
   optionCount: number
   speedTier: number
   armorCharges: number
@@ -413,6 +415,7 @@ export function createTickState(config?: TickStateConfig): TickState {
     fireRateBonus: config?.fireRateBonus ?? 1.0,
     missileTier: config?.missileTier ?? 0,
     rippleUnlocked: config?.rippleUnlocked ?? false,
+    autoToolUnlocked: false,
     optionCount: config?.optionCount ?? 0,
     speedTier: config?.speedTier ?? 0,
     armorCharges: config?.armorCharges ?? 0,
@@ -1605,7 +1608,8 @@ export function tick(state: TickState, input: TickInput): TickResult {
         )
         const radius = 4 + hit.t * 22
         if (hit.distSq > radius * radius) continue
-        a.hp = Math.max(0, a.hp - frameDamage)
+        const affinity = WEAPON_AFFINITY[a.type].ripple
+        a.hp = Math.max(0, a.hp - frameDamage * affinity)
         result.asteroidHit = true
       }
       const rippleEnemy = (en: EnemyShip | null, isAmbush: boolean): void => {

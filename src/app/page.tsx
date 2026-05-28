@@ -17,6 +17,7 @@ import { TutorialOverlay } from '@/components/TutorialOverlay'
 import { PrologueOverlay } from '@/components/PrologueOverlay'
 import { TradeMenu, LAZER_COST } from '@/components/TradeMenu'
 import { LazerTutorialPopup } from '@/components/LazerTutorialPopup'
+import { PauseOverlay } from '@/components/PauseOverlay'
 import { ShopFab } from '@/components/ShopFab'
 import { useGameState } from '@/hooks/useGameState'
 import { useGamePersistence } from '@/hooks/useGamePersistence'
@@ -42,7 +43,6 @@ export default function Home() {
   const [tradeMenuOpen, setTradeMenuOpen] = useState(false)
   const [inStationRange, setInStationRange] = useState(false)
   const [activeTool, setActiveTool] = useState<MiningTool>('blaster')
-  const [hasLazer, setHasLazer] = useState(false)
   const [lazerPopupVisible, setLazerPopupVisible] = useState(false)
   const [ledger, setLedger] = useState(0)
   const [arbiterHud, setArbiterHud] = useState<ArbiterHudInfo | null>(null)
@@ -69,11 +69,12 @@ export default function Home() {
     sellMaterials,
     buyUpgrade,
     setUpgradeLevel,
-    spendScrap,
     resetRunCargo,
+    hydrateFromSave,
     achievements,
     metrics,
   } = useGameState()
+  const hasLazer = upgrades.lazer > 0
   const { save, load } = useGamePersistence(activeSlot)
   const tutorial = useTutorial(isNewGame && screen === 'game')
 
@@ -110,13 +111,26 @@ export default function Home() {
     })
   }, [saveSeq]) // eslint-disable-line react-hooks/exhaustive-deps -- save reads latest state at trigger time
 
-  // Load the slot's best score when a game begins.
+  // Hydrate the slot's saved state when a game begins. Pushes upgrades and
+  // collector tier into the scene so toggleable tools (lazer/ripple) stay
+  // unlocked across reloads — without this, `lazerUnlocked` in the scene
+  // resets to false and Q cycles only blaster.
   useEffect(() => {
     if (!activeSlot) return
     void load().then((s) => {
-      if (s) setHighScore(s.highScore)
+      if (!s) return
+      setHighScore(s.highScore)
+      if (isNewGame) return
+      hydrateFromSave(s)
+      // Defer to next tick so the scene's imperative handle is mounted.
+      const id = window.setTimeout(() => {
+        gameCanvasRef.current?.setCombatUpgrades(s.upgrades)
+        gameCanvasRef.current?.setCollectorTier(s.upgrades.collector)
+        if (s.upgrades.lazer > 0) setActiveTool('lazer')
+      }, 0)
+      return () => window.clearTimeout(id)
     })
-  }, [activeSlot, load])
+  }, [activeSlot, load, isNewGame, hydrateFromSave])
 
   const handleTitleBegin = useCallback(() => {
     playMenuLoop()
@@ -190,18 +204,18 @@ export default function Home() {
         [type]:
           type === 'shield'
             ? 3
-            : Math.min(
-                upgrades[type] + 1,
-                type === 'missiles'
-                  ? 8
-                  : type === 'options'
-                    ? 2
-                    : type === 'ripple'
-                      ? 1
+            : type === 'smartBomb' || type === 'lazer' || type === 'autoTool' || type === 'ripple'
+              ? 1
+              : Math.min(
+                  upgrades[type] + 1,
+                  type === 'missiles'
+                    ? 8
+                    : type === 'options'
+                      ? 2
                       : type === 'armor'
                         ? 3
                         : 5,
-              ),
+                ),
       }
       buyUpgrade(type, cost, (ok) => {
         if (!ok) return
@@ -224,14 +238,17 @@ export default function Home() {
 
   const handleBuyLazer = useCallback(() => {
     if (hasLazer) return
-    const ok = spendScrap(LAZER_COST)
-    if (ok) {
-      setHasLazer(true)
+    buyUpgrade('lazer', LAZER_COST, (ok) => {
+      if (!ok) return
+      // Push the upgrade change into the scene before swapping tools, so the
+      // scene's lazerUnlocked flag is true by the time setMiningTool runs.
+      const next = { ...upgrades, lazer: 1 }
+      gameCanvasRef.current?.setCombatUpgrades(next)
       setActiveTool('lazer')
       gameCanvasRef.current?.setMiningTool('lazer')
       requestSave()
-    }
-  }, [hasLazer, spendScrap, requestSave])
+    })
+  }, [hasLazer, buyUpgrade, upgrades, requestSave])
 
   const handleCloseTradeMenu = useCallback(() => {
     // Prevent closing during tutorial trade steps — player must complete sell/buy
@@ -331,8 +348,11 @@ export default function Home() {
     setPrologueFade('none')
     if (wasInPrologue) {
       gameCanvasRef.current?.resetShipToStation()
+      // resetShipToStation wipes scene unlocks back to defaults — push the
+      // player's actual upgrades back in so a bought lazer/ripple survives.
+      gameCanvasRef.current?.setCombatUpgrades(upgrades)
     }
-  }, [tutorial])
+  }, [tutorial, upgrades])
 
   // --- Prologue fade-to-black and respawn sequence ---
   const [prologueFade, setPrologueFade] = useState<
@@ -355,6 +375,8 @@ export default function Home() {
       setTimeout(() => {
         setPrologueFade('black')
         gameCanvasRef.current?.resetShipToStation()
+        // Same as above — the scene reset clobbers unlocks; re-sync.
+        gameCanvasRef.current?.setCombatUpgrades(upgrades)
 
         timers.push(
           setTimeout(() => {
@@ -378,7 +400,7 @@ export default function Home() {
     )
 
     return () => timers.forEach(clearTimeout)
-  }, [tutorialStep])
+  }, [tutorialStep, upgrades])
 
   useEffect(() => {
     const voiceSrc =
@@ -491,6 +513,21 @@ export default function Home() {
   // Start button (Standard Gamepad button 9) toggles pause during gameplay.
   useGamepadButton(9, togglePause, screen === 'game')
 
+  // ESC toggles pause during gameplay. Skipped while the trade menu or run
+  // summary owns the screen so it doesn't double-fire with their own close
+  // handlers.
+  useEffect(() => {
+    if (screen !== 'game') return
+    if (tradeMenuOpen || runOver) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.code !== 'Escape') return
+      e.preventDefault()
+      togglePause()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [screen, tradeMenuOpen, runOver, togglePause])
+
   // Freeze ship when the shop FAB is visible during the tutorial approach-station step.
   // Unfreezes when the player clicks the FAB (advancing to trade-sell, which hides the overlay).
   const shopTutorialFreeze =
@@ -593,11 +630,7 @@ export default function Home() {
         />
       )}
       <LazerTutorialPopup visible={lazerPopupVisible} onDismiss={handleDismissLazerPopup} />
-      {paused && (
-        <div className="absolute inset-0 z-[40] bg-black/60 pointer-events-none flex items-center justify-center">
-          <p className="font-mono text-2xl sm:text-4xl tracking-widest text-white/80">PAUSED</p>
-        </div>
-      )}
+      <PauseOverlay visible={paused} onResume={togglePause} />
       {paused && <SoundFab />}
       {runOver && runStats && (
         <RunSummary

@@ -1,7 +1,13 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
-import { playMenuMove, playMenuSelect, playSellChime, playBuyRegister } from '@/game/sfx'
+import {
+  playMenuMove,
+  playMenuSelectDown,
+  playMenuSelectUp,
+  playSellChime,
+  playBuyRegister,
+} from '@/game/sfx'
 
 /**
  * Gamepad-driven menu navigation.
@@ -44,9 +50,9 @@ function moveFocus(delta: number): void {
   const idx = current instanceof HTMLElement ? items.indexOf(current) : -1
   const base = idx === -1 ? (delta > 0 ? -1 : 0) : idx
   const next = (base + delta + items.length) % items.length
+  // The focusin listener below plays the move blip — calling .focus() here
+  // triggers it, so we don't need a direct playMenuMove() call.
   items[next].focus()
-  // Audible cue as the active highlight moves between options.
-  playMenuMove()
 }
 
 function focusFirst(): void {
@@ -69,6 +75,16 @@ export function useGamepadMenu({ enabled, resetKey }: UseGamepadMenuOptions): vo
   useEffect(() => {
     if (!enabled) return
     if (typeof document === 'undefined') return
+    const onPointerDown = (e: Event): void => {
+      if (!(e.target instanceof Element)) return
+      const item = e.target.closest('[data-menu-item]')
+      if (!item) return
+      const sound = item.getAttribute('data-menu-sound')
+      // Themed sounds (sell/buy) play in one shot on click; only the default
+      // two-note blip is split across press and release.
+      if (sound === 'sell' || sound === 'buy') return
+      playMenuSelectDown()
+    }
     const onClick = (e: MouseEvent): void => {
       if (!(e.target instanceof Element)) return
       const item = e.target.closest('[data-menu-item]')
@@ -76,10 +92,45 @@ export function useGamepadMenu({ enabled, resetKey }: UseGamepadMenuOptions): vo
       const sound = item.getAttribute('data-menu-sound')
       if (sound === 'sell') playSellChime()
       else if (sound === 'buy') playBuyRegister()
-      else playMenuSelect()
+      else playMenuSelectUp()
     }
+    // Hover/focus blip — mirrors the gamepad-scroll cue so mouse and keyboard
+     // users get the same audible "this is selectable" feedback. Tracks the
+     // last-blipped element so re-entering doesn't repeat the sound.
+    let lastHover: Element | null = null
+    const onPointerOver = (e: Event): void => {
+      if (!(e.target instanceof Element)) return
+      const item = e.target.closest('[data-menu-item]')
+      if (!item || item === lastHover) return
+      if (item instanceof HTMLButtonElement && item.disabled) return
+      lastHover = item
+      playMenuMove()
+    }
+    const onPointerOut = (e: Event): void => {
+      if (!(e.target instanceof Element)) return
+      const item = e.target.closest('[data-menu-item]')
+      if (item && item === lastHover) lastHover = null
+    }
+    const onFocusIn = (e: Event): void => {
+      if (!(e.target instanceof Element)) return
+      const item = e.target.closest('[data-menu-item]')
+      if (!item || item === lastHover) return
+      if (item instanceof HTMLButtonElement && item.disabled) return
+      lastHover = item
+      playMenuMove()
+    }
+    document.addEventListener('pointerover', onPointerOver)
+    document.addEventListener('pointerout', onPointerOut)
+    document.addEventListener('focusin', onFocusIn)
+    document.addEventListener('pointerdown', onPointerDown)
     document.addEventListener('click', onClick)
-    return () => document.removeEventListener('click', onClick)
+    return () => {
+      document.removeEventListener('pointerover', onPointerOver)
+      document.removeEventListener('pointerout', onPointerOut)
+      document.removeEventListener('focusin', onFocusIn)
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('click', onClick)
+    }
   }, [enabled])
 
   const prev = useRef({
@@ -130,7 +181,21 @@ export function useGamepadMenu({ enabled, resetKey }: UseGamepadMenuOptions): vo
       if (leftDown && !prev.current.left) moveFocus(-1)
       if (rightDown && !prev.current.right) moveFocus(+1)
 
+      // Press: low note. Release: click (which fires the high note via the
+      // click listener). Themed sounds (sell/buy) skip the press blip so
+      // their one-shot chime isn't muddied.
       if (aDown && !prev.current.a) {
+        const el = document.activeElement
+        if (
+          el instanceof HTMLElement &&
+          el.matches('[data-menu-item]') &&
+          !(el as HTMLButtonElement).disabled
+        ) {
+          const sound = el.getAttribute('data-menu-sound')
+          if (sound !== 'sell' && sound !== 'buy') playMenuSelectDown()
+        }
+      }
+      if (!aDown && prev.current.a) {
         const el = document.activeElement
         if (
           el instanceof HTMLElement &&

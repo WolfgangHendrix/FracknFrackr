@@ -2,7 +2,8 @@
  * Collision detection and resolution for game objects.
  */
 import type { Ship } from '@/lib/schemas'
-import type { Asteroid, Projectile } from './types'
+import type { Asteroid, Projectile, MiningTool } from './types'
+import { WEAPON_AFFINITY } from './types'
 import { PROJECTILE_RADIUS, LAZER_DAMAGE_MULTIPLIER } from './blaster-constants'
 import {
   SHIP_COLLISION_RADIUS,
@@ -239,36 +240,34 @@ export function checkProjectileAsteroidCollisions(
       if (a.hp <= 0) continue
       const aRadius = ASTEROID_SIZE_RADIUS[a.size] ?? ASTEROID_COLLISION_RADIUS
       if (circlesOverlap(p.x, p.y, PROJECTILE_RADIUS, a.x, a.y, aRadius)) {
-        if (a.type === 'v-type' && p.tool !== 'lazer') {
-          // Blaster can't damage V-type basaltic rock — deflect (still nudges slightly)
-          const vmag = Math.hypot(p.velocityX, p.velocityY)
-          if (vmag > 0.001) {
-            nudgeAsteroid(a, p.velocityX / vmag, p.velocityY / vmag, PROJECTILE_IMPULSE * 0.3)
-          }
-          hits.push({
-            projectileId: p.id,
-            asteroidId: a.id,
-            damage: 0,
-            x: p.x,
-            y: p.y,
-            deflected: true,
-          })
-        } else {
-          const effectiveDamage =
-            p.tool === 'lazer' ? Math.ceil(p.damage * LAZER_DAMAGE_MULTIPLIER) : p.damage
-          a.hp = Math.max(0, a.hp - effectiveDamage)
-          const vmag = Math.hypot(p.velocityX, p.velocityY)
-          if (vmag > 0.001) {
-            nudgeAsteroid(a, p.velocityX / vmag, p.velocityY / vmag, PROJECTILE_IMPULSE)
-          }
-          hits.push({
-            projectileId: p.id,
-            asteroidId: a.id,
-            damage: effectiveDamage,
-            x: p.x,
-            y: p.y,
-          })
+        // Affinity matrix replaces the old hard "v-type deflects everything
+        // except lazer" gate — wrong-tool shots still chip, they just do
+        // less damage and impart a weaker nudge to telegraph the mismatch.
+        const tool: MiningTool = p.tool === 'missile' ? 'blaster' : p.tool
+        const affinity = WEAPON_AFFINITY[a.type][tool]
+        const lazerBoost = p.tool === 'lazer' ? LAZER_DAMAGE_MULTIPLIER : 1
+        const effectiveDamage = Math.max(1, Math.ceil(p.damage * lazerBoost * affinity))
+        a.hp = Math.max(0, a.hp - effectiveDamage)
+        const vmag = Math.hypot(p.velocityX, p.velocityY)
+        if (vmag > 0.001) {
+          nudgeAsteroid(
+            a,
+            p.velocityX / vmag,
+            p.velocityY / vmag,
+            PROJECTILE_IMPULSE * Math.max(0.3, affinity),
+          )
         }
+        hits.push({
+          projectileId: p.id,
+          asteroidId: a.id,
+          damage: effectiveDamage,
+          x: p.x,
+          y: p.y,
+          // Surface as "deflected" only when the mismatch is severe (blaster
+          // vs basalt) — that's what triggers the lazer tutorial popup. Other
+          // wrong-tool combos still chip, they just don't shout about it.
+          deflected: affinity < 0.35,
+        })
         hitSomething = true
         break // one projectile hits one asteroid
       }
@@ -366,8 +365,11 @@ export function checkBeamAsteroidCollisions(
     const aRadius = ASTEROID_SIZE_RADIUS[a.size] ?? ASTEROID_COLLISION_RADIUS
     const distSq = pointToSegmentDistSq(a.x, a.y, startX, startY, endX, endY)
     if (distSq < aRadius * aRadius) {
-      // Beam is always lazer — damages all asteroid types including crystalline
-      const effectiveDamage = Math.ceil(damage * LAZER_DAMAGE_MULTIPLIER)
+      // Beam is always lazer; affinity modulates how preferred it is on each
+      // asteroid type. Basaltic/exotic rocks take full damage; softer rocks
+      // still chip but slower (better mined with the blaster).
+      const affinity = WEAPON_AFFINITY[a.type].lazer
+      const effectiveDamage = Math.max(1, Math.ceil(damage * LAZER_DAMAGE_MULTIPLIER * affinity))
       a.hp = Math.max(0, a.hp - effectiveDamage)
       hits.push({ asteroidId: a.id, damage: effectiveDamage, x: a.x, y: a.y })
       // Find parameter t along the beam where it enters the asteroid
