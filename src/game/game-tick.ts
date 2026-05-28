@@ -1200,10 +1200,7 @@ function prologueTick(state: TickState, input: TickInput, result: TickResult): v
       state.thrustersUnlocked = true
       state.sensorTier = 3
       state.droneRepairUnlocked = true
-      // Drill Nose intentionally left off in the prologue — the intro is
-      // about firepower, not ramming, and an auto-piloted ship with the
-      // drill on pegs the drill loop SFX into a continuous harsh tone.
-      state.drillNoseTier = 0
+      state.drillNoseTier = 3
       // Mining-drone fleet at cap so the player sees the full RTS layer.
       state.miningDroneCap = 4
       const needed = state.miningDroneCap - state.miningDrones.length
