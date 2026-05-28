@@ -2342,8 +2342,17 @@ export function createGameScene(
     }
     tickState.scrapBoxes.length = 0
 
-    // Clean up asteroid models
+    // Clean up asteroid models — the scene.traverse below catches any meshes
+    // still attached to the scene graph, but we explicitly clear the lookup
+    // map so re-creating the scene starts from an empty book.
     asteroidModels.clear()
+
+    // Clean up mining drone meshes. They're children of miningDroneGroup so
+    // they'll get walked by scene.traverse(disposeMesh), but the meshes map
+    // needs an explicit clear so a re-init doesn't see stale entries.
+    for (const [, mesh] of miningDroneMeshes) disposeDroneMesh(mesh)
+    miningDroneMeshes.clear()
+    tickState.miningDrones.length = 0
 
     // Clean up collector VFX & audio
     disposeCollectorVfx(collectorVfx)
@@ -2450,7 +2459,11 @@ export function createGameScene(
     tickState.playerHp = effectivePlayerMaxHp(tickState)
     onPlayerDamage?.(tickState.playerHp)
 
-    // Reset to tier-1 ship and clear prologue state
+    // Reset to tier-1 ship and clear prologue state. The intro hands the
+    // player a fully-maxed loadout as a power-demonstration; this is where
+    // we take it all back. Every upgrade/flag the prologue (or a later
+    // purchase) might have set must reset to its default here, or the
+    // player keeps capabilities they never bought.
     tickState.blasterTier = 1
     tickState.collectorTier = 1
     tickState.fireRateBonus = 1.0
@@ -2462,6 +2475,27 @@ export function createGameScene(
     tickState.speedTier = 0
     tickState.armorCharges = 0
     tickState.shieldCharges = 0
+    tickState.smartBombCount = 0
+    tickState.spreadTier = 0
+    tickState.autoToolUnlocked = false
+    tickState.coolingTier = 0
+    tickState.magnetTier = 0
+    tickState.hullPlatingTier = 0
+    tickState.bountyTier = 0
+    tickState.missileBiasUnlocked = false
+    tickState.thrustersUnlocked = false
+    tickState.sensorTier = 0
+    tickState.droneRepairUnlocked = false
+    tickState.drillNoseTier = 0
+
+    // Wipe the mining-drone fleet — drones in particular were sneaking past
+    // the previous reset because there was no code to remove them at all.
+    tickState.miningDroneCap = 0
+    tickState.miningDrones.length = 0
+    tickState.rallyPoint = null
+    for (const [, mesh] of miningDroneMeshes) disposeDroneMesh(mesh)
+    miningDroneMeshes.clear()
+
     toolToggleButton?.setTool('blaster')
     onToolChange?.('blaster')
     tickState.prologueShipFrozen = false

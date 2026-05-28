@@ -205,7 +205,8 @@ export function startEngineSound(): void {
 export function updateEngineSound(speedNormalized: number): void {
   if (!engineSound || !audioCtx) return
 
-  const vol = speedNormalized * 0.032 * getSfxVolume()
+  // Engine bumped slightly so it reads under other loops without dominating.
+  const vol = speedNormalized * 0.04 * getSfxVolume()
   const freq = 60 + speedNormalized * 200
 
   engineSound.gain.gain.setTargetAtTime(vol, audioCtx.currentTime, 0.05)
@@ -299,7 +300,10 @@ function ensureDrillSound(): DrillSound | null {
 export function setDrillSoundIntensity(intensity: number): void {
   const s = intensity > 0.001 ? ensureDrillSound() : drillSound
   if (!s || !audioCtx) return
-  const target = Math.max(0, Math.min(1, intensity)) * 0.08 * getSfxVolume()
+  // Drill volume sits between engine (0.04) and collector hum (0.055) so it
+  // reads as an active mechanical presence without burying the music or the
+  // other ambient loops the player keeps running while drilling.
+  const target = Math.max(0, Math.min(1, intensity)) * 0.05 * getSfxVolume()
   s.gain.gain.setTargetAtTime(target, audioCtx.currentTime, 0.05)
 }
 

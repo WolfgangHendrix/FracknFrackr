@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { SAVE_SLOT_IDS, SaveSlotSummarySchema } from '@/lib/schemas'
 import type { SaveSlotId, SaveSlotSummary } from '@/lib/schemas'
 import { useGamepadMenu } from '@/hooks/useGamepadMenu'
+import { LeaderboardMenu } from './LeaderboardMenu'
 
 // In-game asteroid voxel palette (mirrors ASTEROID_COLORS in asteroid-model.ts)
 const ROCK_PALETTE = ['#8b7355', '#6b5340', '#a08868'] as const
@@ -122,7 +123,7 @@ export function clearSlotSummary(slotId: SaveSlotId): void {
   localStorage.setItem(SLOTS_STORAGE_KEY, JSON.stringify([...map.values()]))
 }
 
-type ScreenMode = 'main' | 'new-game' | 'load-game' | 'credits'
+type ScreenMode = 'main' | 'new-game' | 'load-game' | 'credits' | 'leaderboards'
 
 /** A single credit block: a role heading and one or more attribution lines. */
 function CreditSection({ role, lines }: { role: string; lines: string[] }) {
@@ -358,6 +359,13 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
           </button>
           <button
             data-menu-item
+            onClick={() => setMode('leaderboards')}
+            className="px-8 py-4 bg-space-800/80 border border-hud-red/50 rounded text-hud-red font-sans text-lg hover:bg-space-700/80 hover:border-hud-red focus:bg-space-700/80 focus:border-hud-red focus:outline-none focus:ring-2 focus:ring-hud-red focus:scale-[1.02] active:scale-95 transition-all min-w-[220px]"
+          >
+            LEADERBOARDS
+          </button>
+          <button
+            data-menu-item
             onClick={() => setMode('credits')}
             className="px-8 py-4 bg-space-800/80 border border-hud-amber/50 rounded text-hud-amber font-sans text-lg hover:bg-space-700/80 hover:border-hud-amber focus:bg-space-700/80 focus:border-hud-amber focus:outline-none focus:ring-2 focus:ring-hud-amber focus:scale-[1.02] active:scale-95 transition-all min-w-[220px]"
           >
@@ -365,6 +373,9 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
           </button>
         </div>
       )}
+
+      {/* Leaderboards */}
+      {mode === 'leaderboards' && <LeaderboardMenu onBack={handleBack} />}
 
       {/* Credits */}
       {mode === 'credits' && (
