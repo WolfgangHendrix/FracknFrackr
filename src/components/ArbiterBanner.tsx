@@ -38,10 +38,10 @@ export function ArbiterBanner({ banner }: ArbiterBannerProps) {
       style={{ opacity: visible ? 1 : 0, transition: 'opacity 0.6s ease' }}
     >
       <div className="flex flex-col items-center gap-1 text-center">
-        <div className="font-mono tracking-[0.3em] text-[clamp(0.55rem,1.5vw,0.7rem)] text-hud-red/80">
+        <div className="font-sans tracking-[0.3em] text-[clamp(0.55rem,1.5vw,0.7rem)] text-hud-red/80">
           ◢ ARBITER COMMS ◣
         </div>
-        <p className="font-mono text-[clamp(0.8rem,2.4vw,1.05rem)] text-white/90 leading-snug">
+        <p className="font-sans text-[clamp(0.8rem,2.4vw,1.05rem)] text-white/90 leading-snug">
           {banner.text}
         </p>
       </div>

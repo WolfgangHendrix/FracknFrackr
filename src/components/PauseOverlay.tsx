@@ -103,7 +103,7 @@ export function PauseOverlay({ visible, onResume }: PauseOverlayProps) {
 
   return (
     <div className="absolute inset-0 z-[40] bg-black/75 flex items-center justify-center p-4">
-      <div className="max-w-md w-full bg-space-800/95 border-2 border-hud-blue/40 rounded-xl p-5 font-mono shadow-2xl">
+      <div className="max-w-md w-full bg-space-800/95 border-2 border-hud-blue/40 rounded-xl p-5 font-sans shadow-2xl">
         <div className="flex items-baseline justify-between mb-3">
           <p className="text-xl sm:text-2xl tracking-widest text-white/90">PAUSED</p>
           <p className="text-xs text-white/40">ESC to resume</p>

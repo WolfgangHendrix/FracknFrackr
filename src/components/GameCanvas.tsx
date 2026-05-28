@@ -24,6 +24,8 @@ export interface GameCanvasHandle {
   setMiningTool: (tool: MiningTool) => void
   setCollectorTier: (tier: number) => void
   setCombatUpgrades: (upgrades: Upgrades) => void
+  buildMiningDrone: () => boolean
+  getMiningDroneCount: () => number
   respawnAfterDeath: () => void
 }
 
@@ -51,6 +53,7 @@ interface GameCanvasProps {
   onArbiterEvent?: (event: ArbiterEvent) => void
   onRunEnded?: (stats: RunStats) => void
   onShieldChanged?: (charges: number) => void
+  onMiningDroneCountChanged?: (count: number) => void
   onArmorChanged?: (charges: number) => void
   onSmartBomb?: () => void
   // Prologue callbacks
@@ -85,6 +88,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
     onArbiterEvent,
     onRunEnded,
     onShieldChanged,
+    onMiningDroneCountChanged,
     onArmorChanged,
     onSmartBomb,
     onPrologueReady,
@@ -120,6 +124,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
   const onArbiterEventRef = useRef(onArbiterEvent)
   const onRunEndedRef = useRef(onRunEnded)
   const onShieldChangedRef = useRef(onShieldChanged)
+  const onMiningDroneCountChangedRef = useRef(onMiningDroneCountChanged)
   const onArmorChangedRef = useRef(onArmorChanged)
   const onSmartBombRef = useRef(onSmartBomb)
   const onPrologueReadyRef = useRef(onPrologueReady)
@@ -143,6 +148,8 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
     setCombatUpgrades: (upgrades: Upgrades) => {
       sceneRef.current?.setCombatUpgrades(upgrades)
     },
+    buildMiningDrone: () => sceneRef.current?.buildMiningDrone() ?? false,
+    getMiningDroneCount: () => sceneRef.current?.getMiningDroneCount() ?? 0,
     respawnAfterDeath: () => {
       sceneRef.current?.respawnAfterDeath()
     },
@@ -242,6 +249,10 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
   }, [onShieldChanged])
 
   useEffect(() => {
+    onMiningDroneCountChangedRef.current = onMiningDroneCountChanged
+  }, [onMiningDroneCountChanged])
+
+  useEffect(() => {
     onArmorChangedRef.current = onArmorChanged
   }, [onArmorChanged])
 
@@ -297,6 +308,8 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
           onArbiterEvent: (event: ArbiterEvent) => onArbiterEventRef.current?.(event),
           onRunEnded: (stats: RunStats) => onRunEndedRef.current?.(stats),
           onShieldChanged: (charges: number) => onShieldChangedRef.current?.(charges),
+          onMiningDroneCountChanged: (count: number) =>
+            onMiningDroneCountChangedRef.current?.(count),
           onArmorChanged: (charges: number) => onArmorChangedRef.current?.(charges),
           onSmartBomb: () => onSmartBombRef.current?.(),
           onPrologueReady: () => onPrologueReadyRef.current?.(),
@@ -329,7 +342,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
       {isLoading && (
         <div className="absolute inset-0 flex items-center justify-center bg-space-950 z-[100] transition-opacity duration-700 pointer-events-none">
           <div className="flex flex-col items-center gap-4">
-            <div className="font-mono text-hud-green text-sm tracking-[0.3em] animate-pulse">
+            <div className="font-sans text-hud-green text-sm tracking-[0.3em] animate-pulse">
               SYSTEMS INITIALIZING...
             </div>
             <div className="w-48 h-1 bg-space-800 rounded-full overflow-hidden">

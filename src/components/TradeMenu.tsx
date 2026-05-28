@@ -21,6 +21,10 @@ const SELL_ROWS = [
 /** Cost to purchase the Lazer mining tool. */
 export const LAZER_COST = 200
 export const AUTO_TOOL_COST = 600
+/** Flat per-tier cost for Mining Drone Bay — each purchase raises the cap +1. */
+export const DRONE_BAY_COST = 240
+/** Scrap cost to construct a single mining drone at the station. */
+export const MINING_DRONE_BUILD_COST = 60
 
 /** Upgrade catalog available at the trade station. */
 const UPGRADE_CATALOG = [
@@ -85,6 +89,12 @@ const UPGRADE_CATALOG = [
     cost: AUTO_TOOL_COST,
     description: 'Auto-picks the right tool when aiming at an asteroid',
   },
+  {
+    type: 'drone' as const,
+    label: 'Mining Drone Bay',
+    cost: DRONE_BAY_COST,
+    description: 'Raises drone cap by +1 (max 4). Drones drill large rocks',
+  },
 ]
 
 interface TradeMenuProps {
@@ -93,9 +103,11 @@ interface TradeMenuProps {
   upgrades: Upgrades
   tutorialStep: TutorialStep
   hasLazer: boolean
+  droneCount: number
   onSell: () => void
   onBuy: (type: keyof Upgrades, cost: number) => void
   onBuyLazer: () => void
+  onBuildDrone: () => void
   onClose: () => void
 }
 
@@ -105,9 +117,11 @@ export function TradeMenu({
   upgrades,
   tutorialStep,
   hasLazer,
+  droneCount,
   onSell,
   onBuy,
   onBuyLazer,
+  onBuildDrone,
   onClose,
 }: TradeMenuProps) {
   const isTutorialSell = tutorialStep === 'trade-sell'
@@ -126,7 +140,7 @@ export function TradeMenu({
 
   return (
     <div className="absolute inset-0 flex items-center justify-center z-50 pointer-events-none p-3 sm:p-4">
-      <div className="pointer-events-auto bg-space-900/95 border-2 border-hud-green/60 rounded-xl shadow-2xl w-[360px] max-w-[90vw] max-h-[calc(100dvh-2rem)] font-mono flex flex-col overflow-hidden">
+      <div className="pointer-events-auto bg-space-900/95 border-2 border-hud-green/60 rounded-xl shadow-2xl w-[360px] max-w-[90vw] max-h-[calc(100dvh-2rem)] font-sans flex flex-col overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-hud-green/30">
           <h2 className="text-hud-green text-lg font-bold tracking-wider">TRADE STATION</h2>
@@ -186,9 +200,11 @@ export function TradeMenu({
               scrap={scrap}
               upgrades={upgrades}
               hasLazer={hasLazer}
+              droneCount={droneCount}
               isTutorial={isTutorialBuy}
               onBuy={onBuy}
               onBuyLazer={onBuyLazer}
+              onBuildDrone={onBuildDrone}
             />
           )}
         </div>
@@ -273,16 +289,20 @@ function BuyPanel({
   scrap,
   upgrades,
   hasLazer,
+  droneCount,
   isTutorial,
   onBuy,
   onBuyLazer,
+  onBuildDrone,
 }: {
   scrap: number
   upgrades: Upgrades
   hasLazer: boolean
+  droneCount: number
   isTutorial: boolean
   onBuy: (type: keyof Upgrades, cost: number) => void
   onBuyLazer: () => void
+  onBuildDrone: () => void
 }) {
   const canAffordLazer = scrap >= LAZER_COST && !hasLazer
 
@@ -302,9 +322,11 @@ function BuyPanel({
                   ? 5
                   : item.type === 'armor' || item.type === 'shield'
                     ? 3
-                    : item.type === 'smartBomb'
+                    : item.type === 'smartBomb' || item.type === 'autoTool'
                       ? 1
-                      : 5
+                      : item.type === 'drone'
+                        ? 4
+                        : 5
 
         const maxed = currentLevel >= maxLevel
         const canAfford = scrap >= item.cost && !maxed
@@ -330,7 +352,13 @@ function BuyPanel({
                 {maxed ? 'MAX LEVEL' : item.description} —{' '}
                 {item.type === 'armor' || item.type === 'shield'
                   ? `${currentLevel}/3`
-                  : `Mk${currentLevel}`}
+                  : item.type === 'drone'
+                    ? `${currentLevel}/4`
+                    : item.type === 'autoTool'
+                      ? currentLevel > 0
+                        ? 'OWNED'
+                        : 'LOCKED'
+                      : `Mk${currentLevel}`}
               </div>
             </div>
             <button
@@ -384,6 +412,40 @@ function BuyPanel({
           {hasLazer ? 'OWNED' : `${LAZER_COST}`}
         </button>
       </div>
+
+      {/* Drone fleet — separate from the cap upgrade since it's a recurring
+          spend. Disabled when at cap or can't afford. */}
+      {upgrades.drone > 0 && (
+        <div className="text-white/60 text-sm mb-1 mt-2">DRONE FLEET</div>
+      )}
+      {upgrades.drone > 0 && (
+        <div
+          className="flex items-center justify-between p-3 rounded border border-hud-amber/30 bg-hud-amber/5"
+          data-testid="drone-build-item"
+        >
+          <div className="flex-1">
+            <div className="text-sm font-bold text-hud-amber">Build Mining Drone</div>
+            <div className="text-sm text-white/40">
+              Active {droneCount}/{upgrades.drone} — drills large rocks, returns scrap fast
+            </div>
+          </div>
+          <button
+            data-menu-item
+            data-menu-sound="buy"
+            onClick={onBuildDrone}
+            disabled={droneCount >= upgrades.drone || scrap < MINING_DRONE_BUILD_COST}
+            className={`ml-3 px-5 py-3 min-h-[44px] rounded text-sm font-bold tracking-wider transition-all focus:outline-none focus:ring-2 focus:ring-hud-amber ${
+              droneCount >= upgrades.drone
+                ? 'bg-white/5 border border-white/10 text-white/20 cursor-not-allowed'
+                : scrap >= MINING_DRONE_BUILD_COST
+                  ? 'bg-hud-amber/20 border border-hud-amber/60 text-hud-amber hover:bg-hud-amber/40'
+                  : 'bg-white/5 border border-white/10 text-white/20 cursor-not-allowed'
+            }`}
+          >
+            {droneCount >= upgrades.drone ? 'CAP' : `${MINING_DRONE_BUILD_COST}`}
+          </button>
+        </div>
+      )}
     </div>
   )
 }

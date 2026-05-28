@@ -120,9 +120,9 @@ type ScreenMode = 'main' | 'new-game' | 'load-game' | 'credits'
 function CreditSection({ role, lines }: { role: string; lines: string[] }) {
   return (
     <div className="flex flex-col items-center gap-1">
-      <p className="font-mono text-xs tracking-[0.22em] text-hud-amber/70 uppercase">{role}</p>
+      <p className="font-sans text-xs tracking-[0.22em] text-hud-amber/70 uppercase">{role}</p>
       {lines.map((line) => (
-        <p key={line} className="font-mono text-sm md:text-base text-white/85 text-center">
+        <p key={line} className="font-sans text-sm md:text-base text-white/85 text-center">
           {line}
         </p>
       ))}
@@ -296,12 +296,12 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
       <div className="menu-scanlines" aria-hidden="true" />
 
       {/* Title */}
-      <h1 className="menu-title font-mono text-4xl md:text-6xl font-bold text-hud-green mb-2 tracking-widest text-center relative">
+      <h1 className="menu-title font-display text-4xl md:text-6xl text-hud-green mb-2 tracking-widest text-center relative">
         FRAK&apos;N
         <br />
         FRAK&apos;R
       </h1>
-      <p className="font-mono text-sm md:text-base text-hud-amber/70 mb-12 relative">
+      <p className="font-sans text-sm md:text-base text-hud-amber/70 mb-12 relative">
         Blast. Collect. Scrap. Upgrade.
       </p>
 
@@ -311,7 +311,7 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
           <button
             data-menu-item
             onClick={() => setMode('new-game')}
-            className="px-8 py-4 bg-space-800/80 border border-hud-green/50 rounded text-hud-green font-mono text-lg hover:bg-space-700/80 hover:border-hud-green focus:bg-space-700/80 focus:border-hud-green focus:outline-none focus:ring-2 focus:ring-hud-green focus:scale-[1.02] active:scale-95 transition-all min-w-[220px]"
+            className="px-8 py-4 bg-space-800/80 border border-hud-green/50 rounded text-hud-green font-sans text-lg hover:bg-space-700/80 hover:border-hud-green focus:bg-space-700/80 focus:border-hud-green focus:outline-none focus:ring-2 focus:ring-hud-green focus:scale-[1.02] active:scale-95 transition-all min-w-[220px]"
           >
             NEW GAME
           </button>
@@ -319,14 +319,14 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
             data-menu-item
             onClick={() => setMode('load-game')}
             disabled={populatedSlots.length === 0}
-            className="px-8 py-4 bg-space-800/80 border border-hud-blue/50 rounded text-hud-blue font-mono text-lg hover:bg-space-700/80 hover:border-hud-blue focus:bg-space-700/80 focus:border-hud-blue focus:outline-none focus:ring-2 focus:ring-hud-blue focus:scale-[1.02] active:scale-95 transition-all min-w-[220px] disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-space-800/80 disabled:hover:border-hud-blue/50"
+            className="px-8 py-4 bg-space-800/80 border border-hud-blue/50 rounded text-hud-blue font-sans text-lg hover:bg-space-700/80 hover:border-hud-blue focus:bg-space-700/80 focus:border-hud-blue focus:outline-none focus:ring-2 focus:ring-hud-blue focus:scale-[1.02] active:scale-95 transition-all min-w-[220px] disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-space-800/80 disabled:hover:border-hud-blue/50"
           >
             LOAD GAME
           </button>
           <button
             data-menu-item
             onClick={() => setMode('credits')}
-            className="px-8 py-4 bg-space-800/80 border border-hud-amber/50 rounded text-hud-amber font-mono text-lg hover:bg-space-700/80 hover:border-hud-amber focus:bg-space-700/80 focus:border-hud-amber focus:outline-none focus:ring-2 focus:ring-hud-amber focus:scale-[1.02] active:scale-95 transition-all min-w-[220px]"
+            className="px-8 py-4 bg-space-800/80 border border-hud-amber/50 rounded text-hud-amber font-sans text-lg hover:bg-space-700/80 hover:border-hud-amber focus:bg-space-700/80 focus:border-hud-amber focus:outline-none focus:ring-2 focus:ring-hud-amber focus:scale-[1.02] active:scale-95 transition-all min-w-[220px]"
           >
             CREDITS
           </button>
@@ -357,7 +357,7 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
             data-menu-item
             data-menu-back
             onClick={handleBack}
-            className="mt-2 px-6 py-3 min-h-[44px] text-white/40 font-mono text-base hover:text-white/70 focus:text-white focus:outline-none focus:ring-2 focus:ring-white/40 rounded transition-colors"
+            className="mt-2 px-6 py-3 min-h-[44px] text-white/40 font-sans text-base hover:text-white/70 focus:text-white focus:outline-none focus:ring-2 focus:ring-white/40 rounded transition-colors"
           >
             BACK
           </button>
@@ -367,7 +367,7 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
       {/* New Game Slot Picker */}
       {mode === 'new-game' && !confirmSlot && (
         <div className="flex flex-col gap-3 relative w-full max-w-sm px-4">
-          <p className="font-mono text-sm text-white/60 text-center mb-2">Select a save slot</p>
+          <p className="font-sans text-sm text-white/60 text-center mb-2">Select a save slot</p>
           {SAVE_SLOT_IDS.map((slotId, i) => {
             const summary = summaries.get(slotId)
             return (
@@ -375,7 +375,7 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
                 key={slotId}
                 data-menu-item
                 onClick={() => handleNewGameSlot(slotId)}
-                className="px-6 py-3.5 min-h-[52px] bg-space-800/80 border border-hud-green/30 rounded font-mono text-base hover:bg-space-700/80 hover:border-hud-green/60 focus:bg-space-700/80 focus:border-hud-green focus:outline-none focus:ring-2 focus:ring-hud-green active:scale-[0.98] transition-all text-left"
+                className="px-6 py-3.5 min-h-[52px] bg-space-800/80 border border-hud-green/30 rounded font-sans text-base hover:bg-space-700/80 hover:border-hud-green/60 focus:bg-space-700/80 focus:border-hud-green focus:outline-none focus:ring-2 focus:ring-hud-green active:scale-[0.98] transition-all text-left"
               >
                 <SlotLabel index={i} />
                 {summary ? (
@@ -390,7 +390,7 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
             data-menu-item
             data-menu-back
             onClick={handleBack}
-            className="mt-2 px-6 py-3 min-h-[44px] text-white/40 font-mono text-base hover:text-white/70 focus:text-white focus:outline-none focus:ring-2 focus:ring-white/40 rounded transition-colors"
+            className="mt-2 px-6 py-3 min-h-[44px] text-white/40 font-sans text-base hover:text-white/70 focus:text-white focus:outline-none focus:ring-2 focus:ring-white/40 rounded transition-colors"
           >
             BACK
           </button>
@@ -400,7 +400,7 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
       {/* Confirm Overwrite */}
       {mode === 'new-game' && confirmSlot && (
         <div className="flex flex-col gap-4 items-center relative">
-          <p className="font-mono text-sm text-hud-red text-center">
+          <p className="font-sans text-sm text-hud-red text-center">
             This slot has saved data.
             <br />
             Start a new game and overwrite it?
@@ -409,7 +409,7 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
             <button
               data-menu-item
               onClick={handleConfirmOverwrite}
-              className="px-6 py-3.5 min-h-[48px] bg-space-800/80 border border-hud-red/50 rounded text-hud-red font-mono text-base hover:bg-space-700/80 hover:border-hud-red focus:bg-space-700/80 focus:border-hud-red focus:outline-none focus:ring-2 focus:ring-hud-red active:scale-95 transition-all"
+              className="px-6 py-3.5 min-h-[48px] bg-space-800/80 border border-hud-red/50 rounded text-hud-red font-sans text-base hover:bg-space-700/80 hover:border-hud-red focus:bg-space-700/80 focus:border-hud-red focus:outline-none focus:ring-2 focus:ring-hud-red active:scale-95 transition-all"
             >
               OVERWRITE
             </button>
@@ -417,7 +417,7 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
               data-menu-item
               data-menu-back
               onClick={() => setConfirmSlot(null)}
-              className="px-6 py-3.5 min-h-[48px] bg-space-800/80 border border-white/20 rounded text-white/60 font-mono text-base hover:bg-space-700/80 hover:text-white/80 focus:bg-space-700/80 focus:text-white focus:outline-none focus:ring-2 focus:ring-white/40 active:scale-95 transition-all"
+              className="px-6 py-3.5 min-h-[48px] bg-space-800/80 border border-white/20 rounded text-white/60 font-sans text-base hover:bg-space-700/80 hover:text-white/80 focus:bg-space-700/80 focus:text-white focus:outline-none focus:ring-2 focus:ring-white/40 active:scale-95 transition-all"
             >
               CANCEL
             </button>
@@ -428,7 +428,7 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
       {/* Load Game Slot Picker */}
       {mode === 'load-game' && (
         <div className="flex flex-col gap-3 relative w-full max-w-sm px-4">
-          <p className="font-mono text-sm text-white/60 text-center mb-2">Select a save to load</p>
+          <p className="font-sans text-sm text-white/60 text-center mb-2">Select a save to load</p>
           {SAVE_SLOT_IDS.map((slotId, i) => {
             const summary = summaries.get(slotId)
             const isEmpty = !summary
@@ -438,7 +438,7 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
                 data-menu-item
                 onClick={() => !isEmpty && onLoadGame(slotId)}
                 disabled={isEmpty}
-                className="px-6 py-3.5 min-h-[52px] bg-space-800/80 border border-hud-blue/30 rounded font-mono text-base hover:bg-space-700/80 hover:border-hud-blue/60 focus:bg-space-700/80 focus:border-hud-blue focus:outline-none focus:ring-2 focus:ring-hud-blue active:scale-[0.98] transition-all text-left disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-space-800/80 disabled:hover:border-hud-blue/30"
+                className="px-6 py-3.5 min-h-[52px] bg-space-800/80 border border-hud-blue/30 rounded font-sans text-base hover:bg-space-700/80 hover:border-hud-blue/60 focus:bg-space-700/80 focus:border-hud-blue focus:outline-none focus:ring-2 focus:ring-hud-blue active:scale-[0.98] transition-all text-left disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-space-800/80 disabled:hover:border-hud-blue/30"
               >
                 <SlotLabel index={i} />
                 {summary ? (
@@ -453,7 +453,7 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
             data-menu-item
             data-menu-back
             onClick={handleBack}
-            className="mt-2 px-6 py-3 min-h-[44px] text-white/40 font-mono text-base hover:text-white/70 focus:text-white focus:outline-none focus:ring-2 focus:ring-white/40 rounded transition-colors"
+            className="mt-2 px-6 py-3 min-h-[44px] text-white/40 font-sans text-base hover:text-white/70 focus:text-white focus:outline-none focus:ring-2 focus:ring-white/40 rounded transition-colors"
           >
             BACK
           </button>

@@ -89,15 +89,15 @@ export function TitleScreen({ onBegin }: TitleScreenProps) {
       </div>
 
       <div className="relative z-10 flex flex-col items-center px-6">
-        <h1 className="menu-title font-mono text-4xl sm:text-5xl md:text-7xl font-bold text-hud-green tracking-widest">
+        <h1 className="menu-title font-display text-4xl sm:text-5xl md:text-7xl text-hud-green tracking-widest">
           FRAK&apos;N
           <br />
           FRAK&apos;R
         </h1>
-        <p className="mt-8 font-mono text-sm sm:text-base md:text-lg tracking-[0.28em] text-hud-amber/80">
+        <p className="mt-8 font-sans text-sm sm:text-base md:text-lg tracking-[0.28em] text-hud-amber/80">
           CLICK, TAP, OR PRESS ENTER
         </p>
-        <p className="mt-3 font-mono text-xs sm:text-sm tracking-[0.2em] text-white/45">TO BEGIN</p>
+        <p className="mt-3 font-sans text-xs sm:text-sm tracking-[0.2em] text-white/45">TO BEGIN</p>
       </div>
     </button>
   )

@@ -43,6 +43,8 @@ import type { DebrisChunk } from './asteroid-debris'
 import { disposeMetalChunk } from './metal-chunk'
 import type { MiningTool } from './types'
 import { PREFERRED_TOOL } from './types'
+import { createMiningDrone } from './mining-drone'
+import type { MiningDroneState } from './mining-drone'
 import {
   tick,
   createTickState,
@@ -186,6 +188,8 @@ export interface GameSceneOptions {
   /** Endless mode — fired once when the player's hull is lost. */
   onRunEnded?: (stats: RunStats) => void
   onShieldChanged?: (charges: number) => void
+  /** Fires whenever the active mining drone count changes (build/destroy). */
+  onMiningDroneCountChanged?: (count: number) => void
   onArmorChanged?: (charges: number) => void
   onSmartBomb?: () => void
   // Prologue callbacks
@@ -202,6 +206,14 @@ export interface GameScene {
   setMiningTool: (tool: MiningTool) => void
   setCollectorTier: (tier: number) => void
   setCombatUpgrades: (upgrades: Upgrades) => void
+  /**
+   * Build a new player mining drone at the ship. Returns true if a drone
+   * was created (i.e. current count < cap), false if the cap is already
+   * met. The page layer is responsible for charging scrap before calling.
+   */
+  buildMiningDrone: () => boolean
+  /** Current count of active mining drones (for the trade menu UI). */
+  getMiningDroneCount: () => number
   respawnAfterDeath: () => void
 }
 
@@ -235,6 +247,7 @@ export function createGameScene(
   const onArbiterEvent = options?.onArbiterEvent
   const onRunEnded = options?.onRunEnded
   const onShieldChanged = options?.onShieldChanged
+  const onMiningDroneCountChanged = options?.onMiningDroneCountChanged
   const onArmorChanged = options?.onArmorChanged
   const onSmartBomb = options?.onSmartBomb
   const onPrologueReady = options?.onPrologueReady
@@ -339,6 +352,114 @@ export function createGameScene(
 
   shieldVisual.visible = false
   scene.add(shieldVisual)
+
+  // Aim guide — thin line from the ship to the player's aim point, plus a
+  // small ring at the endpoint. Amber so it never collides with enemy red,
+  // blaster orange (more saturated), or lazer/shield cyans.
+  const AIM_COLOR = 0xffd866
+  const aimLineGeom = new THREE.BufferGeometry()
+  aimLineGeom.setAttribute(
+    'position',
+    new THREE.BufferAttribute(new Float32Array([0, 0, 0.5, 0, 0, 0.5]), 3),
+  )
+  const aimLine = new THREE.Line(
+    aimLineGeom,
+    new THREE.LineBasicMaterial({
+      color: AIM_COLOR,
+      transparent: true,
+      opacity: 0.5,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    }),
+  )
+  aimLine.visible = false
+  aimLine.renderOrder = 10
+  scene.add(aimLine)
+
+  const aimReticle = new THREE.Mesh(
+    new THREE.RingGeometry(2.2, 2.8, 24),
+    new THREE.MeshBasicMaterial({
+      color: AIM_COLOR,
+      transparent: true,
+      opacity: 0.75,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    }),
+  )
+  aimReticle.visible = false
+  aimReticle.renderOrder = 10
+  scene.add(aimReticle)
+
+  // --- Mining drones (player-built) ---
+  const miningDroneGroup = new THREE.Group()
+  scene.add(miningDroneGroup)
+  const miningDroneMeshes = new Map<string, THREE.Group>()
+
+  // Per-state status-light colors so the player can read at a glance what
+  // each drone is doing.
+  const DRONE_STATE_COLOR: Record<MiningDroneState, number> = {
+    seeking: 0x88ccff,
+    drilling: 0xff8833,
+    returning: 0x77ffcc,
+    retreating: 0xff4466,
+  }
+
+  function createDroneMesh(): THREE.Group {
+    const g = new THREE.Group()
+    // Body — small triangular plate angled to suggest a forward direction.
+    const bodyGeom = new THREE.ConeGeometry(1.6, 3.2, 5)
+    const body = new THREE.Mesh(
+      bodyGeom,
+      new THREE.MeshStandardMaterial({
+        color: 0x445566,
+        emissive: 0x223344,
+        emissiveIntensity: 0.4,
+        metalness: 0.5,
+        roughness: 0.4,
+      }),
+    )
+    body.rotation.x = Math.PI / 2
+    g.add(body)
+
+    // Glowing status-light core, recolored each frame based on drone state.
+    const core = new THREE.Mesh(
+      new THREE.SphereGeometry(0.55, 12, 8),
+      new THREE.MeshBasicMaterial({
+        color: 0x88ccff,
+        transparent: true,
+        opacity: 0.95,
+      }),
+    )
+    core.position.z = 0.6
+    core.name = 'core'
+    g.add(core)
+
+    // Soft halo around the core for visibility against bright backdrops.
+    const halo = new THREE.Mesh(
+      new THREE.SphereGeometry(1.1, 12, 8),
+      new THREE.MeshBasicMaterial({
+        color: 0x88ccff,
+        transparent: true,
+        opacity: 0.35,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      }),
+    )
+    halo.position.z = 0.6
+    halo.name = 'halo'
+    g.add(halo)
+    return g
+  }
+
+  function disposeDroneMesh(mesh: THREE.Group): void {
+    mesh.traverse((obj) => {
+      if (obj instanceof THREE.Mesh) {
+        obj.geometry.dispose()
+        if (obj.material instanceof THREE.Material) obj.material.dispose()
+      }
+    })
+    miningDroneGroup.remove(mesh)
+  }
 
   // --- Arbiter (added to scene during prologue-arbiter step) ---
   let arbiterModel: THREE.Group | null = null
@@ -592,6 +713,9 @@ export function createGameScene(
   }
 
   function onToolToggleKeyDown(e: KeyboardEvent): void {
+    // Ignore OS key-repeat — without this, even a brief hold cycles past
+    // the tool the player meant to land on.
+    if (e.repeat) return
     if (e.code === 'KeyQ') {
       toggleMiningTool()
     }
@@ -1628,6 +1752,81 @@ export function createGameScene(
       shipModel.rotation.z = ship.rotation
       rechargeMeter.position.set(ship.x, ship.y, 0)
       syncOptionOrbs()
+
+      // Mining drones — remove meshes for destroyed drones, then sync the
+      // remaining drone positions and status-light colors. Meshes are
+      // created lazily on first frame after build.
+      for (const id of result.destroyedDroneIds) {
+        const mesh = miningDroneMeshes.get(id)
+        if (mesh) {
+          disposeDroneMesh(mesh)
+          miningDroneMeshes.delete(id)
+        }
+      }
+      if (result.destroyedDroneIds.length > 0) {
+        onMiningDroneCountChanged?.(tickState.miningDrones.length)
+      }
+      const liveDroneIds = new Set<string>()
+      for (const drone of tickState.miningDrones) {
+        liveDroneIds.add(drone.id)
+        let mesh = miningDroneMeshes.get(drone.id)
+        if (!mesh) {
+          mesh = createDroneMesh()
+          miningDroneMeshes.set(drone.id, mesh)
+          miningDroneGroup.add(mesh)
+        }
+        mesh.position.set(drone.x, drone.y, 0.6)
+        const color = DRONE_STATE_COLOR[drone.state]
+        const core = mesh.getObjectByName('core') as THREE.Mesh | undefined
+        const halo = mesh.getObjectByName('halo') as THREE.Mesh | undefined
+        if (core && core.material instanceof THREE.MeshBasicMaterial) {
+          core.material.color.setHex(color)
+          // Pulse drilling/retreating cores so they read as "busy" or "hurt".
+          const pulse = drone.state === 'drilling' || drone.state === 'retreating'
+            ? 0.7 + Math.sin(now / 60) * 0.3
+            : 0.95
+          core.material.opacity = pulse
+        }
+        if (halo && halo.material instanceof THREE.MeshBasicMaterial) {
+          halo.material.color.setHex(color)
+        }
+        // Spin to face direction of travel when moving; otherwise hold a
+        // gentle bob so idle drones don't look frozen.
+        const speedSq = drone.vx * drone.vx + drone.vy * drone.vy
+        if (speedSq > 0.01) {
+          mesh.rotation.z = Math.atan2(drone.vy, drone.vx) - Math.PI / 2
+        }
+      }
+      // Tidy: any mesh whose drone no longer exists in state gets disposed.
+      for (const [id, mesh] of miningDroneMeshes) {
+        if (!liveDroneIds.has(id)) {
+          disposeDroneMesh(mesh)
+          miningDroneMeshes.delete(id)
+        }
+      }
+
+      // Drone scrap delivery — credit the player wallet via the existing
+      // scrap-collect callback so the HUD updates and the save triggers.
+      if (result.droneScrapDelivered > 0) {
+        onScrapCollect?.(result.droneScrapDelivered)
+      }
+
+      // Aim guide — line from ship to aim point, with reticle ring at the
+      // tip. Hidden while paused or when no aim is being tracked.
+      if (!paused && aimWorldPosition) {
+        const pos = aimLineGeom.attributes.position as THREE.BufferAttribute
+        pos.setXYZ(0, ship.x, ship.y, 0.5)
+        pos.setXYZ(1, aimWorldPosition.x, aimWorldPosition.y, 0.5)
+        pos.needsUpdate = true
+        aimLine.visible = true
+        aimReticle.position.set(aimWorldPosition.x, aimWorldPosition.y, 0.5)
+        const pulse = 1 + Math.sin(now / 140) * 0.12
+        aimReticle.scale.setScalar(pulse)
+        aimReticle.visible = true
+      } else {
+        aimLine.visible = false
+        aimReticle.visible = false
+      }
       shieldVisual.visible = tickState.shieldCharges > 0
       shieldVisual.position.set(ship.x, ship.y, 1.3)
       shieldVisual.scale.setScalar(1 + tickState.shieldCharges * 0.12 + Math.sin(now / 120) * 0.04)
@@ -1895,6 +2094,7 @@ export function createGameScene(
     tickState.armorCharges = upgrades.armor
     tickState.shieldCharges = upgrades.shield
     tickState.smartBombCount = upgrades.smartBomb
+    tickState.miningDroneCap = upgrades.drone
     lazerUnlocked = upgrades.lazer > 0
     tickState.autoToolUnlocked = upgrades.autoTool > 0
     // If the currently-selected tool is no longer unlocked, fall back to
@@ -2185,6 +2385,22 @@ export function createGameScene(
     setMiningTool,
     setCollectorTier,
     setCombatUpgrades,
+    buildMiningDrone() {
+      if (tickState.miningDrones.length >= tickState.miningDroneCap) return false
+      // Spawn slightly offset from the ship so meshes don't all stack on top
+      // of each other when the player builds a fresh batch at the station.
+      const idx = tickState.miningDrones.length
+      const offsetAngle = (idx / 4) * Math.PI * 2
+      const drone = createMiningDrone(
+        ship.x + Math.cos(offsetAngle) * 6,
+        ship.y + Math.sin(offsetAngle) * 6,
+      )
+      tickState.miningDrones.push(drone)
+      return true
+    },
+    getMiningDroneCount() {
+      return tickState.miningDrones.length
+    },
     respawnAfterDeath,
   }
 }

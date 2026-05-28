@@ -13,6 +13,8 @@
 import type { Ship } from '@/lib/schemas'
 import type { Asteroid, MiningTool, Projectile } from './types'
 import { WEAPON_AFFINITY } from './types'
+import type { MiningDrone } from './mining-drone'
+import { updateMiningDrones, applyDroneHit, MINING_DRONE_COLLISION_RADIUS } from './mining-drone'
 import type { InputState } from './input'
 import type { BlasterState, LazerState } from './blaster'
 import type { MetalChunk } from './metal-chunk'
@@ -157,6 +159,10 @@ export interface TickState {
   missileTier: number
   rippleUnlocked: boolean
   autoToolUnlocked: boolean
+  /** Max active mining drones (player's drone upgrade tier). */
+  miningDroneCap: number
+  /** All currently-built player mining drones. Built one-at-a-time at station. */
+  miningDrones: MiningDrone[]
   optionCount: number
   speedTier: number
   armorCharges: number
@@ -285,6 +291,12 @@ export interface TickResult {
   // Collection events
   metalCollected: { id: string; variant: MetalVariant }[]
   scrapCollected: { id: string; value: number }[]
+  /** Scrap deposited by mining drones returning to the ship this tick. */
+  droneScrapDelivered: number
+  /** Drone IDs destroyed by enemy fire this tick — scene removes their meshes. */
+  destroyedDroneIds: string[]
+  /** Scrap value snatched by enemies that shot a carrying drone this tick. */
+  scrapStolenByEnemies: number
   // Enemy lifecycle
   enemySpawned: EnemyShip | null
   enemyDestroyed: { x: number; y: number } | null
@@ -416,6 +428,8 @@ export function createTickState(config?: TickStateConfig): TickState {
     missileTier: config?.missileTier ?? 0,
     rippleUnlocked: config?.rippleUnlocked ?? false,
     autoToolUnlocked: false,
+    miningDroneCap: 0,
+    miningDrones: [],
     optionCount: config?.optionCount ?? 0,
     speedTier: config?.speedTier ?? 0,
     armorCharges: config?.armorCharges ?? 0,
@@ -499,6 +513,9 @@ function emptyResult(): TickResult {
     newMetalChunks: [],
     metalCollected: [],
     scrapCollected: [],
+    droneScrapDelivered: 0,
+    destroyedDroneIds: [],
+    scrapStolenByEnemies: 0,
     enemySpawned: null,
     enemyDestroyed: null,
     enemyDamaged: [],
@@ -788,6 +805,46 @@ function steerMissiles(state: TickState, dt: number): void {
       }
     }
   }
+}
+
+/**
+ * Bend a newly-spawned enemy projectile toward the nearest mining drone if
+ * that drone is closer than ~40% of the player's distance. Re-aiming uses
+ * the projectile's current speed so the firing rate / damage feel doesn't
+ * change. Mutates the projectile in place.
+ */
+function redirectEnemyShotAtDrone(
+  proj: EnemyProjectile,
+  shooterX: number,
+  shooterY: number,
+  player: Ship,
+  drones: MiningDrone[],
+): void {
+  if (drones.length === 0) return
+  const playerDx = player.x - shooterX
+  const playerDy = player.y - shooterY
+  const playerDist = Math.hypot(playerDx, playerDy)
+  if (playerDist < 1) return
+  let best: MiningDrone | null = null
+  let bestDist = playerDist * 0.4
+  for (const d of drones) {
+    const dx = d.x - shooterX
+    const dy = d.y - shooterY
+    const dist = Math.hypot(dx, dy)
+    if (dist < bestDist) {
+      bestDist = dist
+      best = d
+    }
+  }
+  if (!best) return
+  const speed = Math.hypot(proj.vx, proj.vy)
+  if (speed < 0.001) return
+  const dx = best.x - shooterX
+  const dy = best.y - shooterY
+  const dist = Math.hypot(dx, dy)
+  if (dist < 0.001) return
+  proj.vx = (dx / dist) * speed
+  proj.vy = (dy / dist) * speed
 }
 
 function absorbDamageWithShield(state: TickState, result: TickResult): boolean {
@@ -1774,6 +1831,11 @@ export function tick(state: TickState, input: TickInput): TickResult {
 
     const newEnemyProjs = updateEnemyShip(state.enemy, state.ship, dt, state.asteroids)
     for (const proj of newEnemyProjs) {
+      // Aggro split: if a mining drone is within ~40% of the player distance,
+      // bend this shot toward the drone instead. Gives drones their stated
+      // role as bullet-magnets while still letting enemies pressure the ship
+      // when no drones are exposed.
+      redirectEnemyShotAtDrone(proj, state.enemy.x, state.enemy.y, state.ship, state.miningDrones)
       state.enemyProjectiles.push(proj)
       result.newEnemyProjectiles.push(proj)
     }
@@ -1834,6 +1896,50 @@ export function tick(state: TickState, input: TickInput): TickResult {
         damagePlayer(state, result, damage, endlessActive)
         result.enemyProjectileHits.push({ id: proj.id, x: proj.x, y: proj.y, damage })
         state.enemyProjectiles.splice(i, 1)
+      }
+    }
+  }
+
+  // --- Mining drone state machine ---
+  // Drones are owned by tick state but their build/spawn happens at the
+  // station (page.tsx). Tick just advances the AI, deposits scrap, and
+  // applies enemy-projectile damage to drones.
+  if (state.miningDrones.length > 0) {
+    const droneOutcome = updateMiningDrones(
+      state.miningDrones,
+      state.asteroids,
+      state.ship.x,
+      state.ship.y,
+      dt,
+    )
+    if (droneOutcome.scrapDeposited > 0) {
+      result.droneScrapDelivered += droneOutcome.scrapDeposited
+    }
+  }
+
+  // --- Enemy projectile → mining drone collision ---
+  if (state.enemyProjectiles.length > 0 && state.miningDrones.length > 0) {
+    for (let i = state.enemyProjectiles.length - 1; i >= 0; i--) {
+      const proj = state.enemyProjectiles[i]
+      let hitDroneIdx = -1
+      for (let d = 0; d < state.miningDrones.length; d++) {
+        const drone = state.miningDrones[d]
+        const dx = drone.x - proj.x
+        const dy = drone.y - proj.y
+        if (dx * dx + dy * dy <= MINING_DRONE_COLLISION_RADIUS * MINING_DRONE_COLLISION_RADIUS) {
+          hitDroneIdx = d
+          break
+        }
+      }
+      if (hitDroneIdx === -1) continue
+      const drone = state.miningDrones[hitDroneIdx]
+      const outcome = applyDroneHit(drone, proj.damage)
+      result.scrapStolenByEnemies += outcome.stolenScrap
+      result.enemyProjectileHits.push({ id: proj.id, x: proj.x, y: proj.y, damage: 0 })
+      state.enemyProjectiles.splice(i, 1)
+      if (outcome.destroyed) {
+        result.destroyedDroneIds.push(drone.id)
+        state.miningDrones.splice(hitDroneIdx, 1)
       }
     }
   }

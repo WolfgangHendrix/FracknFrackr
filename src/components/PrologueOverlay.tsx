@@ -37,7 +37,7 @@ function FadingText({ text, color = 'text-hud-green' }: { text: string; color?: 
 
   return (
     <p
-      className={`font-mono text-sm sm:text-base ${color} animate-pulse transition-opacity duration-500`}
+      className={`font-sans text-sm sm:text-base ${color} animate-pulse transition-opacity duration-500`}
     >
       {text}
     </p>
@@ -93,7 +93,7 @@ function ArbiterDialogue({ onComplete }: { onComplete: () => void }) {
       {ARBITER_DIALOGUE.slice(0, lineIndex + 1).map((line, i) => (
         <p
           key={i}
-          className={`font-mono text-sm sm:text-lg tracking-wide ${
+          className={`font-sans text-sm sm:text-lg tracking-wide ${
             i === lineIndex && !allRevealed ? 'text-hud-red animate-pulse' : 'text-hud-red/60'
           }`}
         >
@@ -172,7 +172,7 @@ export function PrologueOverlay({ step, onSkip, onDialogueComplete }: PrologueOv
     <div className="absolute inset-0 pointer-events-none" data-testid="prologue-overlay">
       {/* Persistent content panel (start, arbiter dialogue, strip) */}
       {showPanel && (
-        <div className="absolute top-24 sm:top-28 left-1/2 -translate-x-1/2 w-auto max-w-[80vw] sm:max-w-md px-4 sm:px-6 py-3 sm:py-4 bg-space-800/80 border border-hud-green/30 rounded-lg font-mono text-center">
+        <div className="absolute top-24 sm:top-28 left-1/2 -translate-x-1/2 w-auto max-w-[80vw] sm:max-w-md px-4 sm:px-6 py-3 sm:py-4 bg-space-800/80 border border-hud-green/30 rounded-lg font-sans text-center">
           {step === 'prologue-start' && (
             <p className="text-hud-green text-sm sm:text-base animate-pulse">
               Systems online. Full power.
@@ -199,7 +199,7 @@ export function PrologueOverlay({ step, onSkip, onDialogueComplete }: PrologueOv
 
       {/* Fading text during free-play mining phase */}
       {step === 'prologue-mining' && (
-        <div className="absolute top-24 sm:top-28 left-1/2 -translate-x-1/2 font-mono text-center">
+        <div className="absolute top-24 sm:top-28 left-1/2 -translate-x-1/2 font-sans text-center">
           <FadingText text="Clear the field." />
         </div>
       )}
@@ -208,7 +208,7 @@ export function PrologueOverlay({ step, onSkip, onDialogueComplete }: PrologueOv
       {(step === 'prologue-arbiter' ||
         step === 'prologue-dialogue' ||
         step === 'prologue-strip') && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 font-mono">
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 font-sans">
           <p className="text-hud-red/50 text-xs uppercase tracking-[0.3em]">
             Stuck in Tractor Beam
           </p>
@@ -221,7 +221,7 @@ export function PrologueOverlay({ step, onSkip, onDialogueComplete }: PrologueOv
           <button
             data-menu-item
             onClick={handleSkipClick}
-            className="pointer-events-auto px-4 py-3 min-h-[44px] inline-flex items-center justify-center text-white/30 hover:text-white/60 focus:text-white/90 focus:outline-none focus:ring-2 focus:ring-white/40 rounded text-sm font-mono transition-colors"
+            className="pointer-events-auto px-4 py-3 min-h-[44px] inline-flex items-center justify-center text-white/30 hover:text-white/60 focus:text-white/90 focus:outline-none focus:ring-2 focus:ring-white/40 rounded text-sm font-sans transition-colors"
             data-testid="prologue-skip"
           >
             SKIP INTRO
@@ -232,12 +232,12 @@ export function PrologueOverlay({ step, onSkip, onDialogueComplete }: PrologueOv
             className="flex flex-col items-center gap-2 pointer-events-auto"
             data-testid="prologue-skip-confirm"
           >
-            <p className="text-white/50 text-sm font-mono">Skip the intro?</p>
+            <p className="text-white/50 text-sm font-sans">Skip the intro?</p>
             <div className="flex gap-3">
               <button
                 data-menu-item
                 onClick={handleSkipClick}
-                className="px-5 py-3 min-h-[44px] text-hud-red text-sm font-mono border border-hud-red/40 rounded hover:bg-hud-red/20 focus:bg-hud-red/30 focus:outline-none focus:ring-2 focus:ring-hud-red transition-colors"
+                className="px-5 py-3 min-h-[44px] text-hud-red text-sm font-sans border border-hud-red/40 rounded hover:bg-hud-red/20 focus:bg-hud-red/30 focus:outline-none focus:ring-2 focus:ring-hud-red transition-colors"
                 data-testid="prologue-skip-yes"
               >
                 YES
@@ -246,7 +246,7 @@ export function PrologueOverlay({ step, onSkip, onDialogueComplete }: PrologueOv
                 data-menu-item
                 data-menu-back
                 onClick={handleCancelSkip}
-                className="px-5 py-3 min-h-[44px] text-white/50 text-sm font-mono border border-white/20 rounded hover:bg-white/10 focus:bg-white/20 focus:outline-none focus:ring-2 focus:ring-white/40 transition-colors"
+                className="px-5 py-3 min-h-[44px] text-white/50 text-sm font-sans border border-white/20 rounded hover:bg-white/10 focus:bg-white/20 focus:outline-none focus:ring-2 focus:ring-white/40 transition-colors"
                 data-testid="prologue-skip-no"
               >
                 NO

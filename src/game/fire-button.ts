@@ -58,7 +58,7 @@ export function createToolToggleButton(
 
   const label = document.createElement('div')
   label.style.cssText =
-    `color:${rgba(STYLE_FIRE, 0.9)};font-family:monospace;font-weight:bold;` +
+    `color:${rgba(STYLE_FIRE, 0.9)};font-family:var(--font-rubik), ui-sans-serif, sans-serif;font-weight:bold;` +
     `font-size:${Math.round(size * 0.22)}px;pointer-events:none;text-align:center;` +
     `line-height:1.1;`
   label.textContent = 'BLS'

@@ -23,6 +23,8 @@ const config: Config = {
         },
       },
       fontFamily: {
+        sans: ['var(--font-rubik)', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        display: ['var(--font-rubik-mono-one)', 'ui-monospace', 'monospace'],
         mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace'],
       },
     },

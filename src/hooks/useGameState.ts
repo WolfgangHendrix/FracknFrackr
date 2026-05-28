@@ -35,6 +35,7 @@ const UPGRADE_MAX: Record<keyof Upgrades, number> = {
   smartBomb: 1,
   lazer: 1,
   autoTool: 1,
+  drone: 4,
 }
 
 export interface GameStateHook {
@@ -53,6 +54,7 @@ export interface GameStateHook {
   setUpgradeLevel: (type: keyof Upgrades, value: number) => void
   spendScrap: (amount: number) => boolean
   resetRunCargo: () => void
+  resetForRunStart: () => void
   hydrateFromSave: (state: GameState) => void
   achievements: string[]
   setAchievements: React.Dispatch<React.SetStateAction<string[]>>
@@ -159,6 +161,19 @@ export function useGameState(): GameStateHook {
     })
   }, [])
 
+  /** Wipe scrap AND cargo — used when the prologue ends so the player can't
+   * front-load scrap mined during the maxed-out intro ship. */
+  const resetForRunStart = useCallback(() => {
+    setScrap(0)
+    setCargo((prev) => {
+      const cleared = MINERAL_KEYS.reduce(
+        (acc, k) => ({ ...acc, [k]: 0 }),
+        {} as Record<(typeof MINERAL_KEYS)[number], number>,
+      )
+      return { ...prev, ...cleared, fragments: 0 }
+    })
+  }, [])
+
   /** Deduct scrap if affordable. Returns true on success. */
   const spendScrap = useCallback((amount: number): boolean => {
     let success = false
@@ -204,6 +219,7 @@ export function useGameState(): GameStateHook {
     setUpgradeLevel,
     spendScrap,
     resetRunCargo,
+    resetForRunStart,
     hydrateFromSave,
     achievements,
     setAchievements,

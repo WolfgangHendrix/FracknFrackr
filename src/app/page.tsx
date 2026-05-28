@@ -15,7 +15,7 @@ import { TitleScreen } from '@/components/TitleScreen'
 import { StartScreen } from '@/components/StartScreen'
 import { TutorialOverlay } from '@/components/TutorialOverlay'
 import { PrologueOverlay } from '@/components/PrologueOverlay'
-import { TradeMenu, LAZER_COST } from '@/components/TradeMenu'
+import { TradeMenu, LAZER_COST, MINING_DRONE_BUILD_COST } from '@/components/TradeMenu'
 import { LazerTutorialPopup } from '@/components/LazerTutorialPopup'
 import { PauseOverlay } from '@/components/PauseOverlay'
 import { ShopFab } from '@/components/ShopFab'
@@ -69,7 +69,9 @@ export default function Home() {
     sellMaterials,
     buyUpgrade,
     setUpgradeLevel,
+    spendScrap,
     resetRunCargo,
+    resetForRunStart,
     hydrateFromSave,
     achievements,
     metrics,
@@ -214,7 +216,9 @@ export default function Home() {
                       ? 2
                       : type === 'armor'
                         ? 3
-                        : 5,
+                        : type === 'drone'
+                          ? 4
+                          : 5,
                 ),
       }
       buyUpgrade(type, cost, (ok) => {
@@ -235,6 +239,20 @@ export default function Home() {
     },
     [buyUpgrade, tutorial, requestSave, upgrades],
   )
+
+  // React-side mirror of the scene's drone count so the trade menu can
+  // disable the build button at cap. The scene owns the authoritative count;
+  // we just bump this state after a successful build to trigger a re-render.
+  const [droneCount, setDroneCount] = useState(0)
+
+  const handleBuildDrone = useCallback(() => {
+    if (droneCount >= upgrades.drone) return
+    if (!spendScrap(MINING_DRONE_BUILD_COST)) return
+    const ok = gameCanvasRef.current?.buildMiningDrone() ?? false
+    if (!ok) return
+    setDroneCount((n) => n + 1)
+    requestSave()
+  }, [droneCount, upgrades.drone, spendScrap, requestSave])
 
   const handleBuyLazer = useCallback(() => {
     if (hasLazer) return
@@ -351,8 +369,12 @@ export default function Home() {
       // resetShipToStation wipes scene unlocks back to defaults — push the
       // player's actual upgrades back in so a bought lazer/ripple survives.
       gameCanvasRef.current?.setCombatUpgrades(upgrades)
+      // Drop any scrap/cargo from the maxed prologue ship so the real run
+      // starts from zero (see prologue-fade respawn for the same reasoning).
+      resetForRunStart()
+      requestSave()
     }
-  }, [tutorial, upgrades])
+  }, [tutorial, upgrades, resetForRunStart, requestSave])
 
   // --- Prologue fade-to-black and respawn sequence ---
   const [prologueFade, setPrologueFade] = useState<
@@ -389,7 +411,13 @@ export default function Home() {
                 timers.push(
                   setTimeout(() => {
                     setPrologueFade('none')
+                    // Wipe any scrap/cargo earned during the prologue — the
+                    // intro ship is intentionally overpowered, so carrying
+                    // its haul into the real run would let players buy the
+                    // lazer immediately and skip the early-game economy.
+                    resetForRunStart()
                     prologueRespawnRef.current()
+                    requestSave()
                   }, 1500),
                 )
               }, 2000),
@@ -400,7 +428,7 @@ export default function Home() {
     )
 
     return () => timers.forEach(clearTimeout)
-  }, [tutorialStep, upgrades])
+  }, [tutorialStep, upgrades, resetForRunStart, requestSave])
 
   useEffect(() => {
     const voiceSrc =
@@ -572,6 +600,7 @@ export default function Home() {
         onArbiterEvent={handleArbiterEvent}
         onRunEnded={handleRunEnded}
         onShieldChanged={handleShieldChanged}
+        onMiningDroneCountChanged={setDroneCount}
         onArmorChanged={handleArmorChanged}
         onSmartBomb={handleSmartBomb}
         onPrologueReady={tutorial.onPrologueReady}
@@ -588,6 +617,7 @@ export default function Home() {
         paused={paused}
         activeTool={activeTool}
         hasLazer={hasLazer}
+        droneCount={droneCount}
         ledger={ledger}
         arbiter={arbiterHud}
         isSaving={isSaving}
@@ -623,9 +653,11 @@ export default function Home() {
           upgrades={upgrades}
           tutorialStep={tutorial.step}
           hasLazer={hasLazer}
+          droneCount={droneCount}
           onSell={handleSell}
           onBuy={handleBuy}
           onBuyLazer={handleBuyLazer}
+          onBuildDrone={handleBuildDrone}
           onClose={handleCloseTradeMenu}
         />
       )}
@@ -653,12 +685,12 @@ export default function Home() {
           data-testid="prologue-fade"
         >
           {(prologueFade === 'fading-in' || prologueFade === 'black') && (
-            <p className="font-mono text-2xl sm:text-4xl tracking-widest text-hud-red/90 animate-pulse">
+            <p className="font-sans text-2xl sm:text-4xl tracking-widest text-hud-red/90 animate-pulse">
               Systems offline.
             </p>
           )}
           {(prologueFade === 'rebooting' || prologueFade === 'fading-out') && (
-            <p className="font-mono text-lg sm:text-2xl tracking-widest text-hud-green/90 animate-pulse">
+            <p className="font-sans text-lg sm:text-2xl tracking-widest text-hud-green/90 animate-pulse">
               Rebooting...
             </p>
           )}

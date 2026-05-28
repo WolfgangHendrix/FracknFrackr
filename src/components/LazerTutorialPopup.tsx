@@ -49,7 +49,7 @@ export function LazerTutorialPopup({ visible, onDismiss }: LazerTutorialPopupPro
         data-menu-back
         onClick={onDismiss}
         aria-label="Dismiss"
-        className="max-w-[80vw] sm:max-w-sm px-6 py-5 bg-space-800/95 border-2 border-hud-blue/50 rounded-xl font-mono text-center shadow-2xl focus:outline-none focus:ring-2 focus:ring-hud-blue cursor-pointer"
+        className="max-w-[80vw] sm:max-w-sm px-6 py-5 bg-space-800/95 border-2 border-hud-blue/50 rounded-xl font-sans text-center shadow-2xl focus:outline-none focus:ring-2 focus:ring-hud-blue cursor-pointer"
       >
         <div className="text-3xl mb-3" aria-hidden="true">
           &#x26A0;

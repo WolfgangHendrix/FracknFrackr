@@ -15,6 +15,7 @@ interface HUDProps {
   paused: boolean
   activeTool: MiningTool
   hasLazer: boolean
+  droneCount: number
   /** Endless-mode escalation meter. 0 hides the readout (prologue/tutorial). */
   ledger: number
   /** Active Arbiter boss, or null. Replaces the Ledger readout when present. */
@@ -108,6 +109,7 @@ export function HUD({
   paused,
   activeTool,
   hasLazer,
+  droneCount,
   ledger,
   arbiter,
   isSaving,
@@ -176,6 +178,9 @@ export function HUD({
             {upgrades.speed > 0 && <div className="text-lime-300">ENGINE Mk{upgrades.speed}</div>}
             {upgrades.armor > 0 && <div className="text-orange-300">ARMOR {upgrades.armor}</div>}
             {upgrades.shield > 0 && <div className="text-sky-300">SHIELD {upgrades.shield}</div>}
+            {upgrades.drone > 0 && (
+              <div className="text-hud-amber">DRONES {droneCount}/{upgrades.drone}</div>
+            )}
             {upgrades.smartBomb > 0 && (
               <div className="text-red-400 animate-pulse text-[clamp(0.6rem,1.5vw,0.75rem)]">
                 \u2622 CORE ARMED \u2622

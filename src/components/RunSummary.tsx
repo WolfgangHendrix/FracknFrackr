@@ -32,7 +32,7 @@ function Row({ label, value }: { label: string; value: string | number }) {
 export function RunSummary({ stats, highScore, isNewBest, onContinue }: RunSummaryProps) {
   return (
     <div className="absolute inset-0 z-[55] bg-black/85 flex items-center justify-center p-4">
-      <div className="w-full max-w-sm flex flex-col items-center gap-5 font-mono text-center">
+      <div className="w-full max-w-sm flex flex-col items-center gap-5 font-sans text-center">
         <div>
           <h2 className="text-hud-red text-2xl sm:text-3xl font-bold tracking-[0.2em]">HULL LOST</h2>
           <p className="text-white/50 text-xs sm:text-sm mt-1 tracking-wider">

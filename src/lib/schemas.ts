@@ -22,6 +22,7 @@ export const UpgradesSchema = z.object({
   smartBomb: z.number().int().min(0).max(1).default(0),
   lazer: z.number().int().min(0).max(1).default(0),
   autoTool: z.number().int().min(0).max(1).default(0),
+  drone: z.number().int().min(0).max(4).default(0),
 })
 export type Upgrades = z.infer<typeof UpgradesSchema>
 
@@ -84,6 +85,7 @@ export function defaultGameState(): GameState {
       smartBomb: 0,
       lazer: 0,
       autoTool: 0,
+      drone: 0,
     },
     cargo: {
       scrap: 0,
