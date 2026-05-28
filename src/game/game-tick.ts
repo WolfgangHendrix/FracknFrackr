@@ -1847,7 +1847,9 @@ export function tick(state: TickState, input: TickInput): TickResult {
       const dist = Math.sqrt(dx * dx + dy * dy)
       const dirX = dist < 0.5 ? Math.cos(state.ship.rotation + Math.PI / 2) : dx / dist
       const dirY = dist < 0.5 ? Math.sin(state.ship.rotation + Math.PI / 2) : dy / dist
-      const range = LAZER_BEAM_RANGE * 0.85
+      // Bumped well past the on-screen viewport so the wave-fronts can
+       // travel off the edges instead of dissolving mid-air on wide laptops.
+       const range = LAZER_BEAM_RANGE * 1.7
       result.rippleActive = true
       result.rippleStartX = state.ship.x
       result.rippleStartY = state.ship.y
