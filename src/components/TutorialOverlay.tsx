@@ -87,12 +87,10 @@ const STEPS: {
     mobile: 'Buy the Fire Rate upgrade!',
     gamepad: 'Buy the Fire Rate upgrade!',
   },
-  {
-    key: 'drive-through',
-    desktop: 'Navigate through the station for a free ship repair!',
-    mobile: 'Navigate through the station for a free ship repair!',
-    gamepad: 'Navigate through the station for a free ship repair!',
-  },
+  // 'drive-through' is intentionally dropped — the underlying station-repair
+  // mechanic is vestigial in endless mode (one-shot kills mean HP attrition
+  // never matters), so we don't teach it as a step. The reducer still
+  // accepts the step name for save-file backward compatibility.
 ]
 
 function StepDots({ step }: { step: TutorialStep }) {

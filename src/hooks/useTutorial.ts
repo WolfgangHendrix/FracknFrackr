@@ -114,9 +114,18 @@ export function advanceTutorial(state: TutorialState, event: TutorialEvent): Tut
       if (event === 'sold-materials') return { ...state, step: 'trade-buy' }
       return state
     case 'trade-buy':
-      if (event === 'bought-upgrade') return { ...state, step: 'drive-through' }
+      // Buying an upgrade is the last tutorial beat. The old flow advanced
+      // to a 'drive-through' step that prompted the player to fly through
+      // the station for a free repair — that's vestigial now that endless
+      // mode treats every hit as one-shot-kill, so HP attrition (and the
+      // mid-run repair) isn't part of the gameplay loop. The station heal
+      // logic still runs for smart-bomb survivors at HP=1; we just don't
+      // teach it as a step anymore.
+      if (event === 'bought-upgrade') return { active: false, step: 'done', frozen: false }
       return state
     case 'drive-through':
+      // Legacy step retained in the union for save backward-compat. Treat
+      // it as already complete if it's ever reached.
       if (event === 'drove-through-station') return { active: false, step: 'done', frozen: false }
       return state
     default:
