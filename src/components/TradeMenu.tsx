@@ -28,7 +28,18 @@ export const MINING_DRONE_BUILD_COST = 60
 
 /** Upgrade catalog available at the trade station. */
 const UPGRADE_CATALOG = [
-  { type: 'blaster' as const, label: 'Fire Rate Boost', cost: 10, description: '+10% fire rate' },
+  {
+    type: 'blaster' as const,
+    label: 'Fire Rate Boost',
+    cost: 10,
+    description: 'Faster blaster cadence — single bolt, more shots/sec',
+  },
+  {
+    type: 'spread' as const,
+    label: 'Tri-Bolt Spread',
+    cost: 220,
+    description: 'Blaster fires a 3-bolt fan instead of a single shot',
+  },
   {
     type: 'collector' as const,
     label: 'Collector Range',
@@ -322,7 +333,9 @@ function BuyPanel({
                   ? 5
                   : item.type === 'armor' || item.type === 'shield'
                     ? 3
-                    : item.type === 'smartBomb' || item.type === 'autoTool'
+                    : item.type === 'smartBomb' ||
+                        item.type === 'autoTool' ||
+                        item.type === 'spread'
                       ? 1
                       : item.type === 'drone'
                         ? 4
@@ -354,7 +367,7 @@ function BuyPanel({
                   ? `${currentLevel}/3`
                   : item.type === 'drone'
                     ? `${currentLevel}/4`
-                    : item.type === 'autoTool'
+                    : item.type === 'autoTool' || item.type === 'spread'
                       ? currentLevel > 0
                         ? 'OWNED'
                         : 'LOCKED'

@@ -206,7 +206,11 @@ export default function Home() {
         [type]:
           type === 'shield'
             ? 3
-            : type === 'smartBomb' || type === 'lazer' || type === 'autoTool' || type === 'ripple'
+            : type === 'smartBomb' ||
+                type === 'lazer' ||
+                type === 'autoTool' ||
+                type === 'ripple' ||
+                type === 'spread'
               ? 1
               : Math.min(
                   upgrades[type] + 1,

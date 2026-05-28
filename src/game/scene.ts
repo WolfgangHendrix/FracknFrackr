@@ -2195,6 +2195,7 @@ export function createGameScene(
     tickState.shieldCharges = upgrades.shield
     tickState.smartBombCount = upgrades.smartBomb
     tickState.miningDroneCap = upgrades.drone
+    tickState.spreadTier = upgrades.spread
     lazerUnlocked = upgrades.lazer > 0
     tickState.autoToolUnlocked = upgrades.autoTool > 0
     // If the currently-selected tool is no longer unlocked, fall back to

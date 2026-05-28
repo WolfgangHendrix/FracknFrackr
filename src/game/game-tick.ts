@@ -165,6 +165,8 @@ export interface TickState {
   miningDrones: MiningDrone[]
   /** Optional player-set rally world coordinate. Drones prefer rocks here. */
   rallyPoint: { x: number; y: number } | null
+  /** Spread-shot upgrade tier. 0 = single bolt, 1 = 3-bolt fan. */
+  spreadTier: number
   optionCount: number
   speedTier: number
   armorCharges: number
@@ -433,6 +435,7 @@ export function createTickState(config?: TickStateConfig): TickState {
     miningDroneCap: 0,
     miningDrones: [],
     rallyPoint: null,
+    spreadTier: 0,
     optionCount: config?.optionCount ?? 0,
     speedTier: config?.speedTier ?? 0,
     armorCharges: config?.armorCharges ?? 0,
@@ -1719,6 +1722,7 @@ export function tick(state: TickState, input: TickInput): TickResult {
         state.fireTarget.y,
         state.blasterTier,
         state.activeMiningTool,
+        state.spreadTier,
       )
       if (newProjectiles.length > 0 && state.fireRateBonus > 1) {
         state.blasterState.cooldownRemaining /= state.fireRateBonus
@@ -1735,6 +1739,7 @@ export function tick(state: TickState, input: TickInput): TickResult {
           state.fireTarget.y,
           state.blasterTier,
           state.activeMiningTool,
+          state.spreadTier,
         )) {
           state.projectiles.push(p)
           result.newProjectiles.push(p)

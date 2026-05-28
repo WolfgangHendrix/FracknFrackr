@@ -36,6 +36,7 @@ const UPGRADE_MAX: Record<keyof Upgrades, number> = {
   lazer: 1,
   autoTool: 1,
   drone: 4,
+  spread: 1,
 }
 
 export interface GameStateHook {
@@ -139,7 +140,8 @@ export function useGameState(): GameStateHook {
             type === 'smartBomb' ||
             type === 'lazer' ||
             type === 'autoTool' ||
-            type === 'ripple'
+            type === 'ripple' ||
+            type === 'spread'
               ? UPGRADE_MAX[type]
               : Math.min(prev[type] + 1, UPGRADE_MAX[type]),
         }))

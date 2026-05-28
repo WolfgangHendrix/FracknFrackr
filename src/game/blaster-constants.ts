@@ -10,8 +10,13 @@ export const BASE_PROJECTILE_SPEED = 200
 /** Speed multiplier per tier (index 0 = tier 1). */
 export const SPEED_MULTIPLIERS = [1, 1.25, 1.5, 1.75, 2] as const
 
-/** Fire rate in shots per second per tier (index 0 = tier 1). */
-export const FIRE_RATES = [1, 2, 3, 4, 5] as const
+/**
+ * Fire rate in shots per second per tier (index 0 = tier 1). Curve targets
+ * a clear feel arc: tier 1 = single deliberate shot, tier 3 = rapid-fire,
+ * tier 5 = machine-gun. Damage continues to scale separately so higher
+ * tiers feel substantively more powerful, not just spammier.
+ */
+export const FIRE_RATES = [1.2, 2, 3.5, 5, 8] as const
 
 /** Damage per projectile per tier (index 0 = tier 1). */
 export const DAMAGE_PER_TIER = [1, 1, 2, 2, 3] as const

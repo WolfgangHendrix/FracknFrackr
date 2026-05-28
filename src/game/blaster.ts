@@ -6,7 +6,6 @@ import {
   FIRE_RATES,
   DAMAGE_PER_TIER,
   PROJECTILE_LIFETIME,
-  DUAL_SPREAD_ANGLE,
   TRIPLE_SPREAD_ANGLE,
   LAZER_MAX_HEAT,
   LAZER_HEAT_RATE,
@@ -128,6 +127,18 @@ export function updateBlasterCooldown(blaster: BlasterState, dt: number): void {
  * @param targetY - World-space Y of the aim target
  * @param tier - Current blaster upgrade tier (1–5)
  */
+/**
+ * Map a spread-shot upgrade tier to a list of angle offsets around the aim
+ * direction. Tier 0 = single forward bolt; tier 1 = 3-bolt fan. The 2-bolt
+ * "dual" pattern is intentionally skipped — the upgrade ladder reads cleaner
+ * as "single → 3-fan" and the 3-bolt centre keeps the same hit feel as
+ * a single shot for precision aiming.
+ */
+function spreadOffsets(spreadTier: number): number[] {
+  if (spreadTier >= 1) return [-TRIPLE_SPREAD_ANGLE, 0, TRIPLE_SPREAD_ANGLE]
+  return [0]
+}
+
 export function fireBlaster(
   blaster: BlasterState,
   ship: Ship,
@@ -135,6 +146,7 @@ export function fireBlaster(
   targetY: number,
   tier: number,
   tool: MiningTool = 'blaster',
+  spreadTier = 0,
 ): Projectile[] {
   if (blaster.cooldownRemaining > 0) return []
 
@@ -153,33 +165,11 @@ export function fireBlaster(
   const dist = Math.sqrt(dx * dx + dy * dy)
 
   // If target is on top of ship, fire forward (ship faces +Y at rotation=0)
-  let baseAngle: number
-  if (dist < 0.5) {
-    baseAngle = ship.rotation + Math.PI / 2
-  } else {
-    baseAngle = Math.atan2(dy, dx)
-  }
+  const baseAngle = dist < 0.5 ? ship.rotation + Math.PI / 2 : Math.atan2(dy, dx)
 
-  const projectiles: Projectile[] = []
-
-  if (clamped >= 5) {
-    // Triple spread: center + two offset bolts
-    for (const offset of [-TRIPLE_SPREAD_ANGLE, 0, TRIPLE_SPREAD_ANGLE]) {
-      const angle = baseAngle + offset
-      projectiles.push(makeProjectile(ship.x, ship.y, angle, speed, damage, tool))
-    }
-  } else if (clamped >= 4) {
-    // Dual spread: two offset bolts
-    for (const offset of [-DUAL_SPREAD_ANGLE, DUAL_SPREAD_ANGLE]) {
-      const angle = baseAngle + offset
-      projectiles.push(makeProjectile(ship.x, ship.y, angle, speed, damage, tool))
-    }
-  } else {
-    // Single bolt
-    projectiles.push(makeProjectile(ship.x, ship.y, baseAngle, speed, damage, tool))
-  }
-
-  return projectiles
+  return spreadOffsets(spreadTier).map((offset) =>
+    makeProjectile(ship.x, ship.y, baseAngle + offset, speed, damage, tool),
+  )
 }
 
 export function fireBlasterFrom(
@@ -189,6 +179,7 @@ export function fireBlasterFrom(
   targetY: number,
   tier: number,
   tool: MiningTool = 'blaster',
+  spreadTier = 0,
 ): Projectile[] {
   const clamped = clampTier(tier)
   const tierIndex = clamped - 1
@@ -199,17 +190,9 @@ export function fireBlasterFrom(
   const dist = Math.sqrt(dx * dx + dy * dy)
   const baseAngle = dist < 0.5 ? Math.PI / 2 : Math.atan2(dy, dx)
 
-  if (clamped >= 5) {
-    return [-TRIPLE_SPREAD_ANGLE, 0, TRIPLE_SPREAD_ANGLE].map((offset) =>
-      makeProjectile(x, y, baseAngle + offset, speed, damage, tool),
-    )
-  }
-  if (clamped >= 4) {
-    return [-DUAL_SPREAD_ANGLE, DUAL_SPREAD_ANGLE].map((offset) =>
-      makeProjectile(x, y, baseAngle + offset, speed, damage, tool),
-    )
-  }
-  return [makeProjectile(x, y, baseAngle, speed, damage, tool)]
+  return spreadOffsets(spreadTier).map((offset) =>
+    makeProjectile(x, y, baseAngle + offset, speed, damage, tool),
+  )
 }
 
 export function createMissileProjectile(
