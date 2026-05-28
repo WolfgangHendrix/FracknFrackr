@@ -44,6 +44,9 @@ export interface ScrapBox {
   vx: number
   vy: number
   rotSpeed: number
+  /** Scrap awarded on collection. Defaults to SCRAP_BOX_VALUE; the Bounty
+   *  Manifest upgrade bumps this multiplicatively for enemy-kill drops. */
+  value: number
 }
 
 // ---------------------------------------------------------------------------
@@ -138,7 +141,7 @@ function createScrapBoxModel(): THREE.Group {
 /**
  * Create a scrap box at the given position, drifting slowly.
  */
-export function createScrapBox(x: number, y: number): ScrapBox {
+export function createScrapBox(x: number, y: number, value = SCRAP_BOX_VALUE): ScrapBox {
   const mesh = createScrapBoxModel()
   mesh.position.set(x, y, 0)
 
@@ -149,6 +152,7 @@ export function createScrapBox(x: number, y: number): ScrapBox {
   return {
     id: `scrap-box-${nextScrapBoxId++}`,
     mesh,
+    value,
     x,
     y,
     vx: Math.cos(angle) * speed,

@@ -52,8 +52,19 @@ export function createLazerState(): LazerState {
 /**
  * Update lazer heat/cooldown each frame. Call once per frame.
  * Returns true if the lazer is able to fire this frame.
+ * `coolingTier` (0-3) extends the heat tank and the cool rate by +50% per
+ * tier — the Cooling Vanes upgrade.
  */
-export function updateLazerState(lazer: LazerState, dt: number, firing: boolean): boolean {
+export function updateLazerState(
+  lazer: LazerState,
+  dt: number,
+  firing: boolean,
+  coolingTier = 0,
+): boolean {
+  const tierMult = 1 + 0.5 * coolingTier
+  const maxHeat = LAZER_MAX_HEAT * tierMult
+  const coolRate = LAZER_COOL_RATE * tierMult
+
   if (lazer.overheated) {
     lazer.cooldownRemaining = Math.max(0, lazer.cooldownRemaining - dt)
     if (lazer.cooldownRemaining <= 0) {
@@ -64,8 +75,8 @@ export function updateLazerState(lazer: LazerState, dt: number, firing: boolean)
   }
 
   if (firing) {
-    lazer.heat = Math.min(LAZER_MAX_HEAT, lazer.heat + LAZER_HEAT_RATE * dt)
-    if (lazer.heat >= LAZER_MAX_HEAT) {
+    lazer.heat = Math.min(maxHeat, lazer.heat + LAZER_HEAT_RATE * dt)
+    if (lazer.heat >= maxHeat) {
       lazer.overheated = true
       lazer.cooldownRemaining = LAZER_COOLDOWN_TIME
       return false
@@ -79,7 +90,7 @@ export function updateLazerState(lazer: LazerState, dt: number, firing: boolean)
   }
 
   // Not firing, not overheated — passively cool down
-  lazer.heat = Math.max(0, lazer.heat - LAZER_COOL_RATE * dt)
+  lazer.heat = Math.max(0, lazer.heat - coolRate * dt)
   lazer.fireTimer = 0
   return false
 }

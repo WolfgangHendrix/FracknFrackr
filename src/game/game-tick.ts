@@ -14,7 +14,12 @@ import type { Ship } from '@/lib/schemas'
 import type { Asteroid, MiningTool, Projectile } from './types'
 import { WEAPON_AFFINITY } from './types'
 import type { MiningDrone } from './mining-drone'
-import { updateMiningDrones, applyDroneHit, MINING_DRONE_COLLISION_RADIUS } from './mining-drone'
+import {
+  updateMiningDrones,
+  applyDroneHit,
+  MINING_DRONE_COLLISION_RADIUS,
+  createMiningDrone,
+} from './mining-drone'
 import type { InputState } from './input'
 import type { BlasterState, LazerState } from './blaster'
 import type { MetalChunk } from './metal-chunk'
@@ -168,6 +173,30 @@ export interface TickState {
   /** Spread-shot upgrade tier. 0 = single bolt, 1 = 3-bolt fan. */
   spreadTier: number
 
+  // --- Capstone upgrades (tier counts mirror Upgrades schema) ---
+  /** Cooling Vanes 0-3: +50% max heat & +50% cool rate per tier. */
+  coolingTier: number
+  /** Magnetic Hopper 0-3: extra pickup radius multiplier (+30% per tier). */
+  magnetTier: number
+  /** Hull Plating Mk 0-3: +25 max HP per tier. */
+  hullPlatingTier: number
+  /** Bounty Manifest 0-3: +15% enemy-kill scrap per tier. */
+  bountyTier: number
+  /** Heat-Seeker Bias 0/1: missiles prefer Arbiter + carriers when on. */
+  missileBiasUnlocked: boolean
+  /** Thruster Vectoring 0/1: tap-to-boost availability flag. */
+  thrustersUnlocked: boolean
+  /** Sensor Array 0-3: radar range bonus. */
+  sensorTier: number
+  /** Drone Repair Bay 0/1: passive drone rebuild while near station. */
+  droneRepairUnlocked: boolean
+  /** Active boost timer (sec). Velocity boost while > 0. */
+  boostActiveTimer: number
+  /** Boost cooldown timer (sec). Boost is unavailable while > 0. */
+  boostCooldownTimer: number
+  /** Drone-repair countdown (sec). Builds one drone when it reaches 0. */
+  droneRepairTimer: number
+
   // --- Debug-only knobs. Always present on the type so the tick code
   // doesn't have to thread `DEBUG_ENABLED` everywhere, but only ever
   // toggled away from defaults when the debug build is active.
@@ -318,6 +347,8 @@ export interface TickResult {
   destroyedDroneIds: string[]
   /** Scrap value snatched by enemies that shot a carrying drone this tick. */
   scrapStolenByEnemies: number
+  /** True if Drone Repair Bay rebuilt a drone this tick (scene needs to bump count). */
+  droneRebuilt: boolean
   // Enemy lifecycle
   enemySpawned: EnemyShip | null
   enemyDestroyed: { x: number; y: number } | null
@@ -453,6 +484,17 @@ export function createTickState(config?: TickStateConfig): TickState {
     miningDrones: [],
     rallyPoint: null,
     spreadTier: 0,
+    coolingTier: 0,
+    magnetTier: 0,
+    hullPlatingTier: 0,
+    bountyTier: 0,
+    missileBiasUnlocked: false,
+    thrustersUnlocked: false,
+    sensorTier: 0,
+    droneRepairUnlocked: false,
+    boostActiveTimer: 0,
+    boostCooldownTimer: 0,
+    droneRepairTimer: 10,
     debugGodMode: false,
     debugDtMultiplier: 1,
     debugDisableEnemySpawns: false,
@@ -543,6 +585,7 @@ function emptyResult(): TickResult {
     droneScrapDelivered: 0,
     destroyedDroneIds: [],
     scrapStolenByEnemies: 0,
+    droneRebuilt: false,
     enemySpawned: null,
     enemyDestroyed: null,
     enemyDamaged: [],
@@ -729,6 +772,28 @@ function optionMuzzlePositions(state: TickState): { x: number; y: number }[] {
 }
 
 function nearestHomingTarget(state: TickState, x: number, y: number): PositionBody | null {
+  // Heat-Seeker Bias upgrade: once unlocked, the Arbiter is always preferred,
+  // then carriers (biggest non-boss target), then anything else. Without it,
+  // missiles use plain nearest-distance.
+  if (state.missileBiasUnlocked) {
+    if (state.arbiter && state.arbiter.hp > 0 && state.arbiter.mode === 'hunting') {
+      return state.arbiter
+    }
+    let bestCarrier: PositionBody | null = null
+    let bestCarrierSq = Infinity
+    for (const e of state.ambushEnemies) {
+      if (!e.alive || e.kind !== 'carrier') continue
+      const dx = e.x - x
+      const dy = e.y - y
+      const d = dx * dx + dy * dy
+      if (d < bestCarrierSq) {
+        bestCarrierSq = d
+        bestCarrier = e
+      }
+    }
+    if (bestCarrier) return bestCarrier
+  }
+
   let best: PositionBody | null = null
   let bestSq = Infinity
   const consider = (target: PositionBody): void => {
@@ -872,6 +937,16 @@ function redirectEnemyShotAtDrone(
   if (dist < 0.001) return
   proj.vx = (dx / dist) * speed
   proj.vy = (dy / dist) * speed
+}
+
+/** Player's actual max HP = base + 25 per Hull Plating tier. */
+export function effectivePlayerMaxHp(state: TickState): number {
+  return PLAYER_MAX_HP + 25 * state.hullPlatingTier
+}
+
+/** Bounty-Manifest-adjusted scrap value for an enemy-kill drop. */
+function bountyScrapValue(state: TickState): number {
+  return Math.round(SCRAP_BOX_VALUE * (1 + 0.15 * state.bountyTier))
 }
 
 function absorbDamageWithShield(state: TickState, result: TickResult): boolean {
@@ -1271,10 +1346,27 @@ export function tick(state: TickState, input: TickInput): TickResult {
   // so the engine exhaust stays consistent with movement. Aim only steers the
   // turret, which scene.ts rotates independently of the hull.
 
+  // Thruster Vectoring: a *tap* of the boost key triggers a 0.4s burst with
+  // a 3s cooldown. The raw boost input from input.inputState is treated as
+  // the trigger; updateShip reads from boostActiveTimer instead so a hold
+  // doesn't drain the cooldown faster than the cadence allows.
+  state.boostActiveTimer = Math.max(0, state.boostActiveTimer - dt)
+  state.boostCooldownTimer = Math.max(0, state.boostCooldownTimer - dt)
+  const wantBoost = input.inputState.boost
+  if (
+    wantBoost &&
+    state.thrustersUnlocked &&
+    state.boostActiveTimer <= 0 &&
+    state.boostCooldownTimer <= 0
+  ) {
+    state.boostActiveTimer = 0.4
+    state.boostCooldownTimer = 3
+  }
+
   // Prologue auto-pilot: synthesize forward input without mutating TickInput
   const effectiveInput = state.prologueAutoPilotForward
-    ? { ...input.inputState, up: true }
-    : input.inputState
+    ? { ...input.inputState, up: true, boost: state.boostActiveTimer > 0 }
+    : { ...input.inputState, boost: state.boostActiveTimer > 0 }
   const speedMultiplier = 1 + state.speedTier * 0.1
   updateShip(state.ship, effectiveInput, dt, speedMultiplier)
   if (endlessActive && input.blackHole) {
@@ -1462,7 +1554,7 @@ export function tick(state: TickState, input: TickInput): TickResult {
     // Sustained lazer beam: continuous beam while held, direct-hit damage each tick
     const hasFireTarget = state.fireTarget !== null
     const lazerFiring = (state.mouseHoldingFire || hasFireTarget) && !state.lazerState.overheated
-    updateLazerState(state.lazerState, dt, lazerFiring)
+    updateLazerState(state.lazerState, dt, lazerFiring, state.coolingTier)
 
     if (lazerFiring && state.fireTarget && !state.lazerState.overheated) {
       // Compute beam direction from ship toward fire target
@@ -1560,7 +1652,7 @@ export function tick(state: TickState, input: TickInput): TickResult {
 
           for (const h of beamHitEnemies) {
             if (!h.killed) continue
-            const box = createScrapBox(h.enemy.x, h.enemy.y)
+            const box = createScrapBox(h.enemy.x, h.enemy.y, bountyScrapValue(state))
             state.scrapBoxes.push(box)
             result.enemyDestroyed = { x: h.enemy.x, y: h.enemy.y }
             result.enemyDestroyedEvent = true
@@ -1727,7 +1819,7 @@ export function tick(state: TickState, input: TickInput): TickResult {
         })
         if (en.hp <= 0) {
           en.alive = false
-          const box = createScrapBox(en.x, en.y)
+          const box = createScrapBox(en.x, en.y, bountyScrapValue(state))
           state.scrapBoxes.push(box)
           result.enemyDestroyed = { x: en.x, y: en.y }
           result.enemyDestroyedEvent = true
@@ -1897,7 +1989,7 @@ export function tick(state: TickState, input: TickInput): TickResult {
       state.projectiles = surviving
 
       if (!state.enemy.alive) {
-        const box = createScrapBox(state.enemy.x, state.enemy.y)
+        const box = createScrapBox(state.enemy.x, state.enemy.y, bountyScrapValue(state))
         state.scrapBoxes.push(box)
         result.enemyDestroyed = { x: state.enemy.x, y: state.enemy.y }
         result.enemyDestroyedEvent = true
@@ -1997,10 +2089,10 @@ export function tick(state: TickState, input: TickInput): TickResult {
     if (collecting) {
       const collectorRange = isPrologue
         ? PROLOGUE_SHIP.collectorRange
-        : collectorRangeForTier(state.collectorTier)
+        : collectorRangeForTier(state.collectorTier) * (1 + 0.3 * state.magnetTier)
       const collected = attractScrapBoxToShip(state.scrapBoxes[i], state.ship, dt, collectorRange)
       if (collected) {
-        result.scrapCollected.push({ id: state.scrapBoxes[i].id, value: SCRAP_BOX_VALUE })
+        result.scrapCollected.push({ id: state.scrapBoxes[i].id, value: state.scrapBoxes[i].value })
         result.scrapCollectedEvent = true
         state.scrapBoxes.splice(i, 1)
         continue
@@ -2083,9 +2175,34 @@ export function tick(state: TickState, input: TickInput): TickResult {
     state.playerHp > 0
   ) {
     state.repairedThisVisit = true
-    state.playerHp = PLAYER_MAX_HP
+    state.playerHp = effectivePlayerMaxHp(state)
     result.stationRepaired = true
     result.playerDamaged = true // triggers onPlayerDamage callback with restored HP
+  }
+
+  // Drone Repair Bay: while near the station and the upgrade is owned,
+  // tick down a timer and rebuild a single lost drone each cycle. Resets
+  // immediately when the player leaves range so it can't be exploited by
+  // hovering far away.
+  if (state.droneRepairUnlocked && inStationRange) {
+    if (state.miningDrones.length < state.miningDroneCap) {
+      state.droneRepairTimer -= dt
+      if (state.droneRepairTimer <= 0) {
+        state.droneRepairTimer = 10
+        const idx = state.miningDrones.length
+        const offset = (idx / 4) * Math.PI * 2
+        const drone = createMiningDrone(
+          state.ship.x + Math.cos(offset) * 6,
+          state.ship.y + Math.sin(offset) * 6,
+        )
+        state.miningDrones.push(drone)
+        result.droneRebuilt = true
+      }
+    } else {
+      state.droneRepairTimer = 10
+    }
+  } else {
+    state.droneRepairTimer = 10
   }
 
   // --- Ambush enemies (used by prologue) ---
@@ -2140,7 +2257,7 @@ export function tick(state: TickState, input: TickInput): TickResult {
         state.projectiles = surviving
 
         if (!ae.alive) {
-          const box = createScrapBox(ae.x, ae.y)
+          const box = createScrapBox(ae.x, ae.y, bountyScrapValue(state))
           state.scrapBoxes.push(box)
           result.enemyDestroyed = { x: ae.x, y: ae.y }
           result.enemyDestroyedEvent = true
@@ -2259,10 +2376,10 @@ function updateEndlessMode(
       for (let i = 0; i < boxCount; i++) {
         const a = (i / boxCount) * Math.PI * 2 + Math.random() * 0.5
         const r = 5 + Math.random() * 8
-        state.scrapBoxes.push(createScrapBox(arb.x + Math.cos(a) * r, arb.y + Math.sin(a) * r))
+        state.scrapBoxes.push(createScrapBox(arb.x + Math.cos(a) * r, arb.y + Math.sin(a) * r, bountyScrapValue(state)))
       }
       state.ledger = Math.max(0, state.ledger * ARBITER_DEFEAT_LEDGER_FACTOR)
-      state.playerHp = PLAYER_MAX_HP
+      state.playerHp = effectivePlayerMaxHp(state)
       state.marksDefeated++
       result.playerDamaged = true
       result.arbiterDefeated = { x: arb.x, y: arb.y, mark: arb.mark }
@@ -2521,7 +2638,7 @@ function dropScavengerLoot(state: TickState, result: TickResult, enemy: EnemyShi
       state.metalChunks.push(chunk)
       result.newMetalChunks.push(chunk)
     } else {
-      state.scrapBoxes.push(createScrapBox(enemy.x, enemy.y))
+      state.scrapBoxes.push(createScrapBox(enemy.x, enemy.y, bountyScrapValue(state)))
     }
   }
   enemy.stolenLoot = []

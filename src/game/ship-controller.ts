@@ -62,7 +62,10 @@ export function aimToRotation(
  */
 export function updateShip(ship: Ship, input: InputState, dt: number, speedMultiplier = 1): void {
   const [dx, dy] = inputToDirection(input)
-  const boostMultiplier = input.boost ? 1.55 : 1
+  // Thruster Vectoring boost burst — short window, big multiplier so the
+  // burst feels punchy. Gameplay logic in game-tick gates this on the
+  // upgrade + cooldown, so this stays a dumb multiplier here.
+  const boostMultiplier = input.boost ? 2 : 1
   const accelMultiplier = speedMultiplier * boostMultiplier
 
   // Apply acceleration

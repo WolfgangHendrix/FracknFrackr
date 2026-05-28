@@ -38,6 +38,8 @@ export interface RadarData {
   arbiter: RadarBlip | null
   /** Active rally point in world coords, or null if drones are unguided. */
   rally: RadarBlip | null
+  /** Sensor Array upgrade tier (0-3). Each tier extends the scanning range. */
+  sensorTier: number
 }
 
 export interface Radar {
@@ -106,7 +108,9 @@ export function updateRadar(radar: Radar, data: RadarData): void {
   const cx = size / 2
   const cy = size / 2
   const rim = size / 2 - RIM_MARGIN
-  const scale = rim / RADAR_RANGE
+  // Sensor Array extends the effective scanning range +25% per tier.
+  const range = RADAR_RANGE * (1 + 0.25 * data.sensorTier)
+  const scale = rim / range
 
   ctx.clearRect(0, 0, size, size)
 
@@ -144,7 +148,7 @@ export function updateRadar(radar: Radar, data: RadarData): void {
     const dx = wx - data.shipX
     const dy = wy - data.shipY
     const dist = Math.hypot(dx, dy)
-    if (dist <= RADAR_RANGE || dist < 0.001) {
+    if (dist <= range || dist < 0.001) {
       return { px: cx + dx * scale, py: cy - dy * scale, dist, clamped: false }
     }
     const ux = dx / dist
@@ -157,7 +161,7 @@ export function updateRadar(radar: Radar, data: RadarData): void {
   for (const a of data.asteroids) {
     const dx = a.x - data.shipX
     const dy = a.y - data.shipY
-    if (dx * dx + dy * dy > RADAR_RANGE * RADAR_RANGE) continue
+    if (dx * dx + dy * dy > range * range) continue
     ctx.beginPath()
     ctx.arc(cx + dx * scale, cy - dy * scale, 1.4, 0, Math.PI * 2)
     ctx.fill()

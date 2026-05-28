@@ -49,6 +49,7 @@ import {
   tick,
   createTickState,
   PLAYER_MAX_HP,
+  effectivePlayerMaxHp,
   collectorRangeForTier,
 } from './game-tick'
 import type { TickState, TickInput, TickResult } from './game-tick'
@@ -1238,7 +1239,7 @@ export function createGameScene(
         }
       }
 
-      const hpRatio = tickState.playerHp / PLAYER_MAX_HP
+      const hpRatio = tickState.playerHp / effectivePlayerMaxHp(tickState)
       bloom.setVignette(Math.max(0, (1 - hpRatio) * 0.6))
       if (hpRatio < 0.3) {
         bloom.setChromaticAberration((0.3 - hpRatio) * 0.8)
@@ -2019,7 +2020,7 @@ export function createGameScene(
           miningDroneMeshes.delete(id)
         }
       }
-      if (result.destroyedDroneIds.length > 0) {
+      if (result.destroyedDroneIds.length > 0 || result.droneRebuilt) {
         onMiningDroneCountChanged?.(tickState.miningDrones.length)
       }
       const liveDroneIds = new Set<string>()
@@ -2187,6 +2188,7 @@ export function createGameScene(
           station: { x: GAS_STATION_X, y: GAS_STATION_Y },
           arbiter: arbiterModel ? { x: arbiterModel.position.x, y: arbiterModel.position.y } : null,
           rally: tickState.rallyPoint,
+          sensorTier: tickState.sensorTier,
         })
       }
 
@@ -2391,6 +2393,14 @@ export function createGameScene(
     // Bulk the visible ship to match the player's purchases — scoop at tier
     // 1, cargo pods at tier 2, swept wings + gold accents at tier 3.
     applyHullModules(shipModel, upgrades.hull)
+    tickState.coolingTier = upgrades.cooling
+    tickState.magnetTier = upgrades.magnet
+    tickState.hullPlatingTier = upgrades.hullPlating
+    tickState.bountyTier = upgrades.bounty
+    tickState.missileBiasUnlocked = upgrades.missileBias > 0
+    tickState.thrustersUnlocked = upgrades.thrusters > 0
+    tickState.sensorTier = upgrades.sensor
+    tickState.droneRepairUnlocked = upgrades.droneRepair > 0
     // If the currently-selected tool is no longer unlocked, fall back to
     // blaster so the player isn't stranded on a tool they can't fire.
     if (tickState.activeMiningTool === 'lazer' && !lazerUnlocked) {
@@ -2414,7 +2424,7 @@ export function createGameScene(
     ship.velocityY = 0
 
     // Restore full HP
-    tickState.playerHp = PLAYER_MAX_HP
+    tickState.playerHp = effectivePlayerMaxHp(tickState)
     onPlayerDamage?.(tickState.playerHp)
 
     // Reset to tier-1 ship and clear prologue state
@@ -2562,7 +2572,7 @@ export function createGameScene(
     ship.y = GAS_STATION_Y + STATION_ENTER_DISTANCE - 10
     ship.velocityX = 0
     ship.velocityY = 0
-    tickState.playerHp = PLAYER_MAX_HP
+    tickState.playerHp = effectivePlayerMaxHp(tickState)
     onPlayerDamage?.(tickState.playerHp)
 
     // Drop the Arbiter

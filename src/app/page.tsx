@@ -213,7 +213,10 @@ export default function Home() {
                 type === 'lazer' ||
                 type === 'autoTool' ||
                 type === 'ripple' ||
-                type === 'spread'
+                type === 'spread' ||
+                type === 'missileBias' ||
+                type === 'thrusters' ||
+                type === 'droneRepair'
               ? 1
               : Math.min(
                   upgrades[type] + 1,
@@ -221,7 +224,13 @@ export default function Home() {
                     ? 8
                     : type === 'options'
                       ? 2
-                      : type === 'armor' || type === 'hull'
+                      : type === 'armor' ||
+                          type === 'hull' ||
+                          type === 'cooling' ||
+                          type === 'magnet' ||
+                          type === 'hullPlating' ||
+                          type === 'bounty' ||
+                          type === 'sensor'
                         ? 3
                         : type === 'drone'
                           ? 4

@@ -38,6 +38,14 @@ const UPGRADE_MAX: Record<keyof Upgrades, number> = {
   drone: 4,
   spread: 1,
   hull: 3,
+  cooling: 3,
+  magnet: 3,
+  hullPlating: 3,
+  bounty: 3,
+  missileBias: 1,
+  thrusters: 1,
+  sensor: 3,
+  droneRepair: 1,
 }
 
 export interface GameStateHook {
@@ -142,7 +150,10 @@ export function useGameState(): GameStateHook {
             type === 'lazer' ||
             type === 'autoTool' ||
             type === 'ripple' ||
-            type === 'spread'
+            type === 'spread' ||
+            type === 'missileBias' ||
+            type === 'thrusters' ||
+            type === 'droneRepair'
               ? UPGRADE_MAX[type]
               : Math.min(prev[type] + 1, UPGRADE_MAX[type]),
         }))
@@ -212,7 +223,7 @@ export function useGameState(): GameStateHook {
     cargo,
     upgrades,
     playerHp,
-    playerMaxHp: PLAYER_MAX_HP,
+    playerMaxHp: PLAYER_MAX_HP + 25 * upgrades.hullPlating,
     togglePause,
     onCollect,
     onPlayerDamage,

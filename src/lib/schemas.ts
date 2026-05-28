@@ -25,6 +25,14 @@ export const UpgradesSchema = z.object({
   drone: z.number().int().min(0).max(4).default(0),
   spread: z.number().int().min(0).max(1).default(0),
   hull: z.number().int().min(0).max(3).default(0),
+  cooling: z.number().int().min(0).max(3).default(0),
+  magnet: z.number().int().min(0).max(3).default(0),
+  hullPlating: z.number().int().min(0).max(3).default(0),
+  bounty: z.number().int().min(0).max(3).default(0),
+  missileBias: z.number().int().min(0).max(1).default(0),
+  thrusters: z.number().int().min(0).max(1).default(0),
+  sensor: z.number().int().min(0).max(3).default(0),
+  droneRepair: z.number().int().min(0).max(1).default(0),
 })
 export type Upgrades = z.infer<typeof UpgradesSchema>
 
@@ -90,6 +98,14 @@ export function defaultGameState(): GameState {
       drone: 0,
       spread: 0,
       hull: 0,
+      cooling: 0,
+      magnet: 0,
+      hullPlating: 0,
+      bounty: 0,
+      missileBias: 0,
+      thrusters: 0,
+      sensor: 0,
+      droneRepair: 0,
     },
     cargo: {
       scrap: 0,

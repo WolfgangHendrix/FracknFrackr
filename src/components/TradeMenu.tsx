@@ -112,6 +112,54 @@ const UPGRADE_CATALOG = [
     cost: 180,
     description: 'Bolt on visible modules: scoop, cargo pods, swept wings',
   },
+  {
+    type: 'hullPlating' as const,
+    label: 'Hull Plating Mk',
+    cost: 200,
+    description: '+25 max hull HP per tier (100 → 175)',
+  },
+  {
+    type: 'cooling' as const,
+    label: 'Cooling Vanes',
+    cost: 150,
+    description: 'Lazer runs longer + cools faster per tier',
+  },
+  {
+    type: 'magnet' as const,
+    label: 'Magnetic Hopper',
+    cost: 140,
+    description: '+30% pickup radius per tier (stacks with collector)',
+  },
+  {
+    type: 'bounty' as const,
+    label: 'Bounty Manifest',
+    cost: 180,
+    description: '+15% scrap from enemy kills per tier',
+  },
+  {
+    type: 'sensor' as const,
+    label: 'Sensor Array',
+    cost: 130,
+    description: 'Longer radar range; tier 3 paints off-screen contacts',
+  },
+  {
+    type: 'thrusters' as const,
+    label: 'Thruster Vectoring',
+    cost: 240,
+    description: 'Tap Shift / B to boost — 2× velocity, 3s cooldown',
+  },
+  {
+    type: 'missileBias' as const,
+    label: 'Heat-Seeker Bias',
+    cost: 220,
+    description: 'Missiles prioritize Arbiter + carriers over grunts',
+  },
+  {
+    type: 'droneRepair' as const,
+    label: 'Drone Repair Bay',
+    cost: 360,
+    description: 'Auto-rebuilds destroyed drones over time near station',
+  },
 ]
 
 interface TradeMenuProps {
@@ -339,11 +387,19 @@ function BuyPanel({
                   ? 5
                   : item.type === 'armor' ||
                       item.type === 'shield' ||
-                      item.type === 'hull'
+                      item.type === 'hull' ||
+                      item.type === 'cooling' ||
+                      item.type === 'magnet' ||
+                      item.type === 'hullPlating' ||
+                      item.type === 'bounty' ||
+                      item.type === 'sensor'
                     ? 3
                     : item.type === 'smartBomb' ||
                         item.type === 'autoTool' ||
-                        item.type === 'spread'
+                        item.type === 'spread' ||
+                        item.type === 'missileBias' ||
+                        item.type === 'thrusters' ||
+                        item.type === 'droneRepair'
                       ? 1
                       : item.type === 'drone'
                         ? 4
@@ -382,11 +438,22 @@ function BuyPanel({
                     ? 'Requires Lazer + Ripple + Tri-Bolt'
                     : item.description}{' '}
                 —{' '}
-                {item.type === 'armor' || item.type === 'shield' || item.type === 'hull'
+                {item.type === 'armor' ||
+                item.type === 'shield' ||
+                item.type === 'hull' ||
+                item.type === 'cooling' ||
+                item.type === 'magnet' ||
+                item.type === 'hullPlating' ||
+                item.type === 'bounty' ||
+                item.type === 'sensor'
                   ? `${currentLevel}/3`
                   : item.type === 'drone'
                     ? `${currentLevel}/4`
-                    : item.type === 'autoTool' || item.type === 'spread'
+                    : item.type === 'autoTool' ||
+                        item.type === 'spread' ||
+                        item.type === 'missileBias' ||
+                        item.type === 'thrusters' ||
+                        item.type === 'droneRepair'
                       ? currentLevel > 0
                         ? 'OWNED'
                         : 'LOCKED'
