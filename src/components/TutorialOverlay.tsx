@@ -197,7 +197,10 @@ export function TutorialOverlay({
   const text = getPromptText(step, gamepadActive)
 
   return (
-    <div className="absolute inset-0 pointer-events-none" data-testid="tutorial-overlay">
+    <div
+      className="absolute inset-0 pointer-events-none z-[55]"
+      data-testid="tutorial-overlay"
+    >
       {/* Top-center prompt panel — sits below the HUD, clear of mobile controls at the bottom */}
       <div className="absolute top-24 sm:top-28 left-1/2 -translate-x-1/2 w-auto max-w-[80vw] sm:max-w-sm px-4 sm:px-6 py-3 sm:py-4 bg-space-800/90 border border-hud-green/40 rounded-lg font-sans text-center">
         <StepDots step={step} />
