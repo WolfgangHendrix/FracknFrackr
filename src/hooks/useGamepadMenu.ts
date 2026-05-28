@@ -7,6 +7,7 @@ import {
   playMenuSelectUp,
   playSellChime,
   playBuyRegister,
+  primeAudio,
 } from '@/game/sfx'
 
 /**
@@ -76,6 +77,9 @@ export function useGamepadMenu({ enabled, resetKey }: UseGamepadMenuOptions): vo
     if (!enabled) return
     if (typeof document === 'undefined') return
     const onPointerDown = (e: Event): void => {
+      // pointerdown is a real user-activation gesture, so it's a valid spot
+      // to resume the audio context if nothing has done so yet. Idempotent.
+      primeAudio()
       if (!(e.target instanceof Element)) return
       const item = e.target.closest('[data-menu-item]')
       if (!item) return

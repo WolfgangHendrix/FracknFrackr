@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { BUILD_VERSION } from '@/lib/build-version'
 import { loadLeaderboard } from '@/lib/leaderboard'
+import { primeAudio } from '@/game/sfx'
 
 interface TitleScreenProps {
   onBegin: () => void
@@ -30,6 +31,10 @@ export function TitleScreen({ onBegin }: TitleScreenProps) {
   const begin = useCallback(() => {
     if (beganRef.current) return
     beganRef.current = true
+    // First user gesture on the page — perfect moment to prime the audio
+    // graph so the very first menu hover blip on the start screen lands
+    // without cold-start latency.
+    primeAudio()
     onBegin()
   }, [onBegin])
 

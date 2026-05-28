@@ -21,6 +21,37 @@ function getContext(): AudioContext | null {
   return audioCtx
 }
 
+/**
+ * Pre-warm the WebAudio graph on the first user gesture so the very first
+ * menu blip lands without the cold-start latency that otherwise comes from
+ * an unresumed context + first-allocation jitter on the audio thread.
+ *
+ * We schedule a sub-audible click (0.5ms square pulse at -84 dB) so the
+ * audio thread spins up its render loop before the player hits the next
+ * UI element. Subsequent menu sounds then play with steady-state latency.
+ */
+let primed = false
+export function primeAudio(): void {
+  if (primed) return
+  const ctx = getContext()
+  if (!ctx) return
+  primed = true
+  // Wake the suspended context. resume() returns a Promise; we don't await
+  // it because we want the prime work scheduled immediately — by the time
+  // the audio thread processes our buffer the context state has flipped.
+  if (ctx.state === 'suspended') void ctx.resume()
+  const now = ctx.currentTime
+  const buf = ctx.createBuffer(1, 64, ctx.sampleRate)
+  const src = ctx.createBufferSource()
+  src.buffer = buf
+  const gain = ctx.createGain()
+  // Effectively silent — just enough to force the graph to render.
+  gain.gain.setValueAtTime(0.00005, now)
+  src.connect(gain).connect(ctx.destination)
+  src.start(now)
+  src.stop(now + 0.001)
+}
+
 /** Share the audio context with the main audio module. */
 export function setSfxContext(ctx: AudioContext): void {
   audioCtx = ctx
@@ -486,20 +517,26 @@ export function playMenuMove(): void {
   const ctx = getContext()
   if (!ctx) return
 
-  const now = ctx.currentTime
+  // If the context still hasn't finished resuming, schedule a single audio
+  // frame into the future. AudioContext.currentTime can lag the render
+  // cursor on cold-start, and a `start(now)` call on a graph that hasn't
+  // settled tends to drop the first ~10ms. 8ms ≈ one render quantum at 48k.
+  const lead = ctx.state === 'running' ? 0 : 0.008
+  const start = ctx.currentTime + lead
+
   const osc = ctx.createOscillator()
   osc.type = 'triangle'
-  osc.frequency.setValueAtTime(420, now)
-  osc.frequency.exponentialRampToValueAtTime(640, now + 0.05)
+  osc.frequency.setValueAtTime(420, start)
+  osc.frequency.exponentialRampToValueAtTime(640, start + 0.05)
 
   const gain = ctx.createGain()
-  gain.gain.setValueAtTime(0.07 * getSfxVolume(), now)
-  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09)
+  gain.gain.setValueAtTime(0.07 * getSfxVolume(), start)
+  gain.gain.exponentialRampToValueAtTime(0.001, start + 0.09)
 
   osc.connect(gain)
   gain.connect(ctx.destination)
-  osc.start(now)
-  osc.stop(now + 0.1)
+  osc.start(start)
+  osc.stop(start + 0.1)
 }
 
 /**
@@ -513,26 +550,29 @@ function playMenuSelectNote(freq: number): void {
   const ctx = getContext()
   if (!ctx) return
 
-  const now = ctx.currentTime
+  // Same cold-start guard as playMenuMove — keep the first press blip from
+  // getting clipped while the audio graph spins up.
+  const lead = ctx.state === 'running' ? 0 : 0.008
+  const start = ctx.currentTime + lead
   const vol = getSfxVolume()
 
   const filter = ctx.createBiquadFilter()
   filter.type = 'lowpass'
-  filter.frequency.setValueAtTime(700, now)
+  filter.frequency.setValueAtTime(700, start)
   filter.connect(ctx.destination)
 
   const osc = ctx.createOscillator()
   osc.type = 'triangle'
-  osc.frequency.setValueAtTime(freq, now)
+  osc.frequency.setValueAtTime(freq, start)
 
   const gain = ctx.createGain()
-  gain.gain.setValueAtTime(0.055 * vol, now)
-  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.14)
+  gain.gain.setValueAtTime(0.055 * vol, start)
+  gain.gain.exponentialRampToValueAtTime(0.001, start + 0.14)
 
   osc.connect(gain)
   gain.connect(filter)
-  osc.start(now)
-  osc.stop(now + 0.15)
+  osc.start(start)
+  osc.stop(start + 0.15)
 }
 
 export function playMenuSelectDown(): void {
