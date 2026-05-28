@@ -1154,18 +1154,51 @@ function prologueTick(state: TickState, input: TickInput, result: TickResult): v
   state.prologueAutoPilotForward = false
 
   // --- prologue-start: initialize maxed ship and fire ready ---
+  // The intro is meant to show the *full* fracker loadout — every upgrade
+  // available in the trade station is on. When you add a new upgrade,
+  // mirror it here so the prologue keeps showing the player what they're
+  // working toward. (Visuals on the prologue ship are handled separately
+  // by createPrologueShipModel; the drone cap + auto-build below makes
+  // sure the RTS layer is also live during the intro.)
   if (step === 'prologue-start') {
     if (!state.prologueFieldSpawned) {
       state.prologueFieldSpawned = true
       state.blasterTier = PROLOGUE_SHIP.blasterTier
+      state.collectorTier = 5
       state.fireRateBonus = PROLOGUE_SHIP.fireRateBonus
       state.activeMiningTool = PROLOGUE_SHIP.miningTool
       state.missileTier = PROLOGUE_SHIP.missileTier
       state.rippleUnlocked = true
+      state.autoToolUnlocked = true
+      state.spreadTier = 1
       state.optionCount = PROLOGUE_SHIP.optionCount
       state.speedTier = 5
       state.armorCharges = 3
       state.shieldCharges = PROLOGUE_SHIP.shieldCharges
+      state.smartBombCount = 1
+      state.coolingTier = 3
+      state.magnetTier = 3
+      state.hullPlatingTier = 3
+      state.bountyTier = 3
+      state.missileBiasUnlocked = true
+      state.thrustersUnlocked = true
+      state.sensorTier = 3
+      state.droneRepairUnlocked = true
+      // Mining-drone fleet at cap so the player sees the full RTS layer.
+      state.miningDroneCap = 4
+      const needed = state.miningDroneCap - state.miningDrones.length
+      for (let i = 0; i < needed; i++) {
+        const idx = state.miningDrones.length
+        const offset = (idx / 4) * Math.PI * 2
+        state.miningDrones.push(
+          createMiningDrone(
+            state.ship.x + Math.cos(offset) * 6,
+            state.ship.y + Math.sin(offset) * 6,
+          ),
+        )
+      }
+      // Heal to the inflated HP cap so the new plating actually shows.
+      state.playerHp = effectivePlayerMaxHp(state)
     }
     // Clear any stale Arbiter-approach state so the scripted fly-in always
     // plays from full distance. Without this a leftover `prologueArbiterSpawned`
