@@ -27,10 +27,7 @@ export const PROJECTILE_LIFETIME = 1.5
 /** Projectile collision radius in world units. */
 export const PROJECTILE_RADIUS = 1.0
 
-/** Spread angle in radians for dual-fire (tier 4). */
-export const DUAL_SPREAD_ANGLE = (8 * Math.PI) / 180
-
-/** Spread angle in radians for triple-fire (tier 5). */
+/** Spread angle in radians for the Tri-Bolt Spread upgrade. */
 export const TRIPLE_SPREAD_ANGLE = (10 * Math.PI) / 180
 
 /** Amber color for mining laser bolts. */
