@@ -160,6 +160,12 @@ const UPGRADE_CATALOG = [
     cost: 360,
     description: 'Auto-rebuilds destroyed drones over time near station',
   },
+  {
+    type: 'drillNose' as const,
+    label: 'Drill Nose',
+    cost: 160,
+    description: 'Ram asteroids with the ship nose to drill them (per tier)',
+  },
 ]
 
 interface TradeMenuProps {
@@ -392,7 +398,8 @@ function BuyPanel({
                       item.type === 'magnet' ||
                       item.type === 'hullPlating' ||
                       item.type === 'bounty' ||
-                      item.type === 'sensor'
+                      item.type === 'sensor' ||
+                      item.type === 'drillNose'
                     ? 3
                     : item.type === 'smartBomb' ||
                         item.type === 'autoTool' ||
@@ -445,7 +452,8 @@ function BuyPanel({
                 item.type === 'magnet' ||
                 item.type === 'hullPlating' ||
                 item.type === 'bounty' ||
-                item.type === 'sensor'
+                item.type === 'sensor' ||
+                item.type === 'drillNose'
                   ? `${currentLevel}/3`
                   : item.type === 'drone'
                     ? `${currentLevel}/4`

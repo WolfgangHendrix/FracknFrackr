@@ -234,6 +234,92 @@ export function stopEngineSound(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Drill Nose — looped grinder noise that swells while the ship is actively
+// drilling an asteroid with its nose. Modeled on the engine sound (filtered
+// noise + tween-on-volume) so the audio mix stays coherent.
+// ---------------------------------------------------------------------------
+
+interface DrillSound {
+  source: AudioBufferSourceNode
+  gain: GainNode
+  /** Bandpass to give the noise a "grinder" timbre, not just white noise. */
+  filter: BiquadFilterNode
+  /** Pulse LFO that modulates the gain so the sound reads as mechanical. */
+  pulseLFO: OscillatorNode
+}
+
+let drillSound: DrillSound | null = null
+
+function ensureDrillSound(): DrillSound | null {
+  if (drillSound) return drillSound
+  const ctx = getContext()
+  if (!ctx) return null
+
+  // White-noise loop buffer, same trick as the engine sound.
+  const duration = 1
+  const bufferSize = ctx.sampleRate * duration
+  const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate)
+  const data = buffer.getChannelData(0)
+  for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1
+
+  const source = ctx.createBufferSource()
+  source.buffer = buffer
+  source.loop = true
+
+  const filter = ctx.createBiquadFilter()
+  filter.type = 'bandpass'
+  filter.frequency.setValueAtTime(620, ctx.currentTime)
+  filter.Q.setValueAtTime(2.5, ctx.currentTime)
+
+  const gain = ctx.createGain()
+  gain.gain.setValueAtTime(0, ctx.currentTime)
+
+  // 22 Hz pulse for a mechanical "drrrrr" rhythm.
+  const pulseLFO = ctx.createOscillator()
+  pulseLFO.frequency.setValueAtTime(22, ctx.currentTime)
+  const pulseDepth = ctx.createGain()
+  pulseDepth.gain.setValueAtTime(0.5, ctx.currentTime)
+  pulseLFO.connect(pulseDepth).connect(gain.gain)
+
+  source.connect(filter)
+  filter.connect(gain)
+  gain.connect(ctx.destination)
+  source.start()
+  pulseLFO.start()
+
+  drillSound = { source, gain, filter, pulseLFO }
+  return drillSound
+}
+
+/**
+ * Set the drill loop's intensity (0..1). 0 = silent, 1 = full volume. Smooth
+ * via WebAudio's setTargetAtTime so flicker-on-/-off during a drill session
+ * doesn't manifest as audible clicks.
+ */
+export function setDrillSoundIntensity(intensity: number): void {
+  const s = intensity > 0.001 ? ensureDrillSound() : drillSound
+  if (!s || !audioCtx) return
+  const target = Math.max(0, Math.min(1, intensity)) * 0.08 * getSfxVolume()
+  s.gain.gain.setTargetAtTime(target, audioCtx.currentTime, 0.05)
+}
+
+export function suspendDrillSound(): void {
+  if (!drillSound || !audioCtx) return
+  drillSound.gain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.05)
+}
+
+export function stopDrillSound(): void {
+  if (!drillSound) return
+  try {
+    drillSound.source.stop()
+    drillSound.pulseLFO.stop()
+  } catch {
+    // already stopped
+  }
+  drillSound = null
+}
+
+// ---------------------------------------------------------------------------
 // Arbiter Siren — pulsing red-alert klaxon while The Arbiter closes in
 // ---------------------------------------------------------------------------
 
@@ -534,6 +620,7 @@ export function playBuyRegister(): void {
 
 export function disposeSfx(): void {
   stopEngineSound()
+  stopDrillSound()
   stopArbiterSiren()
   // Don't close ctx — shared with main audio module
   audioCtx = null

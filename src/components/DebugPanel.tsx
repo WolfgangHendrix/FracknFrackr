@@ -237,6 +237,7 @@ function PanelContent({
                 thrusters: 1,
                 sensor: 3,
                 droneRepair: 1,
+                drillNose: 3,
               }
               for (const k of Object.keys(maxed) as (keyof typeof maxed)[]) {
                 state.setUpgradeLevel(k, maxed[k])

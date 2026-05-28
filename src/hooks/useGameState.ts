@@ -46,6 +46,7 @@ const UPGRADE_MAX: Record<keyof Upgrades, number> = {
   thrusters: 1,
   sensor: 3,
   droneRepair: 1,
+  drillNose: 3,
 }
 
 export interface GameStateHook {

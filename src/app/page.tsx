@@ -230,7 +230,8 @@ export default function Home() {
                           type === 'magnet' ||
                           type === 'hullPlating' ||
                           type === 'bounty' ||
-                          type === 'sensor'
+                          type === 'sensor' ||
+                          type === 'drillNose'
                         ? 3
                         : type === 'drone'
                           ? 4

@@ -33,6 +33,7 @@ export const UpgradesSchema = z.object({
   thrusters: z.number().int().min(0).max(1).default(0),
   sensor: z.number().int().min(0).max(3).default(0),
   droneRepair: z.number().int().min(0).max(1).default(0),
+  drillNose: z.number().int().min(0).max(3).default(0),
 })
 export type Upgrades = z.infer<typeof UpgradesSchema>
 
@@ -106,6 +107,7 @@ export function defaultGameState(): GameState {
       thrusters: 0,
       sensor: 0,
       droneRepair: 0,
+      drillNose: 0,
     },
     cargo: {
       scrap: 0,

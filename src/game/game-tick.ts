@@ -190,6 +190,8 @@ export interface TickState {
   sensorTier: number
   /** Drone Repair Bay 0/1: passive drone rebuild while near station. */
   droneRepairUnlocked: boolean
+  /** Drill Nose 0-3: per-tier ramming damage to asteroids. */
+  drillNoseTier: number
   /** Active boost timer (sec). Velocity boost while > 0. */
   boostActiveTimer: number
   /** Boost cooldown timer (sec). Boost is unavailable while > 0. */
@@ -349,6 +351,8 @@ export interface TickResult {
   scrapStolenByEnemies: number
   /** True if Drone Repair Bay rebuilt a drone this tick (scene needs to bump count). */
   droneRebuilt: boolean
+  /** True while the ship is actively drilling an asteroid with the nose drill. */
+  drillNoseActive: boolean
   // Enemy lifecycle
   enemySpawned: EnemyShip | null
   enemyDestroyed: { x: number; y: number } | null
@@ -492,6 +496,7 @@ export function createTickState(config?: TickStateConfig): TickState {
     thrustersUnlocked: false,
     sensorTier: 0,
     droneRepairUnlocked: false,
+    drillNoseTier: 0,
     boostActiveTimer: 0,
     boostCooldownTimer: 0,
     droneRepairTimer: 10,
@@ -586,6 +591,7 @@ function emptyResult(): TickResult {
     destroyedDroneIds: [],
     scrapStolenByEnemies: 0,
     droneRebuilt: false,
+    drillNoseActive: false,
     enemySpawned: null,
     enemyDestroyed: null,
     enemyDamaged: [],
@@ -1184,6 +1190,7 @@ function prologueTick(state: TickState, input: TickInput, result: TickResult): v
       state.thrustersUnlocked = true
       state.sensorTier = 3
       state.droneRepairUnlocked = true
+      state.drillNoseTier = 3
       // Mining-drone fleet at cap so the player sees the full RTS layer.
       state.miningDroneCap = 4
       const needed = state.miningDroneCap - state.miningDrones.length
@@ -1487,13 +1494,18 @@ export function tick(state: TickState, input: TickInput): TickResult {
   }
 
   // --- Ship-asteroid collision ---
+  // The Drill Nose upgrade gates the ramming damage. Tier 1-3 scales the
+  // damage; tier 0 is contact-only (still bounces the ship off, no harm to
+  // the rock). The prologue ship is fully maxed so it always drills.
   for (const a of state.asteroids) {
     if (a.hp > 0) {
       const drilling = resolveShipAsteroidCollision(state.ship, a)
-      if (drilling) {
-        const drillDamage = (isPrologue ? 18 : 10) * dt
+      if (drilling && (isPrologue || state.drillNoseTier > 0)) {
+        const tierMult = isPrologue ? 3 : state.drillNoseTier
+        const drillDamage = 8 * tierMult * dt
         a.hp = Math.max(0, a.hp - drillDamage)
         result.asteroidHit = true
+        result.drillNoseActive = true
       }
     }
   }

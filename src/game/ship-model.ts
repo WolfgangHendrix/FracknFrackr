@@ -111,11 +111,31 @@ function createMiningShipModel(): THREE.Group {
   addVoxel(ship, 2, 4, 0, claw)
   addVoxel(ship, 2, 5, 0, claw)
   addVoxel(ship, 1, 6, 0, claw)
-  // Central drill bit, projecting forward to a point
-  addVoxel(ship, 0, 4, 0, drill)
-  addVoxel(ship, 0, 5, 0, drill)
-  addVoxel(ship, 0, 6, 0, drill)
-  addVoxel(ship, 0, 7, 0, drill)
+  // Central drill bit — grouped under a 'drillNose' Object3D so the scene
+  // can spin it about its forward axis while the Drill Nose upgrade is
+  // actively drilling an asteroid. Spiral-offset ridge voxels around the
+  // shaft make the rotation visually obvious (a symmetric stack of cubes
+  // looks identical at every angle).
+  const drillNose = new THREE.Group()
+  drillNose.name = 'drillNose'
+  addVoxel(drillNose, 0, 4, 0, drill)
+  addVoxel(drillNose, 0, 5, 0, drill)
+  addVoxel(drillNose, 0, 6, 0, drill)
+  addVoxel(drillNose, 0, 7, 0, drill)
+  // Ridge voxels offset off the central axis so a spin reads as motion.
+  // Slightly smaller (60% size) and placed in a tight helix around the bit.
+  const ridge = (x: number, y: number, z: number): void => {
+    const geo = new THREE.BoxGeometry(VOXEL_SIZE * 0.6, VOXEL_SIZE * 0.6, VOXEL_SIZE * 0.6)
+    const mat = new THREE.MeshStandardMaterial({ color: claw, flatShading: true })
+    const mesh = new THREE.Mesh(geo, mat)
+    mesh.position.set(x * VOXEL_SIZE, y * VOXEL_SIZE, z * VOXEL_SIZE)
+    drillNose.add(mesh)
+  }
+  ridge(0.5, 4.3, 0)
+  ridge(-0.5, 4.9, 0)
+  ridge(0.5, 5.5, 0)
+  ridge(-0.5, 6.1, 0)
+  ship.add(drillNose)
 
   // --- Turret (rotates independently to track the player's aim) ---
   // Named 'turret' so scene.ts can grab it and set rotation.z each frame.

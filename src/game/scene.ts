@@ -81,6 +81,8 @@ import {
   startEngineSound,
   updateEngineSound,
   suspendEngineSound,
+  setDrillSoundIntensity,
+  suspendDrillSound,
   startArbiterSiren,
   updateArbiterSiren,
   stopArbiterSiren,
@@ -646,6 +648,11 @@ export function createGameScene(
   //     mutated by the debug panel (which is itself excluded from production
   //     builds via DEBUG_ENABLED). Reading them in hot paths is one branch
   //     each, well below per-frame budget. ---
+  // Drill Nose spin intensity, smoothly tweened toward 0/1 based on the
+  // tick's drillNoseActive flag. Kept here so the spin doesn't jitter as
+  // the per-frame collision check toggles on/off between hits.
+  let drillNoseSpinIntensity = 0
+
   let debugBloomEnabled = true
   let debugVignetteEnabled = true
   let debugChromaticEnabled = true
@@ -2010,6 +2017,20 @@ export function createGameScene(
       rechargeMeter.position.set(ship.x, ship.y, 0)
       syncOptionOrbs()
 
+      // Drill Nose visual: spin the named 'drillNose' group around its
+      // forward axis when the tick reports active drilling, slow it back to
+      // a stop otherwise. Decoupled from the per-frame contact check so
+      // brief gaps between hits don't make it stutter.
+      const drillNoseGroup = shipModel.getObjectByName('drillNose')
+      const drillTarget = result.drillNoseActive ? 1 : 0
+      drillNoseSpinIntensity += (drillTarget - drillNoseSpinIntensity) * Math.min(1, dt * 8)
+      if (drillNoseGroup) {
+        drillNoseGroup.rotation.y += drillNoseSpinIntensity * 24 * dt
+      }
+      // Drill SFX rides the same tween — silent when not engaged, swells
+      // as the bit comes up to speed.
+      setDrillSoundIntensity(drillNoseSpinIntensity)
+
       // Mining drones — remove meshes for destroyed drones, then sync the
       // remaining drone positions and status-light colors. Meshes are
       // created lazily on first frame after build.
@@ -2200,6 +2221,7 @@ export function createGameScene(
         wasPaused = true
         suspendEngineSound()
         stopCollectorHum()
+        suspendDrillSound()
         stopArbiterSiren()
         suspendMusic()
       }
@@ -2401,6 +2423,7 @@ export function createGameScene(
     tickState.thrustersUnlocked = upgrades.thrusters > 0
     tickState.sensorTier = upgrades.sensor
     tickState.droneRepairUnlocked = upgrades.droneRepair > 0
+    tickState.drillNoseTier = upgrades.drillNose
     // If the currently-selected tool is no longer unlocked, fall back to
     // blaster so the player isn't stranded on a tool they can't fire.
     if (tickState.activeMiningTool === 'lazer' && !lazerUnlocked) {
