@@ -188,8 +188,12 @@ export function TutorialOverlay({
   // Hide overlay while waiting for enemy to approach; show again when frozen
   if (step === 'destroy-enemy' && !frozen) return null
 
-  // Hide tutorial overlay when trade menu is handling the interaction
-  if ((step === 'trade-sell' || step === 'trade-buy') && tradeMenuOpen) return null
+  // Hide the tutorial overlay any time the trade menu is open. Sell/buy
+  // steps have their own pulsing hint inside the shop, and the post-buy
+  // "drive through the station" prompt only makes sense once the player
+  // has dismissed the shop — otherwise it floats over a menu they can't
+  // act on yet.
+  if (tradeMenuOpen) return null
 
   // Hide overlay during prologue (PrologueOverlay handles this)
   if (step.startsWith('prologue-')) return null
