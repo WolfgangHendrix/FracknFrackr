@@ -1501,24 +1501,31 @@ export function tick(state: TickState, input: TickInput): TickResult {
   // damage; tier 0 is contact-only (still bounces the ship off, no harm to
   // the rock).
   //
-  // Drill activation requires the ship's velocity to be aimed INTO the
-  // asteroid (positive dot product). Without that check, the intro's
-  // auto-piloted ship glances off rocks constantly and pegs the drill SFX
-  // permanently — and even in normal play a passive contact would sustain
-  // the harsh drill loop. The prologue is intentionally NOT a drill demo;
-  // the intro already shows off the rest of the loadout.
+  // To detect "the player is actively ramming this rock" we sample the
+  // velocity *before* resolveShipAsteroidCollision applies its bounce — by
+  // the time the function returns, the inward velocity component has been
+  // canceled, and a post-bounce check would essentially never pass. We
+  // then evaluate cosine(angle) between velocity and direction-to-asteroid
+  // against a generous 0.3 threshold (~73° cone) so the player doesn't have
+  // to aim laser-straight at the asteroid center to trigger the drill.
   for (const a of state.asteroids) {
     if (a.hp <= 0) continue
-    if (!resolveShipAsteroidCollision(state.ship, a)) continue
-    if (isPrologue || state.drillNoseTier <= 0) continue
 
     const toAsteroidX = a.x - state.ship.x
     const toAsteroidY = a.y - state.ship.y
-    const velDot =
-      state.ship.velocityX * toAsteroidX + state.ship.velocityY * toAsteroidY
-    if (velDot <= 0) continue
+    const distToAsteroid = Math.hypot(toAsteroidX, toAsteroidY)
     const shipSpeed = Math.hypot(state.ship.velocityX, state.ship.velocityY)
-    if (shipSpeed < 6) continue
+    let ramming = false
+    if (shipSpeed > 3 && distToAsteroid > 0.001) {
+      const cos =
+        (state.ship.velocityX * toAsteroidX + state.ship.velocityY * toAsteroidY) /
+        (shipSpeed * distToAsteroid)
+      ramming = cos > 0.3
+    }
+
+    if (!resolveShipAsteroidCollision(state.ship, a)) continue
+    if (isPrologue || state.drillNoseTier <= 0) continue
+    if (!ramming) continue
 
     const drillDamage = 8 * state.drillNoseTier * dt
     a.hp = Math.max(0, a.hp - drillDamage)
