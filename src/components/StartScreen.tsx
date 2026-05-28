@@ -6,6 +6,7 @@ import type { SaveSlotId, SaveSlotSummary } from '@/lib/schemas'
 import { useGamepadMenu } from '@/hooks/useGamepadMenu'
 import { LeaderboardMenu } from './LeaderboardMenu'
 import { loadLeaderboard } from '@/lib/leaderboard'
+import { wipeAllGameData } from '@/lib/wipe-data'
 import { BUILD_VERSION } from '@/lib/build-version'
 
 // In-game asteroid voxel palette (mirrors ASTEROID_COLORS in asteroid-model.ts)
@@ -125,7 +126,13 @@ export function clearSlotSummary(slotId: SaveSlotId): void {
   localStorage.setItem(SLOTS_STORAGE_KEY, JSON.stringify([...map.values()]))
 }
 
-type ScreenMode = 'main' | 'new-game' | 'load-game' | 'credits' | 'leaderboards'
+type ScreenMode =
+  | 'main'
+  | 'new-game'
+  | 'load-game'
+  | 'credits'
+  | 'leaderboards'
+  | 'erase'
 
 /**
  * A single credit block: a role heading and one or more attribution lines.
@@ -406,6 +413,54 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
           >
             CREDITS
           </button>
+          {/* Erase Data is deliberately styled as a quiet utility link rather
+              than a primary button — it sits below the main flow so the
+              destructive action isn't visually grouped with NEW GAME. */}
+          <button
+            data-menu-item
+            onClick={() => setMode('erase')}
+            className="mt-2 px-3 py-2 text-white/35 font-sans text-xs tracking-[0.18em] uppercase hover:text-hud-red focus:text-hud-red focus:outline-none focus:ring-1 focus:ring-hud-red/40 rounded transition-colors"
+          >
+            Erase All Data
+          </button>
+        </div>
+      )}
+
+      {/* Erase All Data — destructive confirmation */}
+      {mode === 'erase' && (
+        <div className="flex flex-col gap-4 items-center relative z-10 w-full max-w-sm px-4">
+          <div className="text-3xl text-hud-red" aria-hidden="true">
+            ⚠
+          </div>
+          <p className="font-sans text-base text-hud-red text-center tracking-wider font-bold">
+            ERASE ALL DATA
+          </p>
+          <p className="font-sans text-sm text-white/75 text-center leading-relaxed">
+            This permanently deletes every save slot, the leaderboard, and any
+            stored settings or tutorial progress. It cannot be undone.
+          </p>
+          <div className="flex gap-3 mt-2">
+            <button
+              data-menu-item
+              data-menu-back
+              onClick={handleBack}
+              className="px-5 py-3 min-h-[44px] bg-space-800/80 border border-white/20 rounded text-white/60 font-sans text-sm hover:bg-space-700/80 hover:text-white/85 focus:outline-none focus:ring-2 focus:ring-white/40 transition-colors"
+            >
+              CANCEL
+            </button>
+            <button
+              data-menu-item
+              onClick={() => {
+                wipeAllGameData()
+                // Reload so every memoized read (best entry, save slots,
+                // tutorial flags, last-initials) starts from an empty slate.
+                if (typeof window !== 'undefined') window.location.reload()
+              }}
+              className="px-5 py-3 min-h-[44px] bg-hud-red/20 border border-hud-red rounded text-hud-red font-sans text-sm font-bold hover:bg-hud-red/35 focus:bg-hud-red/35 focus:outline-none focus:ring-2 focus:ring-hud-red transition-colors"
+            >
+              ERASE EVERYTHING
+            </button>
+          </div>
         </div>
       )}
 
