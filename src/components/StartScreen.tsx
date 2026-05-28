@@ -77,6 +77,14 @@ function generateAsteroidCells(seed: number): [number, number, number][] {
 
 const SLOTS_STORAGE_KEY = 'fracking-asteroids-slot-summaries'
 
+/** Orbiting drone-color dots, same palette as the TitleScreen. */
+const ORBIT_DOTS = [
+  { color: '#ffaa00', radius: 220, duration: 24, delay: 0 },
+  { color: '#00ccff', radius: 260, duration: 32, delay: 6 },
+  { color: '#77ffcc', radius: 200, duration: 19, delay: 12 },
+  { color: '#ffd866', radius: 290, duration: 40, delay: 3 },
+]
+
 interface StartScreenProps {
   onNewGame: (slotId: SaveSlotId) => void
   onLoadGame: (slotId: SaveSlotId) => void
@@ -292,22 +300,47 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
         />
       </div>
 
+      {/* Bloom halo + concentric scanning rings — same treatment as the
+          TitleScreen so the two menus feel like one continuous frame. */}
+      <div className="menu-bloom-halo pointer-events-none absolute inset-0" aria-hidden="true" />
+      <div className="menu-orbit-ring pointer-events-none absolute" aria-hidden="true" />
+      <div className="menu-orbit-ring-2 pointer-events-none absolute" aria-hidden="true" />
+
+      {/* Orbiting drone-colored dots. */}
+      <div className="menu-orbit-stage pointer-events-none absolute" aria-hidden="true">
+        {ORBIT_DOTS.map((dot, i) => (
+          <span
+            key={`orbit-${i}`}
+            className="menu-orbit-dot"
+            style={{
+              animationDuration: `${dot.duration}s`,
+              animationDelay: `${-dot.delay}s`,
+              ['--orbit-radius' as string]: `${dot.radius}px`,
+              ['--orbit-color' as string]: dot.color,
+            }}
+          />
+        ))}
+      </div>
+
+      {/* Cyan lazer-style sweep, same cadence as TitleScreen. */}
+      <div className="menu-sweep pointer-events-none absolute inset-0" aria-hidden="true" />
+
       {/* Scanline overlay — above background, below menu chrome */}
       <div className="menu-scanlines" aria-hidden="true" />
 
       {/* Title */}
-      <h1 className="menu-title font-display text-4xl md:text-6xl text-hud-green mb-2 tracking-widest text-center relative">
+      <h1 className="menu-title font-display text-4xl md:text-6xl text-hud-green mb-2 tracking-widest text-center relative z-10">
         FRAK&apos;N
         <br />
         FRAK&apos;R
       </h1>
-      <p className="font-sans text-sm md:text-base text-hud-amber/70 mb-12 relative">
+      <p className="font-sans text-sm md:text-base text-hud-amber/70 mb-12 relative z-10">
         Blast. Collect. Scrap. Upgrade.
       </p>
 
       {/* Main Menu */}
       {mode === 'main' && (
-        <div className="flex flex-col gap-4 relative">
+        <div className="flex flex-col gap-4 relative z-10">
           <button
             data-menu-item
             onClick={() => setMode('new-game')}
@@ -335,7 +368,7 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
 
       {/* Credits */}
       {mode === 'credits' && (
-        <div className="flex flex-col gap-5 items-center relative w-full max-w-sm px-4">
+        <div className="flex flex-col gap-5 items-center relative z-10 w-full max-w-sm px-4">
           <CreditSection role="Developer" lines={['Santiago Salvador']} />
           <CreditSection
             role="Original Concept & Base Code"
@@ -366,7 +399,7 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
 
       {/* New Game Slot Picker */}
       {mode === 'new-game' && !confirmSlot && (
-        <div className="flex flex-col gap-3 relative w-full max-w-sm px-4">
+        <div className="flex flex-col gap-3 relative z-10 w-full max-w-sm px-4">
           <p className="font-sans text-sm text-white/60 text-center mb-2">Select a save slot</p>
           {SAVE_SLOT_IDS.map((slotId, i) => {
             const summary = summaries.get(slotId)
@@ -399,7 +432,7 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
 
       {/* Confirm Overwrite */}
       {mode === 'new-game' && confirmSlot && (
-        <div className="flex flex-col gap-4 items-center relative">
+        <div className="flex flex-col gap-4 items-center relative z-10">
           <p className="font-sans text-sm text-hud-red text-center">
             This slot has saved data.
             <br />
@@ -427,7 +460,7 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
 
       {/* Load Game Slot Picker */}
       {mode === 'load-game' && (
-        <div className="flex flex-col gap-3 relative w-full max-w-sm px-4">
+        <div className="flex flex-col gap-3 relative z-10 w-full max-w-sm px-4">
           <p className="font-sans text-sm text-white/60 text-center mb-2">Select a save to load</p>
           {SAVE_SLOT_IDS.map((slotId, i) => {
             const summary = summaries.get(slotId)
@@ -459,6 +492,10 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
           </button>
         </div>
       )}
+
+      {/* Vignette sits above the bloom halo but below the z-10 menu chrome
+          so corners darken without dimming the readable content. */}
+      <div className="menu-vignette pointer-events-none absolute inset-0" aria-hidden="true" />
     </div>
   )
 }
