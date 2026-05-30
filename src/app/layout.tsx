@@ -1,23 +1,11 @@
 import type { Metadata, Viewport } from 'next'
-import { Rubik, Rubik_Mono_One } from 'next/font/google'
 import './globals.css'
 
-// Primary UI face. It pairs with Rubik Mono One without making normal text
-// feel as heavy as the title.
-const rubik = Rubik({
-  subsets: ['latin'],
-  variable: '--font-rubik',
-  display: 'swap',
-})
-
-// Display-only face used by the game title. Loaded via next/font so the file
-// is self-hosted at build time (no runtime request to fonts.googleapis.com).
-const rubikMonoOne = Rubik_Mono_One({
-  weight: '400',
-  subsets: ['latin'],
-  variable: '--font-rubik-mono-one',
-  display: 'swap',
-})
+// Fonts are loaded via a Google Fonts <link> below rather than next/font,
+// because next/font is incompatible with the relative `assetPrefix: './'`
+// required by the itch.io static-export bundle.
+const FONTS_HREF =
+  'https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;700&family=Rubik+Mono+One&display=swap'
 
 export const metadata: Metadata = {
   title: "Frak'n Frak'r — Twin-Stick Mining Roguelike",
@@ -78,7 +66,20 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${rubik.variable} ${rubikMonoOne.variable}`}>
+    <html
+      lang="en"
+      style={
+        {
+          ['--font-rubik' as string]: "'Rubik', ui-sans-serif, system-ui, sans-serif",
+          ['--font-rubik-mono-one' as string]: "'Rubik Mono One', ui-monospace, monospace",
+        } as React.CSSProperties
+      }
+    >
+      <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
+        <link rel="stylesheet" href={FONTS_HREF} />
+      </head>
       <body className="font-sans">{children}</body>
     </html>
   )
