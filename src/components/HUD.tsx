@@ -10,8 +10,6 @@ interface HUDProps {
   scrap: number
   cargo: Cargo
   upgrades: Upgrades
-  playerHp: number
-  playerMaxHp: number
   paused: boolean
   activeTool: MiningTool
   hasLazer: boolean
@@ -104,8 +102,6 @@ export function HUD({
   scrap,
   cargo,
   upgrades,
-  playerHp,
-  playerMaxHp,
   paused,
   activeTool,
   hasLazer,
@@ -116,9 +112,6 @@ export function HUD({
   onPause,
 }: HUDProps) {
   const cargoPercent = cargo.capacity > 0 ? Math.round((cargo.fragments / cargo.capacity) * 100) : 0
-  const hpPercent = playerMaxHp > 0 ? Math.round((playerHp / playerMaxHp) * 100) : 100
-  const hpColor = hpPercent > 50 ? '#00ff88' : hpPercent > 25 ? '#ffaa00' : '#ff4444'
-  const showHealth = playerHp < playerMaxHp
   const ledgerInfo = ledgerStatus(ledger)
   const arbiterHpFrac = arbiter ? Math.max(0, Math.min(1, arbiter.hp / arbiter.maxHp)) : 0
   const arbiterColor = arbiter && arbiter.phase >= 2 ? '#ff1a1a' : '#ff5555'
@@ -138,25 +131,6 @@ export function HUD({
               <MineralBadge key={m.key} letter={m.letter} color={m.color} count={cargo[m.key]} />
             ))}
           </div>
-          {showHealth && (
-            <div className="flex flex-col gap-1">
-              <div
-                className="font-mono text-[clamp(0.75rem,2vw,0.875rem)]"
-                style={{ color: hpColor }}
-              >
-                HULL: {hpPercent}%
-              </div>
-              <div
-                className="w-20 sm:w-32 h-1.5 sm:h-2 rounded-sm overflow-hidden"
-                style={{ backgroundColor: '#333344' }}
-              >
-                <div
-                  className="h-full transition-all duration-200"
-                  style={{ width: `${hpPercent}%`, backgroundColor: hpColor }}
-                />
-              </div>
-            </div>
-          )}
           <MiningToolLabel
             activeTool={activeTool}
             hasAlternateTool={hasLazer || upgrades.ripple > 0}
@@ -176,8 +150,12 @@ export function HUD({
               <div className="text-cyan-200">OPTION x{upgrades.options}</div>
             )}
             {upgrades.speed > 0 && <div className="text-lime-300">ENGINE Mk{upgrades.speed}</div>}
-            {upgrades.armor > 0 && <div className="text-orange-300">ARMOR {upgrades.armor}</div>}
+            {/* Defensive layers — top-down in damage-hierarchy order so the
+                player can see at a glance which charge their next hit will
+                consume: shield first, then hull modules, then armor. */}
             {upgrades.shield > 0 && <div className="text-sky-300">SHIELD {upgrades.shield}</div>}
+            {upgrades.hull > 0 && <div className="text-amber-300">HULL {upgrades.hull}</div>}
+            {upgrades.armor > 0 && <div className="text-orange-300">ARMOR {upgrades.armor}</div>}
             {upgrades.drone > 0 && (
               <div className="text-hud-amber">DRONES {droneCount}/{upgrades.drone}</div>
             )}

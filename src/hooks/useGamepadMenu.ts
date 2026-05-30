@@ -195,25 +195,24 @@ export function useGamepadMenu({ enabled, resetKey }: UseGamepadMenuOptions): vo
 
       // Press: low note. Release: click (which fires the high note via the
       // click listener). Themed sounds (sell/buy) skip the press blip so
-      // their one-shot chime isn't muddied.
+      // their one-shot chime isn't muddied. Both phases respect
+      // aria-disabled in addition to the native `disabled` attribute —
+      // locked menu rows (can't afford, prereq missing, already maxed)
+      // use aria-disabled so they stay in the focus walk (so the player
+      // can scroll through and inspect them) but the A press is a no-op,
+      // matching how clicking a native-disabled button does nothing.
+      const isInert = (el: HTMLElement): boolean =>
+        (el as HTMLButtonElement).disabled || el.getAttribute('aria-disabled') === 'true'
       if (aDown && !prev.current.a) {
         const el = document.activeElement
-        if (
-          el instanceof HTMLElement &&
-          el.matches('[data-menu-item]') &&
-          !(el as HTMLButtonElement).disabled
-        ) {
+        if (el instanceof HTMLElement && el.matches('[data-menu-item]') && !isInert(el)) {
           const sound = el.getAttribute('data-menu-sound')
           if (sound !== 'sell' && sound !== 'buy') playMenuSelectDown()
         }
       }
       if (!aDown && prev.current.a) {
         const el = document.activeElement
-        if (
-          el instanceof HTMLElement &&
-          el.matches('[data-menu-item]') &&
-          !(el as HTMLButtonElement).disabled
-        ) {
+        if (el instanceof HTMLElement && el.matches('[data-menu-item]') && !isInert(el)) {
           ;(el as HTMLButtonElement).click()
         }
       }

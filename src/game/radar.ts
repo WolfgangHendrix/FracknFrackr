@@ -7,14 +7,37 @@
  * to the rim so they stay locatable.
  */
 
-/** On-screen size of the (square) radar canvas, in CSS pixels. */
+/** On-screen size of the (square) radar canvas at sensor tier 0, in CSS pixels. */
 const RADAR_CSS_SIZE = 134
 
-/** World-space distance from the player mapped to the radar rim. */
+/** World-space distance from the player mapped to the radar rim at tier 0. */
 const RADAR_RANGE = 540
 
 /** Inset of the rim from the canvas edge, in CSS pixels. */
 const RIM_MARGIN = 5
+
+/**
+ * Sensor Array — per-tier multipliers.
+ *
+ * `RANGE_GAIN` extends how far the radar reads; `SIZE_GAIN` grows the canvas
+ * itself so the extra world isn't just smushed into the same pixel budget.
+ * The size growth is roughly 60% of the range growth, so each tier gains
+ * meaningful reach AND meaningful clarity — without ballooning the overlay
+ * to dominate the corner. Tier 0→3 ends at +75% range, +45% canvas, ~83%
+ * of the original blip density (was ~57% before the canvas grew).
+ */
+const SENSOR_RANGE_GAIN = 0.25
+const SENSOR_SIZE_GAIN = 0.15
+
+/** Compute the radar's CSS size for a given sensor tier. */
+function radarSizeForTier(tier: number): number {
+  return RADAR_CSS_SIZE * (1 + SENSOR_SIZE_GAIN * tier)
+}
+
+/** Compute the radar's world-space scanning range for a given sensor tier. */
+function radarRangeForTier(tier: number): number {
+  return RADAR_RANGE * (1 + SENSOR_RANGE_GAIN * tier)
+}
 
 export interface RadarBlip {
   x: number
@@ -49,6 +72,10 @@ export interface Radar {
   size: number
   /** World-space distance from the player mapped to the radar rim. */
   range: number
+  /** Device-pixel ratio captured at creation, re-applied on every resize. */
+  dpr: number
+  /** Last sensor tier the canvas was sized for — used to skip no-op resizes. */
+  sizedForTier: number
 }
 
 /** Create the radar canvas and attach it to the game container. */
@@ -72,7 +99,36 @@ export function createRadar(container: HTMLElement): Radar | null {
   ctx.scale(dpr, dpr)
 
   container.appendChild(canvas)
-  return { canvas, ctx, size: RADAR_CSS_SIZE, range: RADAR_RANGE }
+  return {
+    canvas,
+    ctx,
+    size: RADAR_CSS_SIZE,
+    range: RADAR_RANGE,
+    dpr,
+    sizedForTier: 0,
+  }
+}
+
+/**
+ * Resize the radar canvas in place to match a new sensor tier.
+ *
+ * Touching `canvas.width`/`canvas.height` resets the context transform, so we
+ * re-apply the DPR scale afterwards. The CSS bottom anchor (`bottom: 14px`)
+ * keeps the radar pinned to the lower-left corner — the canvas grows upward
+ * and rightward as the upgrade ticks up.
+ */
+function resizeRadar(radar: Radar, sensorTier: number): void {
+  if (radar.sizedForTier === sensorTier) return
+  const cssSize = radarSizeForTier(sensorTier)
+  radar.canvas.width = cssSize * radar.dpr
+  radar.canvas.height = cssSize * radar.dpr
+  radar.canvas.style.width = `${cssSize}px`
+  radar.canvas.style.height = `${cssSize}px`
+  radar.ctx.setTransform(1, 0, 0, 1, 0, 0)
+  radar.ctx.scale(radar.dpr, radar.dpr)
+  radar.size = cssSize
+  radar.range = radarRangeForTier(sensorTier)
+  radar.sizedForTier = sensorTier
 }
 
 /**
@@ -103,13 +159,17 @@ export function radarClickToWorld(
 
 /** Redraw the radar for the current frame. */
 export function updateRadar(radar: Radar, data: RadarData): void {
+  // Re-size the canvas to match the current sensor tier before drawing. The
+  // resize is a no-op when the tier hasn't changed, so this is free per frame
+  // and only pays the cost at the moment the player buys the upgrade.
+  resizeRadar(radar, data.sensorTier)
+
   const { ctx } = radar
-  const size = RADAR_CSS_SIZE
+  const size = radar.size
   const cx = size / 2
   const cy = size / 2
   const rim = size / 2 - RIM_MARGIN
-  // Sensor Array extends the effective scanning range +25% per tier.
-  const range = RADAR_RANGE * (1 + 0.25 * data.sensorTier)
+  const range = radar.range
   const scale = rim / range
 
   ctx.clearRect(0, 0, size, size)

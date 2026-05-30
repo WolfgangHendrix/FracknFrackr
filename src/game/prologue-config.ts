@@ -32,6 +32,14 @@ export const PROLOGUE_ENEMY_FLEET_SIZE = 10
 // asteroid field too fast to give the cutscene room to breathe.
 export const PROLOGUE_MINING_TARGET = 100
 
+// Reinforcement wave — fires once the player has cleared
+// PROLOGUE_REINFORCEMENT_THRESHOLD of the initial field. Without it the
+// 80+6 starting field can't supply 100 destructible bodies and the prologue
+// stalls (objective never advances). The wave also drops in a small enemy
+// reinforcement so the "another round incoming" beat reads in both lanes.
+export const PROLOGUE_REINFORCEMENT_THRESHOLD = 60
+export const PROLOGUE_REINFORCEMENT_ASTEROIDS = 60
+
 /**
  * Radius of the prologue containment bubble (world units, centered on origin).
  * The field spawns within ~120 units; asteroids that drift past this — from

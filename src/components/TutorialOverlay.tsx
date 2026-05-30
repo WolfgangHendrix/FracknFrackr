@@ -71,9 +71,9 @@ const STEPS: {
   },
   {
     key: 'approach-station',
-    desktop: 'Click the shop icon when it appears!',
-    mobile: 'Tap the shop icon when it appears!',
-    gamepad: 'When the shop icon appears, press (A) to shop!',
+    desktop: 'Fly into the Trade Station to dock!',
+    mobile: 'Fly into the Trade Station to dock!',
+    gamepad: 'Fly into the Trade Station to dock!',
   },
   {
     key: 'trade-sell',

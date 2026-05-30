@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import type { Cargo, Upgrades } from '@/lib/schemas'
 import type { TutorialStep } from '@/hooks/useTutorial'
 import { SCRAP_VALUE_BY_MINERAL } from '@/hooks/useGameState'
@@ -26,145 +26,172 @@ export const DRONE_BAY_COST = 240
 /** Scrap cost to construct a single mining drone at the station. */
 export const MINING_DRONE_BUILD_COST = 60
 
-/** Upgrade catalog available at the trade station. */
-const UPGRADE_CATALOG = [
+/**
+ * Upgrade catalog grouped by role and sorted by cost within each section.
+ *
+ * Section ordering is the rough "shopping arc" of a typical run: tighten
+ * your offense first, then survive longer, then optimize income, then
+ * scale the drone fleet. Cost-ascending within a section means whatever
+ * you can already afford floats to the top of its group, and prereq-locked
+ * items (cooling, missileBias, droneRepair, autoTool) naturally land
+ * *after* the upgrade that unlocks them — the dependency reads visually.
+ *
+ * Drill Nose lives under LOGISTICS because it's a mining tool by effect
+ * (asteroid-only damage, no enemy contact damage), not a combat option.
+ */
+const UPGRADE_CATALOG_SECTIONS = [
   {
-    type: 'blaster' as const,
-    label: 'Fire Rate Boost',
-    cost: 10,
-    description: 'Faster blaster cadence — single bolt, more shots/sec',
+    title: 'OFFENSE',
+    items: [
+      {
+        type: 'blaster' as const,
+        label: 'Fire Rate Boost',
+        cost: 10,
+        description: 'Faster blaster cadence — single bolt, more shots/sec',
+      },
+      {
+        type: 'missiles' as const,
+        label: 'Heat Seeking Spread Missiles',
+        cost: 140,
+        description: '+1 side-launching homing missile',
+      },
+      {
+        type: 'cooling' as const,
+        label: 'Cooling Vanes',
+        cost: 150,
+        description: 'Lazer runs longer + cools faster per tier',
+      },
+      {
+        type: 'options' as const,
+        label: 'Option',
+        cost: 220,
+        description: 'Orbital duplicate primary weapon',
+      },
+      {
+        type: 'spread' as const,
+        label: 'Tri-Bolt Spread',
+        cost: 220,
+        description: 'Blaster fires a 3-bolt fan instead of a single shot',
+      },
+      {
+        type: 'missileBias' as const,
+        label: 'Heat-Seeker Bias',
+        cost: 220,
+        description: 'Missiles prioritize Arbiter + carriers over grunts',
+      },
+      {
+        type: 'smartBomb' as const,
+        label: 'Emergency Core Detonator',
+        cost: 250,
+        description: 'Auto-bomb on fatal hit (one-use)',
+      },
+      {
+        type: 'ripple' as const,
+        label: 'Ripple Beam',
+        cost: 260,
+        description: 'Wide beam that expands with distance',
+      },
+      {
+        type: 'autoTool' as const,
+        label: 'Auto Targeting Assist',
+        cost: AUTO_TOOL_COST,
+        description: 'Auto-picks the right tool when aiming at an asteroid',
+      },
+    ],
   },
   {
-    type: 'spread' as const,
-    label: 'Tri-Bolt Spread',
-    cost: 220,
-    description: 'Blaster fires a 3-bolt fan instead of a single shot',
+    title: 'MOBILITY & HULL',
+    items: [
+      {
+        type: 'shield' as const,
+        label: 'Life-Force Shield',
+        cost: 50,
+        description: '+1 energy-shield charge. First line of defense — absorbs one hit.',
+      },
+      {
+        type: 'hull' as const,
+        label: 'Hull Module',
+        cost: 70,
+        description:
+          '+1 bolt-on hull piece (scoop → cargo pods → swept wings). Absorbs one hit, then tears off.',
+      },
+      {
+        type: 'armor' as const,
+        label: 'Armor Plating',
+        cost: 60,
+        description: '+1 internal armor charge. Last layer before the smart-bomb.',
+      },
+      {
+        type: 'speed' as const,
+        label: 'Engine Tuning',
+        cost: 160,
+        description: '+10% base ship speed',
+      },
+      {
+        type: 'thrusters' as const,
+        label: 'Thruster Vectoring',
+        cost: 240,
+        description: 'Tap Shift / B to boost — 2× velocity, 3s cooldown',
+      },
+    ],
   },
   {
-    type: 'collector' as const,
-    label: 'Collector Range',
-    cost: 80,
-    description: 'Wider pickup radius',
+    title: 'LOGISTICS',
+    items: [
+      {
+        type: 'collector' as const,
+        label: 'Collector Range',
+        cost: 80,
+        description: 'Wider pickup radius',
+      },
+      {
+        type: 'storage' as const,
+        label: 'Cargo Expansion',
+        cost: 100,
+        description: '+25 cargo capacity',
+      },
+      {
+        type: 'sensor' as const,
+        label: 'Sensor Array',
+        cost: 130,
+        description: 'Longer radar range; tier 3 paints off-screen contacts',
+      },
+      {
+        type: 'magnet' as const,
+        label: 'Magnetic Hopper',
+        cost: 140,
+        description: '+30% pickup radius per tier (stacks with collector)',
+      },
+      {
+        type: 'drillNose' as const,
+        label: 'Drill Nose',
+        cost: 160,
+        description: 'Ram asteroids with the ship nose to drill them (per tier)',
+      },
+      {
+        type: 'bounty' as const,
+        label: 'Bounty Manifest',
+        cost: 180,
+        description: '+15% scrap from enemy kills per tier',
+      },
+    ],
   },
   {
-    type: 'storage' as const,
-    label: 'Cargo Expansion',
-    cost: 100,
-    description: '+25 cargo capacity',
-  },
-  {
-    type: 'missiles' as const,
-    label: 'Heat Seeking Spread Missiles',
-    cost: 140,
-    description: '+1 side-launching homing missile',
-  },
-  {
-    type: 'ripple' as const,
-    label: 'Ripple Beam',
-    cost: 260,
-    description: 'Wide beam that expands with distance',
-  },
-  {
-    type: 'options' as const,
-    label: 'Option',
-    cost: 220,
-    description: 'Orbital duplicate primary weapon',
-  },
-  {
-    type: 'speed' as const,
-    label: 'Engine Tuning',
-    cost: 160,
-    description: '+10% base ship speed',
-  },
-  {
-    type: 'armor' as const,
-    label: 'Armor Plating',
-    cost: 120,
-    description: '+1 emergency hull hit',
-  },
-  {
-    type: 'shield' as const,
-    label: 'Life-Force Shield',
-    cost: 180,
-    description: 'Restores a 3-hit damage shield',
-  },
-  {
-    type: 'smartBomb' as const,
-    label: 'Emergency Core Detonator',
-    cost: 250,
-    description: 'Auto-bomb on fatal hit (one-use)',
-  },
-  {
-    type: 'autoTool' as const,
-    label: 'Auto Targeting Assist',
-    cost: AUTO_TOOL_COST,
-    description: 'Auto-picks the right tool when aiming at an asteroid',
-  },
-  {
-    type: 'drone' as const,
-    label: 'Mining Drone Bay',
-    cost: DRONE_BAY_COST,
-    description: 'Raises drone cap by +1 (max 4). Drones drill large rocks',
-  },
-  {
-    type: 'hull' as const,
-    label: 'Hull Reinforcement',
-    cost: 180,
-    description: 'Bolt on visible modules: scoop, cargo pods, swept wings',
-  },
-  {
-    type: 'hullPlating' as const,
-    label: 'Hull Plating Mk',
-    cost: 200,
-    description: '+25 max hull HP per tier (100 → 175)',
-  },
-  {
-    type: 'cooling' as const,
-    label: 'Cooling Vanes',
-    cost: 150,
-    description: 'Lazer runs longer + cools faster per tier',
-  },
-  {
-    type: 'magnet' as const,
-    label: 'Magnetic Hopper',
-    cost: 140,
-    description: '+30% pickup radius per tier (stacks with collector)',
-  },
-  {
-    type: 'bounty' as const,
-    label: 'Bounty Manifest',
-    cost: 180,
-    description: '+15% scrap from enemy kills per tier',
-  },
-  {
-    type: 'sensor' as const,
-    label: 'Sensor Array',
-    cost: 130,
-    description: 'Longer radar range; tier 3 paints off-screen contacts',
-  },
-  {
-    type: 'thrusters' as const,
-    label: 'Thruster Vectoring',
-    cost: 240,
-    description: 'Tap Shift / B to boost — 2× velocity, 3s cooldown',
-  },
-  {
-    type: 'missileBias' as const,
-    label: 'Heat-Seeker Bias',
-    cost: 220,
-    description: 'Missiles prioritize Arbiter + carriers over grunts',
-  },
-  {
-    type: 'droneRepair' as const,
-    label: 'Drone Repair Bay',
-    cost: 360,
-    description: 'Auto-rebuilds destroyed drones over time near station',
-  },
-  {
-    type: 'drillNose' as const,
-    label: 'Drill Nose',
-    cost: 160,
-    description: 'Ram asteroids with the ship nose to drill them (per tier)',
+    title: 'DRONES',
+    items: [
+      {
+        type: 'drone' as const,
+        label: 'Mining Drone Bay',
+        cost: DRONE_BAY_COST,
+        description: 'Raises drone cap by +1 (max 4). Drones drill large rocks',
+      },
+      {
+        type: 'droneRepair' as const,
+        label: 'Drone Repair Bay',
+        cost: 360,
+        description: 'Auto-rebuilds destroyed drones over time near station',
+      },
+    ],
   },
 ]
 
@@ -340,8 +367,8 @@ function SellPanel({
       <button
         data-menu-item
         data-menu-sound="sell"
-        onClick={onSell}
-        disabled={!hasMaterials}
+        onClick={hasMaterials ? onSell : undefined}
+        aria-disabled={!hasMaterials || undefined}
         className={`mt-2 w-full py-3 min-h-[48px] rounded font-bold text-base tracking-wider transition-all focus:outline-none focus:ring-2 focus:ring-hud-amber ${
           hasMaterials
             ? isTutorial
@@ -354,6 +381,48 @@ function SellPanel({
       </button>
     </div>
   )
+}
+
+/**
+ * Returns a lock-reason string if this upgrade can't be purchased yet because
+ * a prerequisite isn't owned, or null when it's free to buy.
+ *
+ * Each entry here prevents a "dead purchase" — an upgrade whose effect can't
+ * land because its base system isn't in play. E.g. Drone Repair Bay rebuilds
+ * destroyed drones, which only makes sense if the player has a Drone Bay to
+ * begin with. The returned string doubles as the in-row hint about what
+ * unlocks it.
+ */
+function computePrereqLock(
+  type: keyof Upgrades,
+  upgrades: Upgrades,
+  hasLazer: boolean,
+): string | null {
+  switch (type) {
+    case 'autoTool':
+      // Capstone — only meaningful once the player has every weapon it
+      // would be auto-selecting between, otherwise it's a 0→100 shortcut.
+      if (!hasLazer || upgrades.ripple === 0 || upgrades.spread === 0) {
+        return 'Requires Lazer + Ripple + Tri-Bolt'
+      }
+      return null
+    case 'droneRepair':
+      // Repairs destroyed drones — needs Mining Drone Bay first to have
+      // any drones at all to rebuild.
+      if (upgrades.drone === 0) return 'Requires Mining Drone Bay'
+      return null
+    case 'missileBias':
+      // Steers homing missiles toward priority targets — does nothing if
+      // the player hasn't bought into the missile system.
+      if (upgrades.missiles === 0) return 'Requires Heat Seeking Missiles'
+      return null
+    case 'cooling':
+      // Stretches the Lazer's overheat window — irrelevant on the blaster.
+      if (!hasLazer) return 'Requires Lazer'
+      return null
+    default:
+      return null
+  }
 }
 
 function BuyPanel({
@@ -380,7 +449,16 @@ function BuyPanel({
   return (
     <div className="flex flex-col gap-3">
       <div className="text-white/60 text-sm mb-1">UPGRADES</div>
-      {UPGRADE_CATALOG.map((item) => {
+      {UPGRADE_CATALOG_SECTIONS.map((section, sectionIdx) => (
+        <Fragment key={section.title}>
+          <div
+            className={`text-hud-blue/60 text-[10px] tracking-[0.3em] font-bold border-b border-hud-blue/15 pb-1 ${
+              sectionIdx === 0 ? 'mt-0' : 'mt-3'
+            }`}
+          >
+            {section.title}
+          </div>
+          {section.items.map((item) => {
         const currentLevel = upgrades[item.type]
         const maxLevel =
           item.type === 'missiles'
@@ -396,7 +474,6 @@ function BuyPanel({
                       item.type === 'hull' ||
                       item.type === 'cooling' ||
                       item.type === 'magnet' ||
-                      item.type === 'hullPlating' ||
                       item.type === 'bounty' ||
                       item.type === 'sensor' ||
                       item.type === 'drillNose'
@@ -413,12 +490,12 @@ function BuyPanel({
                         : 5
 
         const maxed = currentLevel >= maxLevel
-        // Auto Targeting Assist is the "capstone" — only buyable once the
-        // player has actually used all the weapons it would be auto-selecting
-        // between. Keeps the upgrade meaningful instead of a 0→100 shortcut.
-        const lockedByPrereq =
-          item.type === 'autoTool' &&
-          !(hasLazer && upgrades.ripple > 0 && upgrades.spread > 0)
+        // Prerequisite gating. Each entry locks an upgrade behind something
+        // the player must already own — this avoids "dead purchases" where
+        // the bought upgrade does nothing because its base system isn't in
+        // play yet. The lock message doubles as a hint about what unlocks it.
+        const prereqLock = computePrereqLock(item.type, upgrades, hasLazer)
+        const lockedByPrereq = prereqLock !== null
         const canAfford = scrap >= item.cost && !maxed && !lockedByPrereq
         const isFireRate = item.type === 'blaster'
         const highlight = isTutorial && isFireRate
@@ -442,7 +519,7 @@ function BuyPanel({
                 {maxed
                   ? 'MAX LEVEL'
                   : lockedByPrereq
-                    ? 'Requires Lazer + Ripple + Tri-Bolt'
+                    ? prereqLock
                     : item.description}{' '}
                 —{' '}
                 {item.type === 'armor' ||
@@ -450,7 +527,6 @@ function BuyPanel({
                 item.type === 'hull' ||
                 item.type === 'cooling' ||
                 item.type === 'magnet' ||
-                item.type === 'hullPlating' ||
                 item.type === 'bounty' ||
                 item.type === 'sensor' ||
                 item.type === 'drillNose'
@@ -471,8 +547,8 @@ function BuyPanel({
             <button
               data-menu-item
               data-menu-sound="buy"
-              onClick={() => onBuy(item.type, item.cost)}
-              disabled={!canAfford}
+              onClick={canAfford ? () => onBuy(item.type, item.cost) : undefined}
+              aria-disabled={!canAfford || undefined}
               className={`ml-3 px-5 py-3 min-h-[44px] rounded text-sm font-bold tracking-wider transition-all focus:outline-none focus:ring-2 focus:ring-hud-blue ${
                 canAfford
                   ? highlight
@@ -486,6 +562,8 @@ function BuyPanel({
           </div>
         )
       })}
+        </Fragment>
+      ))}
 
       {/* Lazer mining tool */}
       <div className="text-white/60 text-sm mb-1 mt-2">TOOLS</div>
@@ -506,8 +584,8 @@ function BuyPanel({
         <button
           data-menu-item
           data-menu-sound="buy"
-          onClick={onBuyLazer}
-          disabled={!canAffordLazer}
+          onClick={canAffordLazer ? onBuyLazer : undefined}
+          aria-disabled={!canAffordLazer || undefined}
           className={`ml-3 px-5 py-3 min-h-[44px] rounded text-sm font-bold tracking-wider transition-all focus:outline-none focus:ring-2 focus:ring-hud-blue ${
             hasLazer
               ? 'bg-white/5 border border-white/10 text-white/20 cursor-not-allowed'
@@ -536,21 +614,27 @@ function BuyPanel({
               Active {droneCount}/{upgrades.drone} — drills large rocks, returns scrap fast
             </div>
           </div>
-          <button
-            data-menu-item
-            data-menu-sound="buy"
-            onClick={onBuildDrone}
-            disabled={droneCount >= upgrades.drone || scrap < MINING_DRONE_BUILD_COST}
-            className={`ml-3 px-5 py-3 min-h-[44px] rounded text-sm font-bold tracking-wider transition-all focus:outline-none focus:ring-2 focus:ring-hud-amber ${
-              droneCount >= upgrades.drone
-                ? 'bg-white/5 border border-white/10 text-white/20 cursor-not-allowed'
-                : scrap >= MINING_DRONE_BUILD_COST
-                  ? 'bg-hud-amber/20 border border-hud-amber/60 text-hud-amber hover:bg-hud-amber/40'
-                  : 'bg-white/5 border border-white/10 text-white/20 cursor-not-allowed'
-            }`}
-          >
-            {droneCount >= upgrades.drone ? 'CAP' : `${MINING_DRONE_BUILD_COST}`}
-          </button>
+          {(() => {
+            const canBuildDrone =
+              droneCount < upgrades.drone && scrap >= MINING_DRONE_BUILD_COST
+            return (
+              <button
+                data-menu-item
+                data-menu-sound="buy"
+                onClick={canBuildDrone ? onBuildDrone : undefined}
+                aria-disabled={!canBuildDrone || undefined}
+                className={`ml-3 px-5 py-3 min-h-[44px] rounded text-sm font-bold tracking-wider transition-all focus:outline-none focus:ring-2 focus:ring-hud-amber ${
+                  droneCount >= upgrades.drone
+                    ? 'bg-white/5 border border-white/10 text-white/20 cursor-not-allowed'
+                    : scrap >= MINING_DRONE_BUILD_COST
+                      ? 'bg-hud-amber/20 border border-hud-amber/60 text-hud-amber hover:bg-hud-amber/40'
+                      : 'bg-white/5 border border-white/10 text-white/20 cursor-not-allowed'
+                }`}
+              >
+                {droneCount >= upgrades.drone ? 'CAP' : `${MINING_DRONE_BUILD_COST}`}
+              </button>
+            )
+          })()}
         </div>
       )}
     </div>

@@ -96,8 +96,49 @@ export const DRONE_DAMAGE_MULT = 0.5
 const DRONE_COLLISION_RADIUS = 3
 const DRONE_LAUNCH_SPEED = 42
 
+// --- Drifter: slow, weak, weaponless XP filler that crosses the screen ---
+export const DRIFTER_MAX_HP = 1
+/** Constant flight speed (units/sec) — set at spawn, never recomputed. */
+export const DRIFTER_SPEED = 14
+/** Slightly larger than a grunt's hit disc — drifters are easy XP but the
+ *  player still needs to see and aim at them. */
+const DRIFTER_COLLISION_RADIUS = 3.5
+
+// --- Wedge: V-formation flier that swoops in from a bearing ---
+export const WEDGE_MAX_HP = 2
+/** Speed of a wedge ship while flying its formation swoop. */
+const WEDGE_FORMATION_SPEED = 34
+/** Distance to the player at which the wing breaks and members fall into grunt AI. */
+const WEDGE_ENGAGE_DISTANCE = 55
+/** Max units a follower can stretch ahead of its leader before snapping speed up. */
+const WEDGE_CATCHUP_GAIN = 2.4
+const WEDGE_COLLISION_RADIUS = ENEMY_COLLISION_RADIUS
+
+// --- Splitter: large slow ship that births 3 grunts on death ---
+export const SPLITTER_MAX_HP = 14
+const SPLITTER_SPEED = 12
+const SPLITTER_RANGE = 90
+/** Splitter fires a small 3-shot fan; per-bolt damage = projectileDamage. */
+const SPLITTER_SHOOT_INTERVAL = 2.4
+const SPLITTER_PROJECTILE_SPEED = 100
+/** Number of grunt children spawned when a splitter dies. */
+export const SPLITTER_CHILD_COUNT = 3
+const SPLITTER_COLLISION_RADIUS = 9
+/** Body scale chosen so the visible silhouette (voxel diamond radius 3 × VOXEL_SIZE 0.5 × scale)
+ *  comfortably covers the 9-unit hit disc — without this, shots felt like they
+ *  were passing through empty space around an invisible hitbox. */
+const SPLITTER_BODY_SCALE = 3.2
+
 /** The behavioural class of a hostile ship. */
-export type EnemyKind = 'grunt' | 'sniper' | 'scavenger' | 'carrier' | 'drone'
+export type EnemyKind =
+  | 'grunt'
+  | 'sniper'
+  | 'scavenger'
+  | 'carrier'
+  | 'drone'
+  | 'drifter'
+  | 'wedge'
+  | 'splitter'
 
 /** Colors for the enemy ship. */
 const ENEMY_COLORS = {
@@ -186,6 +227,24 @@ export interface EnemyShip {
   launching: boolean
   launchTargetX: number
   launchTargetY: number
+  // --- Formation state (wedge) ---
+  /**
+   * Direct reference to the wing leader, or null. Followers steer to a slot
+   * relative to the leader; the leader itself has null here. Held as a runtime
+   * ref (not an id lookup) because TickState is never serialized — wing
+   * members are pruned together when the patrol pool is filtered.
+   */
+  formationLeader: EnemyShip | null
+  /** Lateral slot offset (perpendicular to the swoop bearing), units. */
+  formationSlotX: number
+  /** Trailing slot offset (along the swoop bearing, negative = behind), units. */
+  formationSlotY: number
+  /** True while still flying the V-formation; false once the wing has broken. */
+  inFormation: boolean
+  /** World heading the wing is sweeping along, radians. */
+  swoopBearing: number
+  /** Player-distance at which the leader breaks formation. */
+  engageDistance: number
 }
 
 export interface EnemyProjectile {
@@ -399,6 +458,102 @@ function createDroneModel(): THREE.Group {
   return group
 }
 
+/** Drifter — chunky green-grey scout. No cockpit, no weapons, fat squat hull
+ *  built wide enough to be a readable target at normal camera distance. */
+function createDrifterModel(): THREE.Group {
+  const group = new THREE.Group()
+  const hull = 0x6a8a6a
+  const dark = 0x3a4a3a
+  const blink = 0xaaffaa
+  // Hull: 3 wide × 4 long — comparable footprint to a grunt body.
+  for (let x = -1; x <= 1; x++) {
+    for (let y = -2; y <= 2; y++) {
+      addVoxel(group, x, y, 0, hull)
+    }
+  }
+  // Stubby side wings push the silhouette out to 5 voxels wide so the
+  // outline reads clearly against the starfield.
+  addVoxel(group, -2, 0, 0, dark)
+  addVoxel(group, 2, 0, 0, dark)
+  addVoxel(group, -2, 1, 0, hull)
+  addVoxel(group, 2, 1, 0, hull)
+  addVoxel(group, -2, -1, 0, hull)
+  addVoxel(group, 2, -1, 0, hull)
+  // Top-side antenna blip — pure visual marker so the player can tell front
+  // from back as it crosses the screen.
+  addVoxel(group, 0, 2, 0.4, blink)
+  addVoxel(group, 0, -3, -0.2, 0x55aa55)
+  return group
+}
+
+/** Wedge — sharp red-orange fighter, beefier than a grunt with forward-swept wings. */
+function createWedgeModel(): THREE.Group {
+  const group = new THREE.Group()
+  const hull = 0xcc4422
+  const accent = 0xffaa44
+  const dark = 0x661111
+  // Arrowhead body — wider than the original to read clearly at distance.
+  for (let row = -3; row <= 4; row++) addVoxel(group, 0, row, 0, hull)
+  for (let row = -1; row <= 2; row++) {
+    addVoxel(group, -1, row, 0, hull)
+    addVoxel(group, 1, row, 0, hull)
+  }
+  addVoxel(group, -1, 3, 0, dark)
+  addVoxel(group, 1, 3, 0, dark)
+  addVoxel(group, 0, 5, 0.5, accent) // cockpit / nose tip
+  // Forward-swept wings — span ±4 to match grunt readability, distinct shape
+  // (swept FORWARD rather than back) so wedge ships read as a different unit.
+  addVoxel(group, -2, 2, 0, accent)
+  addVoxel(group, 2, 2, 0, accent)
+  addVoxel(group, -3, 3, 0, accent)
+  addVoxel(group, 3, 3, 0, accent)
+  addVoxel(group, -4, 4, 0, accent)
+  addVoxel(group, 4, 4, 0, accent)
+  // Trailing tail fins
+  addVoxel(group, -1, -2, 0, dark)
+  addVoxel(group, 1, -2, 0, dark)
+  // Engine
+  addVoxel(group, -1, -3, -0.3, 0xff8800)
+  addVoxel(group, 0, -3, -0.3, 0xff8800)
+  addVoxel(group, 1, -3, -0.3, 0xff8800)
+  return group
+}
+
+/** Splitter — large bulbous teal-purple core wreathed in fragmenting plates.
+ *  Body voxels are deliberately small in voxel count; the heavy lifting is the
+ *  `SPLITTER_BODY_SCALE` scalar applied to the whole inner group so the visible
+ *  hull comfortably covers the 9-unit collision disc. */
+function createSplitterModel(): THREE.Group {
+  const group = new THREE.Group()
+  const body = new THREE.Group()
+  const core = 0x884466
+  const accent = 0xff66cc
+  const plate = 0x442233
+  const cracked = 0xff3388
+  // Lobed body — diamond cross-section of radius 3 (so silhouette ≈ 6 voxels
+  // across pre-scale, ~9.6 world units post-scale).
+  for (let x = -3; x <= 3; x++) {
+    for (let y = -3; y <= 3; y++) {
+      const r = Math.abs(x) + Math.abs(y)
+      if (r > 3) continue
+      addVoxel(body, x, y, 0, r >= 3 ? plate : core)
+    }
+  }
+  // Raised central core
+  addVoxel(body, 0, 0, 0.8, accent)
+  addVoxel(body, 0, 0, 1.4, cracked)
+  // Asymmetric crack lines hinting at the upcoming split
+  addVoxel(body, -2, 1, 0.3, accent)
+  addVoxel(body, 2, -1, 0.3, accent)
+  addVoxel(body, -1, -2, 0.3, cracked)
+  addVoxel(body, 1, 2, 0.3, cracked)
+  // Rear vent / engine
+  addVoxel(body, 0, -4, -0.2, 0xff8800)
+  body.scale.setScalar(SPLITTER_BODY_SCALE)
+  group.add(body)
+  return group
+}
+
 /** Per-kind hull stats. */
 interface KindStats {
   maxHp: number
@@ -406,10 +561,16 @@ interface KindStats {
 }
 const KIND_STATS: Record<EnemyKind, KindStats> = {
   grunt: { maxHp: ENEMY_MAX_HP, collisionRadius: ENEMY_COLLISION_RADIUS },
-  sniper: { maxHp: SNIPER_MAX_HP, collisionRadius: ENEMY_COLLISION_RADIUS },
+  // Sniper's visual barrel extends ~3.5 world units past the origin. A 3-unit
+  // hit disc left the barrel tip outside the hitbox, so shots aimed at the
+  // most obvious visual feature flew past. Bumped to cover hull + barrel base.
+  sniper: { maxHp: SNIPER_MAX_HP, collisionRadius: 4.5 },
   scavenger: { maxHp: SCAVENGER_MAX_HP, collisionRadius: ENEMY_COLLISION_RADIUS },
   carrier: { maxHp: CARRIER_MAX_HP, collisionRadius: CARRIER_COLLISION_RADIUS },
   drone: { maxHp: DRONE_MAX_HP, collisionRadius: DRONE_COLLISION_RADIUS },
+  drifter: { maxHp: DRIFTER_MAX_HP, collisionRadius: DRIFTER_COLLISION_RADIUS },
+  wedge: { maxHp: WEDGE_MAX_HP, collisionRadius: WEDGE_COLLISION_RADIUS },
+  splitter: { maxHp: SPLITTER_MAX_HP, collisionRadius: SPLITTER_COLLISION_RADIUS },
 }
 
 /** Build the voxel model for the given enemy kind. */
@@ -423,6 +584,12 @@ function createModelForKind(kind: EnemyKind): THREE.Group {
       return createCarrierModel()
     case 'drone':
       return createDroneModel()
+    case 'drifter':
+      return createDrifterModel()
+    case 'wedge':
+      return createWedgeModel()
+    case 'splitter':
+      return createSplitterModel()
     default:
       return createEnemyShipModel()
   }
@@ -518,6 +685,12 @@ export function createEnemyShip(
     launching: false,
     launchTargetX: x,
     launchTargetY: y,
+    formationLeader: null,
+    formationSlotX: 0,
+    formationSlotY: 0,
+    inFormation: false,
+    swoopBearing: 0,
+    engageDistance: WEDGE_ENGAGE_DISTANCE,
   }
 }
 
@@ -623,10 +796,182 @@ export function updateEnemyShip(
       return updateScavengerAI(enemy, player, dt, asteroids)
     case 'carrier':
       return updateCarrierAI(enemy, player, dt, asteroids)
+    case 'drifter':
+      return updateDrifterAI(enemy, dt, asteroids)
+    case 'wedge':
+      return updateWedgeAI(enemy, player, dt, asteroids)
+    case 'splitter':
+      return updateSplitterAI(enemy, player, dt, asteroids)
     default:
       // grunt and carrier-launched drones share the orbiting dogfight AI
       return updateGruntAI(enemy, player, dt, asteroids)
   }
+}
+
+/**
+ * Drifter AI — fly along the velocity set at spawn, forever. No steering,
+ * no shooting, no awareness of the player. The straight-line motion plus
+ * trivial HP makes them ideal "feel powerful" XP while teaching new players
+ * to lead a moving target.
+ */
+function updateDrifterAI(
+  enemy: EnemyShip,
+  dt: number,
+  asteroids: Asteroid[] = [],
+): EnemyProjectile[] {
+  enemy.x += enemy.vx * dt
+  enemy.y += enemy.vy * dt
+  // Face the flight direction. atan2 of zero velocity returns 0, which is
+  // fine — drifters are always spawned with a non-zero velocity.
+  enemy.rotation = Math.atan2(enemy.vy, enemy.vx) - Math.PI / 2
+  finalizeEnemy(enemy, asteroids)
+  return []
+}
+
+/**
+ * Wedge AI — V-formation flight in from a fixed bearing, broken into grunt AI
+ * once the wing engages.
+ *
+ * The break condition is per-ship: the leader checks distance to the player
+ * each frame and clears its own `inFormation` flag when close enough; followers
+ * inherit the break by reading their leader's flag. Once broken, each ship
+ * routes through {@link updateGruntAI} so the rest of the fight is the same
+ * orbit/strafe behaviour the player already knows. Followers also break
+ * immediately if the leader dies — without the leader the slot offset has
+ * no anchor, and pretending to hold formation would look broken.
+ */
+function updateWedgeAI(
+  enemy: EnemyShip,
+  player: Ship,
+  dt: number,
+  asteroids: Asteroid[] = [],
+): EnemyProjectile[] {
+  const leader = enemy.formationLeader
+  const leaderActive = leader === null ? true : leader.alive && leader.inFormation
+
+  if (!enemy.inFormation || !leaderActive) {
+    // Wing has broken — clear formation refs so a follower's leader pointer
+    // doesn't keep a dead enemy alive, then hand off to the grunt AI.
+    enemy.inFormation = false
+    enemy.formationLeader = null
+    return updateGruntAI(enemy, player, dt, asteroids)
+  }
+
+  const cos = Math.cos(enemy.swoopBearing)
+  const sin = Math.sin(enemy.swoopBearing)
+
+  if (leader === null) {
+    // Leader: fly straight along the swoop bearing at formation speed.
+    enemy.vx = cos * WEDGE_FORMATION_SPEED
+    enemy.vy = sin * WEDGE_FORMATION_SPEED
+    enemy.x += enemy.vx * dt
+    enemy.y += enemy.vy * dt
+    enemy.heading = enemy.swoopBearing
+    enemy.rotation = enemy.swoopBearing - Math.PI / 2
+
+    // Break when close to the player. The followers see this next frame via
+    // their `leaderActive` check and break in lockstep.
+    const dx = player.x - enemy.x
+    const dy = player.y - enemy.y
+    if (dx * dx + dy * dy < enemy.engageDistance * enemy.engageDistance) {
+      enemy.inFormation = false
+    }
+  } else {
+    // Follower: world target = leader + slot rotated into bearing axes.
+    // Forward axis = (cos, sin); lateral axis = (-sin, cos).
+    const targetX = leader.x + enemy.formationSlotY * cos + enemy.formationSlotX * -sin
+    const targetY = leader.y + enemy.formationSlotY * sin + enemy.formationSlotX * cos
+    const dxT = targetX - enemy.x
+    const dyT = targetY - enemy.y
+    const distT = Math.sqrt(dxT * dxT + dyT * dyT)
+    const desiredAngle = distT > 0.1 ? Math.atan2(dyT, dxT) : enemy.swoopBearing
+    // Snap heading — formation tightness matters more than smooth steering
+    // here, and the leader's straight-line flight makes overshoot unlikely.
+    enemy.heading = desiredAngle
+    // Speed up if behind the slot so the wing stays in shape; capped so a
+    // follower yanked too far forward doesn't rocket past the leader.
+    const speed = WEDGE_FORMATION_SPEED + Math.min(distT * WEDGE_CATCHUP_GAIN, 14)
+    enemy.vx = Math.cos(enemy.heading) * speed
+    enemy.vy = Math.sin(enemy.heading) * speed
+    enemy.x += enemy.vx * dt
+    enemy.y += enemy.vy * dt
+    enemy.rotation = enemy.swoopBearing - Math.PI / 2
+  }
+
+  finalizeEnemy(enemy, asteroids)
+  return []
+}
+
+/**
+ * Splitter AI — slow, ranged, tanky. Edges in to a mid-range fan-shot window
+ * and lobs a 3-bolt spray, backing off if the player closes the gap. Children
+ * are spawned by game-tick on death, not here.
+ */
+function updateSplitterAI(
+  enemy: EnemyShip,
+  player: Ship,
+  dt: number,
+  asteroids: Asteroid[] = [],
+): EnemyProjectile[] {
+  const newProjectiles: EnemyProjectile[] = []
+  const dx = player.x - enemy.x
+  const dy = player.y - enemy.y
+  const dist = Math.sqrt(dx * dx + dy * dy) || 1
+  const toPlayer = Math.atan2(dy, dx)
+
+  let moveAngle = toPlayer
+  let speed = SPLITTER_SPEED
+  if (dist < SPLITTER_RANGE * 0.7) {
+    moveAngle = toPlayer + Math.PI
+    speed = SPLITTER_SPEED * 0.6
+  } else if (dist > SPLITTER_RANGE * 1.2) {
+    moveAngle = toPlayer
+  } else {
+    // Sweet spot — drift gently to keep the bulk reading as a mid-range threat.
+    moveAngle = toPlayer + (Math.PI / 2) * enemy.strafeDir
+    speed = SPLITTER_SPEED * 0.35
+  }
+  steerHeading(enemy, moveAngle, dt, ENEMY_TURN_RATE * 0.4)
+  enemy.vx = Math.cos(enemy.heading) * speed
+  enemy.vy = Math.sin(enemy.heading) * speed
+  enemy.x += enemy.vx * dt
+  enemy.y += enemy.vy * dt
+  enemy.rotation = toPlayer - Math.PI / 2
+
+  enemy.strafeTimer -= dt
+  if (enemy.strafeTimer <= 0) {
+    enemy.strafeTimer = ENEMY_STRAFE_CHANGE_INTERVAL * (0.7 + Math.random() * 0.6)
+    enemy.strafeDir = -enemy.strafeDir
+  }
+
+  enemy.shootTimer -= dt
+  if (enemy.shootTimer <= 0) {
+    const losBlocked =
+      asteroids.length > 0 &&
+      segmentBlockedByAsteroid(enemy.x, enemy.y, player.x, player.y, asteroids)
+    if (losBlocked) {
+      enemy.shootTimer = 0.4
+    } else {
+      enemy.shootTimer = SPLITTER_SHOOT_INTERVAL
+      // 3-bolt fan ±10° around the toPlayer vector.
+      for (let i = -1; i <= 1; i++) {
+        const a = toPlayer + i * 0.18
+        const nx = Math.cos(a)
+        const ny = Math.sin(a)
+        const proj = createEnemyProjectile(
+          enemy.x + nx * 6,
+          enemy.y + ny * 6,
+          nx * SPLITTER_PROJECTILE_SPEED,
+          ny * SPLITTER_PROJECTILE_SPEED,
+          enemy.projectileDamage,
+        )
+        newProjectiles.push(proj)
+      }
+    }
+  }
+
+  finalizeEnemy(enemy, asteroids)
+  return newProjectiles
 }
 
 /**

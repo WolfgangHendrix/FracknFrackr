@@ -293,3 +293,97 @@ export function spawnPrologueField(
 
   return asteroids
 }
+
+/**
+ * Spawn a reinforcement wave of prologue asteroids along the outer edge of
+ * the containment field, drifting inward toward the play area. Unlike
+ * {@link spawnPrologueField} this skips moons (the moons are a one-time
+ * scenic beat) and uses label-prefixed IDs so the new rocks coexist with
+ * the initial field's `prologue-asteroid-N` ids.
+ *
+ * The wave is placed on a ring just inside `fieldRadius` (so the containment
+ * bubble's first-frame position-clamp doesn't yank them) with predominantly
+ * inward velocity plus a small lateral wobble and per-rock speed jitter, so
+ * they read as "drifting in from beyond" over a few seconds rather than
+ * popping into existence inside the play area.
+ */
+export function spawnPrologueReinforcement(
+  cx: number,
+  cy: number,
+  count: number,
+  idLabel: string,
+  fieldRadius: number,
+  inwardSpeed: number,
+  seed?: number,
+): Asteroid[] {
+  const asteroids: Asteroid[] = []
+  const positions: { x: number; y: number }[] = []
+  const spacingSq = PROLOGUE_MIN_SPACING * PROLOGUE_MIN_SPACING
+
+  let s = seed ?? Date.now() % 2147483647
+  function rand(): number {
+    s = (s * 16807 + 0) % 2147483647
+    return (s - 1) / 2147483646
+  }
+
+  let attempts = 0
+  const maxAttempts = count * 20
+  while (asteroids.length < count && attempts < maxAttempts) {
+    attempts++
+
+    const typeIdx = pickWeighted(TYPE_WEIGHTS, rand)
+    const type = TYPE_WEIGHTS[typeIdx].type
+
+    // Spawn just inside the containment radius — a small radial inset both
+    // avoids the bubble's outward-clamp and gives the rocks a tiny ring
+    // depth so they don't read as a perfectly geometric circle.
+    const angle = rand() * Math.PI * 2
+    const radius = fieldRadius - 4 - rand() * 8
+    const x = cx + Math.cos(angle) * radius
+    const y = cy + Math.sin(angle) * radius
+
+    let tooClose = false
+    for (const pos of positions) {
+      const dx = x - pos.x
+      const dy = y - pos.y
+      if (dx * dx + dy * dy < spacingSq) {
+        tooClose = true
+        break
+      }
+    }
+    if (tooClose) continue
+
+    const sizeIdx = pickWeighted(PROLOGUE_SIZE_WEIGHTS, rand)
+    const size = PROLOGUE_SIZE_WEIGHTS[sizeIdx].size
+    const hp = HP_TABLE[type][size]
+
+    // Velocity: mostly inward toward (cx, cy) with a small tangential bias
+    // so the wave doesn't funnel onto the origin. Per-rock speed jitter
+    // staggers arrivals so the player sees rocks gliding into view over
+    // several seconds instead of arriving in a synchronized clump.
+    const inDirX = (cx - x) / radius
+    const inDirY = (cy - y) / radius
+    const tangX = -inDirY
+    const tangY = inDirX
+    const lateral = (rand() - 0.5) * 0.5
+    const speedJitter = 0.6 + rand() * 0.8
+    const speed = inwardSpeed * speedJitter
+    const vx = (inDirX + tangX * lateral) * speed
+    const vy = (inDirY + tangY * lateral) * speed
+
+    asteroids.push({
+      id: `prologue-${idLabel}-${asteroids.length}`,
+      x,
+      y,
+      velocityX: vx,
+      velocityY: vy,
+      type,
+      hp,
+      maxHp: hp,
+      size,
+    })
+    positions.push({ x, y })
+  }
+
+  return asteroids
+}

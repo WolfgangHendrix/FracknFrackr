@@ -26,6 +26,38 @@ let audio: HTMLAudioElement | null = null
 let mode: Mode = 'idle'
 let onEndedHandler: (() => void) | null = null
 let gestureCleanup: (() => void) | null = null
+// Tracks whether the visibility handler paused us mid-playback. Without
+// this we'd resume on tab-show even if the player had explicitly stopped
+// the music for some other reason (or the volume slider muted it).
+let pausedByVisibility = false
+let visibilityHandlerInstalled = false
+
+function installVisibilityHandler(): void {
+  if (visibilityHandlerInstalled) return
+  if (typeof document === 'undefined') return
+  visibilityHandlerInstalled = true
+  // The scene's own visibility handler silences in-game WebAudio loops
+  // (engine, drill, siren, synthesized music layers) but the HTMLAudio
+  // element holding the actual mp3/ogg music track is a different audio
+  // pipeline entirely — without this listener it kept playing while the
+  // tab was hidden, which is exactly what the player reported hearing.
+  document.addEventListener('visibilitychange', () => {
+    const a = audio
+    if (!a) return
+    if (document.hidden) {
+      if (!a.paused) {
+        pausedByVisibility = true
+        a.pause()
+      }
+    } else if (pausedByVisibility) {
+      pausedByVisibility = false
+      void a.play().catch(() => {
+        // Autoplay policy may have reset between hide/show — primeOnFirstGesture
+        // will pick up on the next user input.
+      })
+    }
+  })
+}
 
 function ensureAudio(): HTMLAudioElement | null {
   if (typeof window === 'undefined') return null
@@ -34,6 +66,7 @@ function ensureAudio(): HTMLAudioElement | null {
     audio.preload = 'auto'
   }
   audio.volume = getMusicVolume()
+  installVisibilityHandler()
   return audio
 }
 

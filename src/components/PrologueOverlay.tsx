@@ -13,10 +13,20 @@ const ARBITER_VOICE_LINES = [
 const FRACKER_SIGNAL_DETECTED = './audio/vo_fracker01.wav'
 const FRACKER_SYSTEMS_FAILING = './audio/vo_fracker02.wav'
 
-const ARBITER_DIALOGUE_FALLBACK_BASE_MS = 950
-const ARBITER_DIALOGUE_FALLBACK_MS_PER_CHAR = 32
-const ARBITER_DIALOGUE_AFTER_VOICE_MS = 150
-const ARBITER_DIALOGUE_DONE_MS = 250
+// Text-based duration estimate, used ONLY when the audio element hasn't
+// reported its real duration yet (metadata not loaded / play() rejected
+// before decode). When the real duration is available we prefer it.
+const ARBITER_DIALOGUE_FALLBACK_BASE_MS = 1200
+const ARBITER_DIALOGUE_FALLBACK_MS_PER_CHAR = 40
+// Tail gap added on top of the line's expected playback duration before the
+// next line fires. Padding the audio's *full* duration (not just 'ended')
+// is what fixes the "...power [cut] limits" complaint — the old code armed
+// a 2614 ms fallback timer in play()'s .catch(), shorter than the 3190 ms
+// vo_arbeter01.wav, so if play() rejected the timer guillotined "limits"
+// off the end. The new schedule waits max(duration, fallback) + this gap,
+// and the 'ended' path uses the same scheduler so a single timer wins.
+const ARBITER_DIALOGUE_AFTER_VOICE_MS = 900
+const ARBITER_DIALOGUE_DONE_MS = 500
 
 interface PrologueOverlayProps {
   step: TutorialStep
@@ -64,26 +74,52 @@ function ArbiterDialogue({ onComplete }: { onComplete: () => void }) {
     voice.preload = 'auto'
     voice.volume = 0.9 * getSfxVolume()
     voiceRef.current = voice
-    let fallback: ReturnType<typeof setTimeout> | null = null
 
-    const advance = () => {
-      fallback = setTimeout(() => {
-        setLineIndex((i) => i + 1)
-      }, ARBITER_DIALOGUE_AFTER_VOICE_MS)
-    }
+    const startedAt = performance.now()
+    let advanceTimer: ReturnType<typeof setTimeout> | null = null
+    let cancelled = false
 
-    voice.addEventListener('ended', advance, { once: true })
-    void voice.play().catch(() => {
-      const readMs =
+    // Single scheduler used by both the natural-end path and the
+    // play()-rejected fallback. Waits until max(actual audio duration,
+    // text-based estimate) has elapsed *plus* the tail gap before firing
+    // — this is what prevents the next line from clipping the tail of
+    // this one when `ended` fires a few frames early or play() rejects.
+    const scheduleAdvance = (): void => {
+      if (cancelled) return
+      if (advanceTimer) clearTimeout(advanceTimer)
+      const elapsed = performance.now() - startedAt
+      const textEstimateMs =
         ARBITER_DIALOGUE_FALLBACK_BASE_MS +
         ARBITER_DIALOGUE[lineIndex].length * ARBITER_DIALOGUE_FALLBACK_MS_PER_CHAR
-      fallback = setTimeout(() => setLineIndex((i) => i + 1), readMs)
+      const realDurationMs =
+        voice.duration > 0 && Number.isFinite(voice.duration) ? voice.duration * 1000 : 0
+      const expectedMs = Math.max(textEstimateMs, realDurationMs)
+      const minRemaining = Math.max(0, expectedMs - elapsed)
+      const delay = minRemaining + ARBITER_DIALOGUE_AFTER_VOICE_MS
+      advanceTimer = setTimeout(() => {
+        if (cancelled) return
+        setLineIndex((i) => i + 1)
+      }, delay)
+    }
+
+    const onEnded = (): void => scheduleAdvance()
+    voice.addEventListener('ended', onEnded, { once: true })
+
+    void voice.play().catch(() => {
+      // Autoplay blocked or load failed — schedule the same way. At this
+      // point voice.duration may be 0, so the schedule falls back to the
+      // text estimate and the line still advances on its own.
+      scheduleAdvance()
     })
 
     return () => {
-      if (fallback) clearTimeout(fallback)
-      voice.removeEventListener('ended', advance)
-      voice.pause()
+      cancelled = true
+      if (advanceTimer) clearTimeout(advanceTimer)
+      voice.removeEventListener('ended', onEnded)
+      // Only pause if the clip didn't finish on its own — pausing an
+      // already-ended audio is a no-op in spec, but on some browsers it
+      // can clip tail samples still in the output buffer.
+      if (!voice.ended) voice.pause()
       if (voiceRef.current === voice) voiceRef.current = null
     }
   }, [lineIndex, onComplete])
@@ -233,15 +269,11 @@ export function PrologueOverlay({ step, onSkip, onDialogueComplete }: PrologueOv
             data-testid="prologue-skip-confirm"
           >
             <p className="text-white/50 text-sm font-sans">Skip the intro?</p>
+            {/* NO is placed first in the DOM so the gamepad's focusFirst()
+                lands on the non-destructive action — a reflex A press on the
+                confirm dialog won't accidentally skip the cutscene the player
+                may not have meant to dismiss. */}
             <div className="flex gap-3">
-              <button
-                data-menu-item
-                onClick={handleSkipClick}
-                className="px-5 py-3 min-h-[44px] text-hud-red text-sm font-sans border border-hud-red/40 rounded hover:bg-hud-red/20 focus:bg-hud-red/30 focus:outline-none focus:ring-2 focus:ring-hud-red transition-colors"
-                data-testid="prologue-skip-yes"
-              >
-                YES
-              </button>
               <button
                 data-menu-item
                 data-menu-back
@@ -250,6 +282,14 @@ export function PrologueOverlay({ step, onSkip, onDialogueComplete }: PrologueOv
                 data-testid="prologue-skip-no"
               >
                 NO
+              </button>
+              <button
+                data-menu-item
+                onClick={handleSkipClick}
+                className="px-5 py-3 min-h-[44px] text-hud-red text-sm font-sans border border-hud-red/40 rounded hover:bg-hud-red/20 focus:bg-hud-red/30 focus:outline-none focus:ring-2 focus:ring-hud-red transition-colors"
+                data-testid="prologue-skip-yes"
+              >
+                YES
               </button>
             </div>
           </div>

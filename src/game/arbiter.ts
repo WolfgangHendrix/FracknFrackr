@@ -20,8 +20,14 @@ import { PROJECTILE_RADIUS, LAZER_DAMAGE_MULTIPLIER } from './blaster-constants'
 // Tuning
 // ---------------------------------------------------------------------------
 
-/** Collision radius — generous, covering the Arbiter's dense core. */
-export const ARBITER_COLLISION_RADIUS = 9
+/**
+ * Collision radius — covers the Arbiter's dense core plus its inner blade
+ * wings. The visible silhouette extends out to ~7 voxels (~3.5 world units)
+ * at the blade tips and the body diamond is ~2.5 wide, but a single boss
+ * disc this size feels far better than the player having to thread bolts
+ * between blade arms. Hit-feedback now matches the visual bulk.
+ */
+export const ARBITER_COLLISION_RADIUS = 12
 
 /** Movement speed (units/sec) per phase. */
 const ARBITER_SPEED_P1 = 22
@@ -389,10 +395,38 @@ export function checkProjectileArbiterCollisions(
   const minDist = PROJECTILE_RADIUS + ARBITER_COLLISION_RADIUS
   const minDistSq = minDist * minDist
 
+  // Swept segment-vs-circle: the projectile traversed prevPos → pos this frame,
+  // so check the whole segment against the Arbiter's disc. Without this, fast
+  // blaster bolts could step straight past the boss between two ticks and the
+  // shot visibly went through with no damage.
   for (const p of projectiles) {
-    const dx = p.x - arbiter.x
-    const dy = p.y - arbiter.y
-    if (arbiter.hp > 0 && dx * dx + dy * dy < minDistSq) {
+    if (arbiter.hp <= 0) {
+      surviving.push(p)
+      continue
+    }
+    const sx = p.prevX
+    const sy = p.prevY
+    const ex = p.x
+    const ey = p.y
+    const segDx = ex - sx
+    const segDy = ey - sy
+    const segLenSq = segDx * segDx + segDy * segDy
+    let closestDistSq: number
+    if (segLenSq < 0.0001) {
+      const cdx = ex - arbiter.x
+      const cdy = ey - arbiter.y
+      closestDistSq = cdx * cdx + cdy * cdy
+    } else {
+      let t = ((arbiter.x - sx) * segDx + (arbiter.y - sy) * segDy) / segLenSq
+      t = Math.max(0, Math.min(1, t))
+      const px = sx + t * segDx
+      const py = sy + t * segDy
+      const cdx = px - arbiter.x
+      const cdy = py - arbiter.y
+      closestDistSq = cdx * cdx + cdy * cdy
+    }
+
+    if (closestDistSq < minDistSq) {
       arbiter.hp = Math.max(0, arbiter.hp - p.damage)
       hitProjectileIds.push(p.id)
     } else {

@@ -303,18 +303,26 @@ function ensureDrillSound(): DrillSound | null {
   filter.frequency.setValueAtTime(620, ctx.currentTime)
   filter.Q.setValueAtTime(2.5, ctx.currentTime)
 
-  const gain = ctx.createGain()
-  gain.gain.setValueAtTime(0, ctx.currentTime)
-
-  // 22 Hz pulse for a mechanical "drrrrr" rhythm.
+  // Pulse stage: gain centered at 0.5, modulated by a ±0.5 LFO so the audio
+  // is multiplied by [0, 1] at a 22 Hz "drrrrr" rhythm. Must sit upstream of
+  // the volume stage — wiring the LFO directly into the final gain's
+  // AudioParam (additive) leaves the pulse swinging ±0.5 even after the
+  // intrinsic gain tweens to 0, which keeps the loop audibly buzzing after
+  // the player stops drilling.
+  const pulseGain = ctx.createGain()
+  pulseGain.gain.setValueAtTime(0.5, ctx.currentTime)
   const pulseLFO = ctx.createOscillator()
   pulseLFO.frequency.setValueAtTime(22, ctx.currentTime)
   const pulseDepth = ctx.createGain()
   pulseDepth.gain.setValueAtTime(0.5, ctx.currentTime)
-  pulseLFO.connect(pulseDepth).connect(gain.gain)
+  pulseLFO.connect(pulseDepth).connect(pulseGain.gain)
+
+  const gain = ctx.createGain()
+  gain.gain.setValueAtTime(0, ctx.currentTime)
 
   source.connect(filter)
-  filter.connect(gain)
+  filter.connect(pulseGain)
+  pulseGain.connect(gain)
   gain.connect(ctx.destination)
   source.start()
   pulseLFO.start()
@@ -331,10 +339,12 @@ function ensureDrillSound(): DrillSound | null {
 export function setDrillSoundIntensity(intensity: number): void {
   const s = intensity > 0.001 ? ensureDrillSound() : drillSound
   if (!s || !audioCtx) return
-  // Drill volume sits between engine (0.04) and collector hum (0.055) so it
-  // reads as an active mechanical presence without burying the music or the
-  // other ambient loops the player keeps running while drilling.
-  const target = Math.max(0, Math.min(1, intensity)) * 0.05 * getSfxVolume()
+  // Drill peak volume targets ~0.05 post-pulse — the pulseGain swings the
+  // signal between 0 and 1 (avg 0.5) before this stage, so we use ~10× the
+  // engine's static gain so the perceived loudness lands near the engine
+  // and collector hum without burying the music or the other ambient loops
+  // the player keeps running while drilling.
+  const target = Math.max(0, Math.min(1, intensity)) * 0.5 * getSfxVolume()
   s.gain.gain.setTargetAtTime(target, audioCtx.currentTime, 0.05)
 }
 
@@ -531,6 +541,13 @@ function buildMenuMoveBuffer(ctx: AudioContext): AudioBuffer {
   const samples = Math.floor(ctx.sampleRate * duration)
   const buf = ctx.createBuffer(1, samples, ctx.sampleRate)
   const data = buf.getChannelData(0)
+  // Short linear attack so the buffer doesn't begin mid-cycle at near-full
+  // amplitude. Without this the very first sample lands near +0.97 (the
+  // triangle wave at phase ~0.009 with env=1), and playback hard-steps the
+  // speaker voltage from 0 to +0.97 in a single sample — audible as a
+  // click in front of every hover blip. ~2 ms is well under the perceptual
+  // threshold for attack timbre but plenty to smooth out the step.
+  const attackSamples = Math.max(1, Math.floor(ctx.sampleRate * 0.002))
   // Triangle wave synthesis: phase accumulator + signed-folded ramp.
   let phase = 0
   for (let i = 0; i < samples; i++) {
@@ -540,8 +557,10 @@ function buildMenuMoveBuffer(ctx: AudioContext): AudioBuffer {
     phase -= Math.floor(phase)
     // Triangle: 2 * |2 * (phase - 0.5)| - 1 in [-1, 1]
     const tri = 2 * Math.abs(2 * (phase - 0.5)) - 1
-    // Exponential decay from 1 → ~0.014 over 90ms.
-    const env = Math.exp(-t * 47.5)
+    const attack = i < attackSamples ? i / attackSamples : 1
+    // Exponential decay from 1 → ~0.014 over 90ms, gated by the attack
+    // ramp so the first ~2 ms slide cleanly out of silence.
+    const env = attack * Math.exp(-t * 47.5)
     data[i] = tri * env
   }
   return buf
@@ -560,6 +579,14 @@ export function playMenuMove(): void {
   const src = ctx.createBufferSource()
   src.buffer = menuMoveBuffer
   const gain = ctx.createGain()
+  // GainNode.gain defaults to 1.0 and holds that value until the first
+  // scheduled event. If the source's first samples make it through the
+  // graph before setValueAtTime(0.07, start) lands — which can happen
+  // when `start ≈ ctx.currentTime` due to render-block alignment — those
+  // samples pass at unity gain instead of 0.07 and the speaker hears a
+  // transient. Anchoring the param to 0 immediately, then jumping to
+  // the play level at `start`, prevents that.
+  gain.gain.value = 0
   gain.gain.setValueAtTime(0.07 * getSfxVolume(), start)
   src.connect(gain).connect(ctx.destination)
   src.start(start)
@@ -591,8 +618,17 @@ function playMenuSelectNote(freq: number): void {
   osc.type = 'triangle'
   osc.frequency.setValueAtTime(freq, start)
 
+  // Anchor gain to 0 immediately so the GainNode's default 1.0 can't briefly
+  // pass the oscillator's first samples at unity (which produced a sharp
+  // click in front of the up-blip when click→navigation timing made the
+  // setValueAtTime land after the first render block). The 3 ms linear
+  // attack into the play level keeps the sound's perceived character but
+  // erases any residual step at note-on.
+  const peak = 0.055 * vol
   const gain = ctx.createGain()
-  gain.gain.setValueAtTime(0.055 * vol, start)
+  gain.gain.value = 0
+  gain.gain.setValueAtTime(0, start)
+  gain.gain.linearRampToValueAtTime(peak, start + 0.003)
   gain.gain.exponentialRampToValueAtTime(0.001, start + 0.14)
 
   osc.connect(gain)

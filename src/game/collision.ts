@@ -263,9 +263,12 @@ export function checkProjectileAsteroidCollisions(
           damage: effectiveDamage,
           x: p.x,
           y: p.y,
-          // Surface as "deflected" only when the mismatch is severe (blaster
-          // vs basalt) — that's what triggers the lazer tutorial popup. Other
-          // wrong-tool combos still chip, they just don't shout about it.
+          // Per-hit `deflected` is retained for any future visual feedback
+          // (a spark / clang when blaster vs basalt). It used to trigger a
+          // tutorial popup that nagged the player to buy the Lazer; that
+          // popup was removed because the affinity matrix now lets the
+          // blaster chip basalt slowly, so the "you NEED the Lazer" claim
+          // was outdated and the modal had recurring input-routing bugs.
           deflected: affinity < 0.35,
         })
         hitSomething = true

@@ -8,7 +8,7 @@ import {
   forwardRef,
   useState,
 } from 'react'
-import type { GameScene, MetalVariant, DebugApi } from '@/game/scene'
+import type { GameScene, MetalVariant, DebugApi, RunStatsSnapshot } from '@/game/scene'
 import type { TutorialStep } from '@/hooks/useTutorial'
 import type { MiningTool } from '@/game/types'
 import type { ArbiterHudInfo } from '@/game/arbiter-comms'
@@ -26,6 +26,10 @@ export interface GameCanvasHandle {
   setCombatUpgrades: (upgrades: Upgrades) => void
   buildMiningDrone: () => boolean
   getMiningDroneCount: () => number
+  /** Snapshot of in-progress run stats for the pause menu. Null before scene init. */
+  getRunStats: () => RunStatsSnapshot | null
+  setPhotoMode: (on: boolean) => void
+  takeScreenshot: () => Promise<Blob | null>
   respawnAfterDeath: () => void
   /** Scene-side debug API (only meaningful when DEBUG_ENABLED). */
   getDebugApi: () => DebugApi | null
@@ -47,8 +51,9 @@ interface GameCanvasProps {
   onScrapCollected?: () => void
   onNearStation?: () => void
   onStationRange?: (inRange: boolean) => void
+  onStationContact?: () => void
+  onStationContactBlocked?: () => void
   onStationDriveThrough?: () => void
-  onCrystallineDeflect?: () => void
   onToolChange?: (tool: MiningTool) => void
   onLedgerChanged?: (ledger: number) => void
   onArbiterChanged?: (info: ArbiterHudInfo | null) => void
@@ -57,7 +62,12 @@ interface GameCanvasProps {
   onShieldChanged?: (charges: number) => void
   onMiningDroneCountChanged?: (count: number) => void
   onArmorChanged?: (charges: number) => void
+  onHullChanged?: (charges: number) => void
   onSmartBomb?: () => void
+  onBlackHoleNearby?: () => void
+  onFirstDefensiveHit?: () => void
+  onFirstFormation?: () => void
+  onFirstSplitter?: () => void
   // Prologue callbacks
   onPrologueReady?: () => void
   onFieldCleared?: () => void
@@ -82,8 +92,9 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
     onScrapCollected,
     onNearStation,
     onStationRange,
+    onStationContact,
+    onStationContactBlocked,
     onStationDriveThrough,
-    onCrystallineDeflect,
     onToolChange,
     onLedgerChanged,
     onArbiterChanged,
@@ -92,7 +103,12 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
     onShieldChanged,
     onMiningDroneCountChanged,
     onArmorChanged,
+    onHullChanged,
     onSmartBomb,
+    onBlackHoleNearby,
+    onFirstDefensiveHit,
+    onFirstFormation,
+    onFirstSplitter,
     onPrologueReady,
     onFieldCleared,
     onArbiterArrived,
@@ -103,6 +119,8 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
   const containerRef = useRef<HTMLDivElement>(null)
   const sceneRef = useRef<GameScene | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const pausedRef = useRef(paused)
   const frozenRef = useRef(frozen)
   const tutorialStepRef = useRef(tutorialStep)
@@ -118,8 +136,9 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
   const onScrapCollectedRef = useRef(onScrapCollected)
   const onNearStationRef = useRef(onNearStation)
   const onStationRangeRef = useRef(onStationRange)
+  const onStationContactRef = useRef(onStationContact)
+  const onStationContactBlockedRef = useRef(onStationContactBlocked)
   const onStationDriveThroughRef = useRef(onStationDriveThrough)
-  const onCrystallineDeflectRef = useRef(onCrystallineDeflect)
   const onToolChangeRef = useRef(onToolChange)
   const onLedgerChangedRef = useRef(onLedgerChanged)
   const onArbiterChangedRef = useRef(onArbiterChanged)
@@ -128,7 +147,12 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
   const onShieldChangedRef = useRef(onShieldChanged)
   const onMiningDroneCountChangedRef = useRef(onMiningDroneCountChanged)
   const onArmorChangedRef = useRef(onArmorChanged)
+  const onHullChangedRef = useRef(onHullChanged)
   const onSmartBombRef = useRef(onSmartBomb)
+  const onBlackHoleNearbyRef = useRef(onBlackHoleNearby)
+  const onFirstDefensiveHitRef = useRef(onFirstDefensiveHit)
+  const onFirstFormationRef = useRef(onFirstFormation)
+  const onFirstSplitterRef = useRef(onFirstSplitter)
   const onPrologueReadyRef = useRef(onPrologueReady)
   const onFieldClearedRef = useRef(onFieldCleared)
   const onArbiterArrivedRef = useRef(onArbiterArrived)
@@ -152,6 +176,11 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
     },
     buildMiningDrone: () => sceneRef.current?.buildMiningDrone() ?? false,
     getMiningDroneCount: () => sceneRef.current?.getMiningDroneCount() ?? 0,
+    getRunStats: () => sceneRef.current?.getRunStats() ?? null,
+    setPhotoMode: (on: boolean) => {
+      sceneRef.current?.setPhotoMode(on)
+    },
+    takeScreenshot: async () => (await sceneRef.current?.takeScreenshot()) ?? null,
     getDebugApi: () => sceneRef.current?.debugApi ?? null,
     respawnAfterDeath: () => {
       sceneRef.current?.respawnAfterDeath()
@@ -220,12 +249,16 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
   }, [onStationRange])
 
   useEffect(() => {
-    onStationDriveThroughRef.current = onStationDriveThrough
-  }, [onStationDriveThrough])
+    onStationContactRef.current = onStationContact
+  }, [onStationContact])
 
   useEffect(() => {
-    onCrystallineDeflectRef.current = onCrystallineDeflect
-  }, [onCrystallineDeflect])
+    onStationContactBlockedRef.current = onStationContactBlocked
+  }, [onStationContactBlocked])
+
+  useEffect(() => {
+    onStationDriveThroughRef.current = onStationDriveThrough
+  }, [onStationDriveThrough])
 
   useEffect(() => {
     onToolChangeRef.current = onToolChange
@@ -260,8 +293,28 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
   }, [onArmorChanged])
 
   useEffect(() => {
+    onHullChangedRef.current = onHullChanged
+  }, [onHullChanged])
+
+  useEffect(() => {
     onSmartBombRef.current = onSmartBomb
   }, [onSmartBomb])
+
+  useEffect(() => {
+    onBlackHoleNearbyRef.current = onBlackHoleNearby
+  }, [onBlackHoleNearby])
+
+  useEffect(() => {
+    onFirstDefensiveHitRef.current = onFirstDefensiveHit
+  }, [onFirstDefensiveHit])
+
+  useEffect(() => {
+    onFirstFormationRef.current = onFirstFormation
+  }, [onFirstFormation])
+
+  useEffect(() => {
+    onFirstSplitterRef.current = onFirstSplitter
+  }, [onFirstSplitter])
 
   useEffect(() => {
     onPrologueReadyRef.current = onPrologueReady
@@ -285,7 +338,11 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
     const el = containerRef.current
     if (!el) return
 
-    // Dynamic import to avoid SSR issues with Three.js
+    // Dynamic import to avoid SSR issues with Three.js. Wrapped in a retry
+    // path because the chunk fetch can fail after a long sleep (network not
+    // reconnected yet) and the spinner would otherwise hang forever.
+    setIsLoading(true)
+    setLoadError(null)
     let disposed = false
     import('@/game/scene')
       .then(({ createGameScene }) => {
@@ -303,8 +360,9 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
           onScrapCollected: () => onScrapCollectedRef.current?.(),
           onNearStation: () => onNearStationRef.current?.(),
           onStationRange: (inRange: boolean) => onStationRangeRef.current?.(inRange),
+          onStationContact: () => onStationContactRef.current?.(),
+          onStationContactBlocked: () => onStationContactBlockedRef.current?.(),
           onStationDriveThrough: () => onStationDriveThroughRef.current?.(),
-          onCrystallineDeflect: () => onCrystallineDeflectRef.current?.(),
           onToolChange: (tool: MiningTool) => onToolChangeRef.current?.(tool),
           onLedgerChanged: (ledger: number) => onLedgerChangedRef.current?.(ledger),
           onArbiterChanged: (info: ArbiterHudInfo | null) => onArbiterChangedRef.current?.(info),
@@ -314,7 +372,12 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
           onMiningDroneCountChanged: (count: number) =>
             onMiningDroneCountChangedRef.current?.(count),
           onArmorChanged: (charges: number) => onArmorChangedRef.current?.(charges),
+          onHullChanged: (charges: number) => onHullChangedRef.current?.(charges),
           onSmartBomb: () => onSmartBombRef.current?.(),
+          onBlackHoleNearby: () => onBlackHoleNearbyRef.current?.(),
+          onFirstDefensiveHit: () => onFirstDefensiveHitRef.current?.(),
+          onFirstFormation: () => onFirstFormationRef.current?.(),
+          onFirstSplitter: () => onFirstSplitterRef.current?.(),
           onPrologueReady: () => onPrologueReadyRef.current?.(),
           onFieldCleared: () => onFieldClearedRef.current?.(),
           onArbiterArrived: () => onArbiterArrivedRef.current?.(),
@@ -324,7 +387,12 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
         setTimeout(() => setIsLoading(false), 200)
       })
       .catch((err: unknown) => {
+        if (disposed) return
         console.error('Failed to load game scene:', err)
+        const message =
+          err instanceof Error ? err.message : 'Unknown error loading the game scene.'
+        setLoadError(message)
+        setIsLoading(false)
       })
 
     return () => {
@@ -332,7 +400,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
       sceneRef.current?.dispose()
       sceneRef.current = null
     }
-  }, [getPaused])
+  }, [getPaused, loadAttempt])
 
   return (
     <div className="absolute inset-0 bg-space-950">
@@ -342,7 +410,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
         className="absolute inset-0"
         data-paused={paused}
       />
-      {isLoading && (
+      {isLoading && !loadError && (
         <div className="absolute inset-0 flex items-center justify-center bg-space-950 z-[100] transition-opacity duration-700 pointer-events-none">
           <div className="flex flex-col items-center gap-4">
             <div className="font-sans text-hud-green text-sm tracking-[0.3em] animate-pulse">
@@ -351,6 +419,27 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
             <div className="w-48 h-1 bg-space-800 rounded-full overflow-hidden">
               <div className="h-full bg-hud-green animate-[loading-bar_2s_infinite]" />
             </div>
+          </div>
+        </div>
+      )}
+      {loadError && (
+        <div className="absolute inset-0 flex items-center justify-center bg-space-950 z-[100]">
+          <div className="flex flex-col items-center gap-5 max-w-md px-6 text-center">
+            <div className="font-sans text-hud-red text-sm tracking-[0.3em]">
+              SYSTEMS OFFLINE
+            </div>
+            <p className="font-sans text-white/70 text-sm">
+              Failed to load the game scene. This usually happens after the
+              browser was asleep — the network may not be reconnected yet.
+            </p>
+            <p className="font-mono text-white/40 text-xs break-all">{loadError}</p>
+            <button
+              type="button"
+              onClick={() => setLoadAttempt((n) => n + 1)}
+              className="pointer-events-auto px-6 py-3 min-h-[44px] bg-hud-green/20 hover:bg-hud-green/30 focus:bg-hud-green/40 focus:outline-none focus:ring-2 focus:ring-hud-green border border-hud-green/50 rounded text-hud-green font-sans tracking-[0.2em] text-sm transition-colors"
+            >
+              RETRY
+            </button>
           </div>
         </div>
       )}

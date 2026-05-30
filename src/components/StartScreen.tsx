@@ -552,14 +552,12 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
             <br />
             Start a new game and overwrite it?
           </p>
+          {/* CANCEL is placed first in the DOM so the gamepad's focusFirst()
+              lands on the non-destructive action on dialog open — pressing
+              A reflexively without reading the prompt won't wipe the save.
+              Visual order matches: safe default on the left, destructive
+              action on the right, per the macOS-style dialog convention. */}
           <div className="flex gap-4">
-            <button
-              data-menu-item
-              onClick={handleConfirmOverwrite}
-              className="px-6 py-3.5 min-h-[48px] bg-space-800/80 border border-hud-red/50 rounded text-hud-red font-sans text-base hover:bg-space-700/80 hover:border-hud-red focus:bg-space-700/80 focus:border-hud-red focus:outline-none focus:ring-2 focus:ring-hud-red active:scale-95 transition-all"
-            >
-              OVERWRITE
-            </button>
             <button
               data-menu-item
               data-menu-back
@@ -567,6 +565,13 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
               className="px-6 py-3.5 min-h-[48px] bg-space-800/80 border border-white/20 rounded text-white/60 font-sans text-base hover:bg-space-700/80 hover:text-white/80 focus:bg-space-700/80 focus:text-white focus:outline-none focus:ring-2 focus:ring-white/40 active:scale-95 transition-all"
             >
               CANCEL
+            </button>
+            <button
+              data-menu-item
+              onClick={handleConfirmOverwrite}
+              className="px-6 py-3.5 min-h-[48px] bg-space-800/80 border border-hud-red/50 rounded text-hud-red font-sans text-base hover:bg-space-700/80 hover:border-hud-red focus:bg-space-700/80 focus:border-hud-red focus:outline-none focus:ring-2 focus:ring-hud-red active:scale-95 transition-all"
+            >
+              OVERWRITE
             </button>
           </div>
         </div>

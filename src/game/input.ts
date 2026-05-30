@@ -33,6 +33,25 @@ export function createAimState(): AimState {
   return { active: false, screenX: 0, screenY: 0 }
 }
 
+/**
+ * Returns true when the event target is a focused text input, textarea, or
+ * contenteditable element — i.e. somewhere the player is typing. Used to
+ * gate window-level game keydown handlers so the run-summary initials box
+ * (and any future text input) gets its keystrokes instead of having them
+ * preventDefault'd or routed to ship movement / tool toggles.
+ *
+ * Intentionally NOT used for keyup — we want held state (movement / collect)
+ * to release cleanly even if focus changes mid-press, so the ship doesn't
+ * get stuck thrusting when the player Alt-Tabs into an input field.
+ */
+export function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  const tag = target.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true
+  if (target.isContentEditable) return true
+  return false
+}
+
 export type InputDirection = 'up' | 'down' | 'left' | 'right'
 
 export const KEY_MAP: Record<string, InputDirection> = {
@@ -51,6 +70,10 @@ export function createInputHandler(state: InputState): {
   detach: () => void
 } {
   function onKeyDown(e: KeyboardEvent): void {
+    // Let typing in inputs go through untouched — without this the run-
+    // summary initials box loses W/A/S/D entirely (preventDefault blocks
+    // them) and Shift gets swallowed silently.
+    if (isEditableTarget(e.target)) return
     const dir = KEY_MAP[e.code]
     if (dir) {
       state[dir] = true

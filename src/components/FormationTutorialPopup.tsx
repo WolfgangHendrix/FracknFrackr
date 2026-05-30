@@ -1,0 +1,73 @@
+'use client'
+
+import { useEffect } from 'react'
+
+const DISMISS_GRACE_MS = 400
+
+interface FormationTutorialPopupProps {
+  visible: boolean
+  onDismiss: () => void
+}
+
+/**
+ * Shown the first time a wedge formation spawns. Calls out the bearing-based
+ * threat geometry so the player understands a tight V on the radar isn't a
+ * single ship — it's a coordinated attack that breaks apart once it engages.
+ */
+export function FormationTutorialPopup({ visible, onDismiss }: FormationTutorialPopupProps) {
+  useEffect(() => {
+    if (!visible) return
+    const handleDismiss = (e: Event): void => {
+      e.preventDefault()
+      onDismiss()
+    }
+    const timerId = setTimeout(() => {
+      window.addEventListener('keydown', handleDismiss, { once: true })
+      window.addEventListener('touchstart', handleDismiss, { once: true })
+      window.addEventListener('mousedown', handleDismiss, { once: true })
+    }, DISMISS_GRACE_MS)
+    return () => {
+      clearTimeout(timerId)
+      window.removeEventListener('keydown', handleDismiss)
+      window.removeEventListener('touchstart', handleDismiss)
+      window.removeEventListener('mousedown', handleDismiss)
+    }
+  }, [visible, onDismiss])
+
+  if (!visible) return null
+
+  return (
+    <div
+      className="absolute inset-0 z-50 flex items-center justify-center bg-black/65 p-4"
+      data-testid="formation-tutorial-popup"
+    >
+      <button
+        data-menu-item
+        data-menu-back
+        onClick={onDismiss}
+        aria-label="Dismiss"
+        className="max-w-[90vw] sm:max-w-md px-6 py-5 bg-space-800/95 border-2 border-red-500/60 rounded-xl font-sans text-left shadow-2xl focus:outline-none focus:ring-2 focus:ring-red-500 cursor-pointer"
+      >
+        <p className="text-red-400 text-sm sm:text-base font-bold mb-2 text-center">
+          FORMATION INBOUND
+        </p>
+        <p className="text-white/75 text-sm leading-relaxed mb-2">
+          That cluster of blips on your radar is a{' '}
+          <span className="text-red-400 font-bold">wing of fighters</span> flying
+          a V-formation along one bearing toward you.
+        </p>
+        <ul className="ml-4 list-disc text-sm text-white/70 space-y-1">
+          <li>They stay tight while flying in — easy to hit head-on.</li>
+          <li>They break formation once they engage — dogfight from then on.</li>
+          <li>Kill the leader and the wing scatters early.</li>
+        </ul>
+        <p className="text-white/60 text-xs sm:text-sm mt-3 leading-relaxed">
+          Strafe perpendicular to their approach to break their lead.
+        </p>
+        <p className="text-white/40 text-sm mt-4 animate-pulse text-center">
+          Tap anywhere to continue
+        </p>
+      </button>
+    </div>
+  )
+}

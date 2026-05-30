@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { GameCanvas } from '@/components/GameCanvas'
 import type { GameCanvasHandle, ArbiterEvent } from '@/components/GameCanvas'
 import { HUD } from '@/components/HUD'
@@ -10,17 +10,19 @@ import { RunSummary } from '@/components/RunSummary'
 import type { ArbiterHudInfo } from '@/game/arbiter-comms'
 import { arbiterArrivalLine, arbiterDefeatLine, arbiterWithdrawLine } from '@/game/arbiter-comms'
 import type { RunStats } from '@/game/ledger-config'
-import { SoundFab } from '@/components/SoundFab'
 import { TitleScreen } from '@/components/TitleScreen'
 import { StartScreen } from '@/components/StartScreen'
 import { TutorialOverlay } from '@/components/TutorialOverlay'
 import { PrologueOverlay } from '@/components/PrologueOverlay'
 import { TradeMenu, LAZER_COST, MINING_DRONE_BUILD_COST } from '@/components/TradeMenu'
-import { LazerTutorialPopup } from '@/components/LazerTutorialPopup'
 import { DroneTutorialPopup } from '@/components/DroneTutorialPopup'
+import { BlackHoleTutorialPopup } from '@/components/BlackHoleTutorialPopup'
+import { DefenseTutorialPopup } from '@/components/DefenseTutorialPopup'
+import { FormationTutorialPopup } from '@/components/FormationTutorialPopup'
+import { SplitterTutorialPopup } from '@/components/SplitterTutorialPopup'
 import { PauseOverlay } from '@/components/PauseOverlay'
+import { PhotoModeOverlay } from '@/components/PhotoModeOverlay'
 import { DebugPanel } from '@/components/DebugPanel'
-import { ShopFab } from '@/components/ShopFab'
 import { useGameState } from '@/hooks/useGameState'
 import { useGamePersistence } from '@/hooks/useGamePersistence'
 import { useTutorial } from '@/hooks/useTutorial'
@@ -29,12 +31,21 @@ import { useGamepadMenu } from '@/hooks/useGamepadMenu'
 import { useGamepadButton } from '@/hooks/useGamepadButton'
 import type { MiningTool, MetalVariant } from '@/game/types'
 import type { Upgrades, SaveSlotId } from '@/lib/schemas'
-import { getSfxVolume } from '@/game/volume-control'
+import { getSfxVolume, setPauseDampening } from '@/game/volume-control'
+import type { PauseRunStats } from '@/components/PauseOverlay'
 
 type Screen = 'title' | 'start' | 'game'
 
 const ACTIVE_SLOT_KEY = 'fracking-asteroids-active-slot'
-const CRYSTALLINE_PROMPT_INTERVALS = [3, 5, 10] as const
+/** Cheapest upgrade in the catalog (Fire Rate Boost). Auto-dock skips the
+ *  modal when the player has no materials AND less scrap than this — there
+ *  literally isn't anything to buy or sell, so a paused screen of dim rows
+ *  would feel like the game broke. */
+const CHEAPEST_UPGRADE_COST = 10
+/** Grace window after the player closes the trade menu before contact can
+ *  retrigger it. Long enough to fly clear of the structure cleanly, short
+ *  enough that a deliberate "wait, one more thing" re-dock still works. */
+const TRADE_REOPEN_COOLDOWN_MS = 1500
 const FRACKER_SYSTEMS_OFFLINE = './audio/vo_fracker03.wav'
 const FRACKER_REBOOTING = './audio/vo_fracker04.wav'
 
@@ -43,10 +54,14 @@ export default function Home() {
   const [activeSlot, setActiveSlot] = useState<SaveSlotId | null>(null)
   const [isNewGame, setIsNewGame] = useState(false)
   const [tradeMenuOpen, setTradeMenuOpen] = useState(false)
-  const [inStationRange, setInStationRange] = useState(false)
   const [activeTool, setActiveTool] = useState<MiningTool>('blaster')
-  const [lazerPopupVisible, setLazerPopupVisible] = useState(false)
   const [dronePopupVisible, setDronePopupVisible] = useState(false)
+  const [blackHolePopupVisible, setBlackHolePopupVisible] = useState(false)
+  // First-encounter tutorial popups for the new combat systems.
+  const [defensePopupVisible, setDefensePopupVisible] = useState(false)
+  const [formationPopupVisible, setFormationPopupVisible] = useState(false)
+  const [splitterPopupVisible, setSplitterPopupVisible] = useState(false)
+  const [stationBlockedBanner, setStationBlockedBanner] = useState(false)
   const [ledger, setLedger] = useState(0)
   const [arbiterHud, setArbiterHud] = useState<ArbiterHudInfo | null>(null)
   const [arbiterBanner, setArbiterBanner] = useState<ArbiterBannerData | null>(null)
@@ -55,16 +70,16 @@ export default function Home() {
   const [highScore, setHighScore] = useState(0)
   const [isNewBest, setIsNewBest] = useState(false)
   const gameCanvasRef = useRef<GameCanvasHandle>(null)
-  const crystallineDeflectCountRef = useRef(0)
-  const nextCrystallinePromptAtRef = useRef(1)
-  const crystallinePromptIntervalIndexRef = useRef(0)
+  /** Timestamp of the last trade-menu close — used by handleStationContact
+   *  to enforce the reopen cooldown above. Ref instead of state so updating
+   *  it doesn't re-render or invalidate the contact callback's deps. */
+  const lastTradeCloseAtRef = useRef(0)
   const {
     paused,
     scrap,
     cargo,
     upgrades,
     playerHp,
-    playerMaxHp,
     togglePause,
     onCollect,
     onPlayerDamage,
@@ -180,21 +195,64 @@ export default function Home() {
 
   const handleStationRange = useCallback(
     (inRange: boolean) => {
-      setInStationRange(inRange)
-      // Don't close trade menu if the player exits range during tutorial trade steps
+      // Close the trade menu when the ship leaves station range — but keep
+      // it open during tutorial trade steps so the player can finish the
+      // scripted sell/buy beats even if their drift carries them out.
       if (
         !inRange &&
         !(tutorialActive && (tutorialStep === 'trade-sell' || tutorialStep === 'trade-buy'))
-      )
+      ) {
+        lastTradeCloseAtRef.current = Date.now()
         setTradeMenuOpen(false)
+      }
     },
     [tutorialActive, tutorialStep],
   )
 
-  const handleShopFabClick = useCallback(() => {
+  // Auto-open the trade menu when the ship physically touches the station
+  // and the sector is clear (no hostiles within radar range — the tick
+  // does the proximity check and only fires this callback when allowed).
+  //
+  // Two additional gates layered on top of the contact event:
+  //   1. "No business" suppression — if the player can't sell anything AND
+  //      can't afford the cheapest upgrade, the modal would just be a
+  //      paused screen with everything dimmed. Skip it; they'll dock for
+  //      real once they have scrap or materials. Tutorial trade beats
+  //      bypass this so the tutorial can't get stuck.
+  //   2. Reopen cooldown — after the player closes the menu, give a short
+  //      grace window before contact can re-trigger. Without it, drifting
+  //      out the back of the structure and corner-clipping the ring on
+  //      the way around pops the modal back open the moment you're gone.
+  const handleStationContact = useCallback(() => {
+    if (tradeMenuOpen) return
+
+    const inTutorialDock =
+      tutorialActive &&
+      (tutorialStep === 'approach-station' ||
+        tutorialStep === 'trade-sell' ||
+        tutorialStep === 'trade-buy')
+
+    if (!inTutorialDock) {
+      if (Date.now() - lastTradeCloseAtRef.current < TRADE_REOPEN_COOLDOWN_MS) return
+      const hasMaterials =
+        cargo.carbon > 0 ||
+        cargo.silicates > 0 ||
+        cargo.platinum > 0 ||
+        cargo.titanium > 0 ||
+        cargo.exotics > 0
+      const canAffordAnything = scrap >= CHEAPEST_UPGRADE_COST
+      if (!hasMaterials && !canAffordAnything) return
+    }
+
     tutorial.onEnteredStation()
     setTradeMenuOpen(true)
-  }, [tutorial])
+  }, [tutorial, tradeMenuOpen, tutorialActive, tutorialStep, cargo, scrap])
+
+  // Touched the station but hostiles are in range — flash a brief banner
+  // so the player understands the dock is locked, then auto-clear it.
+  const handleStationContactBlocked = useCallback(() => {
+    setStationBlockedBanner(true)
+  }, [])
 
   const handleSell = useCallback(() => {
     sellMaterials()
@@ -228,7 +286,6 @@ export default function Home() {
                           type === 'hull' ||
                           type === 'cooling' ||
                           type === 'magnet' ||
-                          type === 'hullPlating' ||
                           type === 'bounty' ||
                           type === 'sensor' ||
                           type === 'drillNose'
@@ -298,6 +355,7 @@ export default function Home() {
   const handleCloseTradeMenu = useCallback(() => {
     // Prevent closing during tutorial trade steps — player must complete sell/buy
     if (tutorialActive && (tutorialStep === 'trade-sell' || tutorialStep === 'trade-buy')) return
+    lastTradeCloseAtRef.current = Date.now()
     setTradeMenuOpen(false)
   }, [tutorialActive, tutorialStep])
 
@@ -321,6 +379,18 @@ export default function Home() {
   const handleArmorChanged = useCallback(
     (charges: number) => {
       setUpgradeLevel('armor', charges)
+      requestSave()
+    },
+    [setUpgradeLevel, requestSave],
+  )
+
+  // A hull module was torn off (or restocked at the station). Mirror the new
+  // count into upgrades.hull — setCombatUpgrades in the scene re-applies the
+  // visual modules on the next sync, keeping the bolt-on pieces in lockstep
+  // with the charge count.
+  const handleHullChanged = useCallback(
+    (charges: number) => {
+      setUpgradeLevel('hull', charges)
       requestSave()
     },
     [setUpgradeLevel, requestSave],
@@ -360,35 +430,158 @@ export default function Home() {
     requestSave()
   }, [resetRunCargo, requestSave])
 
-  const handleCrystallineDeflect = useCallback(() => {
-    // Don't show lazer tutorial popup during prologue — ship already has lazer
-    if (tutorialStep.startsWith('prologue-')) return
-    if (hasLazer) return
+  // Pause-menu Restart Run: reuse the death-respawn path. Same effect as
+  // dying and continuing — full ship reset at the station — but invoked
+  // voluntarily from the pause menu, so the run-summary screen is skipped.
+  const handlePauseRestart = useCallback(() => {
+    gameCanvasRef.current?.respawnAfterDeath()
+    resetRunCargo()
+    setRunStats(null)
+    setRunOver(false)
+    if (paused) togglePause()
+    requestSave()
+  }, [resetRunCargo, paused, togglePause, requestSave])
 
-    crystallineDeflectCountRef.current += 1
-    if (crystallineDeflectCountRef.current < nextCrystallinePromptAtRef.current) return
+  // Pause-menu Quit to Title: drop back to the title screen. The scene
+  // unmounts naturally when `screen` changes; persistence already flushed
+  // any in-progress upgrades.
+  const handlePauseQuit = useCallback(() => {
+    if (paused) togglePause()
+    setScreen('title')
+    playMenuLoop()
+  }, [paused, togglePause])
 
-    const interval =
-      CRYSTALLINE_PROMPT_INTERVALS[
-        Math.min(crystallinePromptIntervalIndexRef.current, CRYSTALLINE_PROMPT_INTERVALS.length - 1)
-      ]
-    nextCrystallinePromptAtRef.current += interval
-    if (crystallinePromptIntervalIndexRef.current < CRYSTALLINE_PROMPT_INTERVALS.length - 1) {
-      crystallinePromptIntervalIndexRef.current += 1
+  // Audio dampening: drop output to ~35% while the pause menu is up so the
+  // ambience is present but the menu reads clearly. Restored on resume.
+  useEffect(() => {
+    setPauseDampening(paused)
+  }, [paused])
+
+  // Snapshot in-progress run stats whenever the pause menu opens. We sample
+  // once per open rather than streaming so the menu doesn't trigger a render
+  // every tick — the numbers freeze at the pause moment, which is what the
+  // player expects.
+  const [pauseRunStats, setPauseRunStats] = useState<PauseRunStats | null>(null)
+  useEffect(() => {
+    if (!paused) {
+      setPauseRunStats(null)
+      return
     }
+    const snap = gameCanvasRef.current?.getRunStats() ?? null
+    setPauseRunStats(snap)
+  }, [paused])
 
-    setLazerPopupVisible(true)
-  }, [hasLazer, tutorialStep])
-
-  const handleDismissLazerPopup = useCallback(() => {
-    setLazerPopupVisible(false)
+  // Photo mode — a special pause-style state where the simulation freezes
+  // but the camera can free-pan with WASD/arrows for framing screenshots.
+  // The HUD and pause menu both hide while photo mode is active so the
+  // captured frame is clean.
+  const [photoMode, setPhotoMode] = useState(false)
+  const handleEnterPhotoMode = useCallback(() => {
+    setPhotoMode(true)
+    gameCanvasRef.current?.setPhotoMode(true)
+    // Keep the simulation frozen — paused is already true (we're inside the
+    // pause menu when this fires), but we also need to dismiss the menu so
+    // the canvas is visible. Calling togglePause flips paused → false, so
+    // instead we leave paused true and just hide the menu via photoMode.
   }, [])
+  const handleExitPhotoMode = useCallback(() => {
+    setPhotoMode(false)
+    gameCanvasRef.current?.setPhotoMode(false)
+    // Exit returns to live play. The user entered photo mode FROM the
+    // pause menu (paused was already true), so we now flip pause off so
+    // the game resumes instead of dropping them back into the pause menu.
+    if (paused) togglePause()
+  }, [paused, togglePause])
+  const handleScreenshot = useCallback(async (): Promise<Blob | null> => {
+    return (await gameCanvasRef.current?.takeScreenshot()) ?? null
+  }, [])
+
+  // First-time black-hole warning. Scene fires onBlackHoleNearby once per
+  // session when the player closes inside the warn radius; we gate against
+  // a per-slot localStorage flag so it only ever shows on the first run
+  // where the player actually approaches the singularity.
+  const handleBlackHoleNearby = useCallback(() => {
+    if (!activeSlot) return
+    if (typeof localStorage === 'undefined') return
+    const key = `fracking-asteroids-black-hole-tutorial-${activeSlot}`
+    if (localStorage.getItem(key)) return
+    setBlackHolePopupVisible(true)
+  }, [activeSlot])
+
+  const handleDismissBlackHolePopup = useCallback(() => {
+    setBlackHolePopupVisible(false)
+    if (!activeSlot) return
+    try {
+      localStorage.setItem(`fracking-asteroids-black-hole-tutorial-${activeSlot}`, '1')
+    } catch {
+      // localStorage may be disabled; the per-session scene latch still
+      // prevents repeat triggers within this run.
+    }
+  }, [activeSlot])
+
+  // First-encounter tutorial popup helpers — same gate-on-localStorage pattern
+  // as the black-hole and drone popups so each only ever shows once per slot.
+  // The scene already latches per-session to avoid spamming within a run; the
+  // localStorage flag persists that "already seen" across sessions.
+  function makeFirstEncounter(
+    storageSuffix: string,
+    setVisible: (v: boolean) => void,
+  ): {
+    onFire: () => void
+    onDismiss: () => void
+  } {
+    return {
+      onFire: (): void => {
+        if (!activeSlot || typeof localStorage === 'undefined') return
+        const key = `fracking-asteroids-${storageSuffix}-${activeSlot}`
+        if (localStorage.getItem(key)) return
+        setVisible(true)
+      },
+      onDismiss: (): void => {
+        setVisible(false)
+        if (!activeSlot) return
+        try {
+          localStorage.setItem(`fracking-asteroids-${storageSuffix}-${activeSlot}`, '1')
+        } catch {
+          // localStorage disabled — fall back to per-session latching only.
+        }
+      },
+    }
+  }
+  const defensePopup = useMemo(
+    () => makeFirstEncounter('defense-tutorial', setDefensePopupVisible),
+    // makeFirstEncounter closes over `activeSlot`; recreate when the slot
+    // changes so per-slot persistence stays correct.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeSlot],
+  )
+  const formationPopup = useMemo(
+    () => makeFirstEncounter('formation-tutorial', setFormationPopupVisible),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeSlot],
+  )
+  const splitterPopup = useMemo(
+    () => makeFirstEncounter('splitter-tutorial', setSplitterPopupVisible),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeSlot],
+  )
+
+  // Self-clear the "sector hot, dock locked" banner ~1.6s after it fires.
+  // Re-touching the station while hostiles are still in range will retrigger
+  // it (the tick's wasInStationContact latch resets when the ship pulls
+  // back out of the auto-trade ring).
+  useEffect(() => {
+    if (!stationBlockedBanner) return
+    const id = setTimeout(() => setStationBlockedBanner(false), 1600)
+    return () => clearTimeout(id)
+  }, [stationBlockedBanner])
 
   const handleSkipTutorial = useCallback(() => {
     // Only reset the world when skipping during the prologue (to swap the prologue
     // ship for the normal one). Skipping mid-tutorial preserves progress.
     const wasInPrologue = tutorial.step.startsWith('prologue-')
     tutorial.skip()
+    lastTradeCloseAtRef.current = Date.now()
     setTradeMenuOpen(false)
     setPrologueFade('none')
     if (wasInPrologue) {
@@ -492,10 +685,6 @@ export default function Home() {
 
   const inPrologue = tutorialStep.startsWith('prologue-')
 
-  // Trade-station shop FAB visibility. Hidden during the scripted prologue —
-  // the shop has no role in the intro, and the FAB would overlap the SKIP
-  // INTRO prompt (both sit bottom-centre).
-  const shopFabVisible = inStationRange && !tradeMenuOpen && !inPrologue
 
   // Tutorial catch-up: auto-advance trade steps when their conditions are already met.
   // This prevents the tutorial from getting stuck if the player performed actions
@@ -552,15 +741,11 @@ export default function Home() {
     ? 'paused'
     : runOver
       ? 'run-over'
-      : lazerPopupVisible
-        ? 'lazer-popup'
-        : tradeMenuOpen
-          ? 'trade'
-          : tutorial.active
-            ? `tut:${tutorial.step}`
-            : shopFabVisible
-              ? 'shop'
-              : ''
+      : tradeMenuOpen
+        ? 'trade'
+        : tutorial.active
+          ? `tut:${tutorial.step}`
+          : ''
   useGamepadMenu({
     enabled: screen === 'game',
     resetKey: inGameOverlayKey,
@@ -583,10 +768,12 @@ export default function Home() {
     return () => window.removeEventListener('keydown', onKey)
   }, [screen, tradeMenuOpen, runOver, togglePause])
 
-  // Freeze ship when the shop FAB is visible during the tutorial approach-station step.
-  // Unfreezes when the player clicks the FAB (advancing to trade-sell, which hides the overlay).
-  const shopTutorialFreeze =
-    inStationRange && !tradeMenuOpen && tutorial.active && tutorial.step === 'approach-station'
+  // The old approach-station freeze pinned the ship inside the FAB's NEAR
+  // range so the player had to click the button. With auto-open via physical
+  // contact the player needs to keep flying *into* the station, so freezing
+  // them here would lock them just outside the trigger ring. Step now
+  // advances naturally when handleStationContact fires onEnteredStation.
+  const shopTutorialFreeze = false
 
   if (screen === 'title' || screen === 'start') {
     return (
@@ -604,7 +791,16 @@ export default function Home() {
     <main className="relative w-screen h-dvh overflow-hidden bg-space-900">
       <GameCanvas
         ref={gameCanvasRef}
-        paused={paused || tradeMenuOpen || lazerPopupVisible || runOver}
+        paused={
+          paused ||
+          tradeMenuOpen ||
+          blackHolePopupVisible ||
+          defensePopupVisible ||
+          formationPopupVisible ||
+          splitterPopupVisible ||
+          runOver ||
+          photoMode
+        }
         frozen={tutorial.frozen || shopTutorialFreeze}
         tutorialStep={tutorial.step}
         onCollect={handleCollect}
@@ -619,8 +815,9 @@ export default function Home() {
         onScrapCollected={tutorial.onScrapCollected}
         onNearStation={tutorial.onNearStation}
         onStationRange={handleStationRange}
+        onStationContact={handleStationContact}
+        onStationContactBlocked={handleStationContactBlocked}
         onStationDriveThrough={handleStationDriveThrough}
-        onCrystallineDeflect={handleCrystallineDeflect}
         onToolChange={handleToolChange}
         onLedgerChanged={setLedger}
         onArbiterChanged={setArbiterHud}
@@ -629,27 +826,32 @@ export default function Home() {
         onShieldChanged={handleShieldChanged}
         onMiningDroneCountChanged={setDroneCount}
         onArmorChanged={handleArmorChanged}
+        onHullChanged={handleHullChanged}
         onSmartBomb={handleSmartBomb}
+        onBlackHoleNearby={handleBlackHoleNearby}
+        onFirstDefensiveHit={defensePopup.onFire}
+        onFirstFormation={formationPopup.onFire}
+        onFirstSplitter={splitterPopup.onFire}
         onPrologueReady={tutorial.onPrologueReady}
         onFieldCleared={tutorial.onFieldCleared}
         onArbiterArrived={tutorial.onArbiterArrived}
         onStripComplete={tutorial.onStripComplete}
       />
-      <HUD
-        scrap={scrap}
-        cargo={cargo}
-        upgrades={upgrades}
-        playerHp={playerHp}
-        playerMaxHp={playerMaxHp}
-        paused={paused}
-        activeTool={activeTool}
-        hasLazer={hasLazer}
-        droneCount={droneCount}
-        ledger={ledger}
-        arbiter={arbiterHud}
-        isSaving={isSaving}
-        onPause={togglePause}
-      />
+      {!photoMode && (
+        <HUD
+          scrap={scrap}
+          cargo={cargo}
+          upgrades={upgrades}
+          paused={paused}
+          activeTool={activeTool}
+          hasLazer={hasLazer}
+          droneCount={droneCount}
+          ledger={ledger}
+          arbiter={arbiterHud}
+          isSaving={isSaving}
+          onPause={togglePause}
+        />
+      )}
       {!inPrologue && <ArbiterBanner banner={arbiterBanner} />}
       {tutorial.active && inPrologue && (
         <PrologueOverlay
@@ -667,11 +869,18 @@ export default function Home() {
           onDismiss={tutorial.unfreeze}
         />
       )}
-      {shopFabVisible && (
-        <ShopFab
-          highlight={tutorial.active && tutorial.step === 'approach-station'}
-          onClick={handleShopFabClick}
-        />
+      {stationBlockedBanner && (
+        <div
+          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-40 pointer-events-none"
+          data-testid="station-locked-banner"
+        >
+          <div className="px-5 py-3 bg-space-800/90 border-2 border-hud-red/70 rounded-lg font-sans text-center shadow-xl animate-pulse">
+            <p className="text-hud-red text-sm sm:text-base font-bold tracking-[0.2em]">
+              HOSTILES IN AREA
+            </p>
+            <p className="text-white/60 text-xs sm:text-sm mt-1">CLEAR THE SECTOR TO DOCK</p>
+          </div>
+        </div>
       )}
       {tradeMenuOpen && (
         <TradeMenu
@@ -688,12 +897,39 @@ export default function Home() {
           onClose={handleCloseTradeMenu}
         />
       )}
-      <LazerTutorialPopup visible={lazerPopupVisible} onDismiss={handleDismissLazerPopup} />
       <DroneTutorialPopup
         visible={dronePopupVisible}
         onDismiss={() => setDronePopupVisible(false)}
       />
-      <PauseOverlay visible={paused} onResume={togglePause} />
+      <BlackHoleTutorialPopup
+        visible={blackHolePopupVisible}
+        onDismiss={handleDismissBlackHolePopup}
+      />
+      <DefenseTutorialPopup
+        visible={defensePopupVisible}
+        onDismiss={defensePopup.onDismiss}
+      />
+      <FormationTutorialPopup
+        visible={formationPopupVisible}
+        onDismiss={formationPopup.onDismiss}
+      />
+      <SplitterTutorialPopup
+        visible={splitterPopupVisible}
+        onDismiss={splitterPopup.onDismiss}
+      />
+      <PauseOverlay
+        visible={paused && !photoMode}
+        onResume={togglePause}
+        onRestart={handlePauseRestart}
+        onQuitToTitle={handlePauseQuit}
+        onEnterPhotoMode={handleEnterPhotoMode}
+        runStats={pauseRunStats}
+      />
+      <PhotoModeOverlay
+        visible={photoMode}
+        onScreenshot={handleScreenshot}
+        onExit={handleExitPhotoMode}
+      />
       <DebugPanel
         canvasRef={gameCanvasRef}
         onRequestSave={requestSave}
@@ -709,7 +945,9 @@ export default function Home() {
           hydrateFromSave,
         }}
       />
-      {paused && <SoundFab />}
+      {/* SoundFab used to surface while paused — replaced by the inline
+          audio sliders inside PauseOverlay. The fab itself stays unmounted
+          during gameplay to avoid two competing volume UIs. */}
       {runOver && runStats && (
         <RunSummary
           stats={runStats}

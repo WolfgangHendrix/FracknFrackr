@@ -231,7 +231,6 @@ function PanelContent({
                 hull: 3,
                 cooling: 3,
                 magnet: 3,
-                hullPlating: 3,
                 bounty: 3,
                 missileBias: 1,
                 thrusters: 1,

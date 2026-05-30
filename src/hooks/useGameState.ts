@@ -40,7 +40,6 @@ const UPGRADE_MAX: Record<keyof Upgrades, number> = {
   hull: 3,
   cooling: 3,
   magnet: 3,
-  hullPlating: 3,
   bounty: 3,
   missileBias: 1,
   thrusters: 1,
@@ -55,7 +54,6 @@ export interface GameStateHook {
   cargo: Cargo
   upgrades: Upgrades
   playerHp: number
-  playerMaxHp: number
   togglePause: () => void
   onCollect: (variant: MetalVariant) => void
   onPlayerDamage: (hp: number) => void
@@ -141,12 +139,15 @@ export function useGameState(): GameStateHook {
           setTimeout(() => onPurchased?.(false), 0)
           return prevScrap
         }
-        // Can afford — also bump the upgrade level
+        // Can afford — also bump the upgrade level.
+        // One-shot UNLOCKS (binary unlocks like lazer, ripple, autoTool, etc.)
+        // max out on purchase. Consumable defenses (shield, armor, hull) and
+        // tiered upgrades all increment by 1 per purchase — including shield,
+        // which used to max out but is now a per-charge buy under the
+        // "go back and re-buy what you lose" defensive economy.
         setUpgrades((prev) => ({
           ...prev,
-          // One-shot unlocks max out on purchase; everything else increments.
           [type]:
-            type === 'shield' ||
             type === 'smartBomb' ||
             type === 'lazer' ||
             type === 'autoTool' ||
@@ -224,7 +225,6 @@ export function useGameState(): GameStateHook {
     cargo,
     upgrades,
     playerHp,
-    playerMaxHp: PLAYER_MAX_HP + 25 * upgrades.hullPlating,
     togglePause,
     onCollect,
     onPlayerDamage,

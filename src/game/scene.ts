@@ -19,7 +19,13 @@ import { createLazerBeam, updateLazerBeam, disposeLazerBeam } from './lazer-beam
 import { createRippleBeam, updateRippleBeam, disposeRippleBeam } from './ripple-beam'
 import { createTractorBeam, updateTractorBeam, disposeTractorBeam } from './tractor-beam'
 import type { TractorBeam } from './tractor-beam'
-import { createInputState, createInputHandler, createAimState, createAimHandler } from './input'
+import {
+  createInputState,
+  createInputHandler,
+  createAimState,
+  createAimHandler,
+  isEditableTarget,
+} from './input'
 import { createVirtualJoystick, createAimJoystick } from './virtual-joystick'
 import { createGamepadHandler } from './gamepad'
 import { createToolToggleButton } from './fire-button'
@@ -139,6 +145,8 @@ import { createDynamicLights } from './dynamic-lights'
 import { createDustMotes, createGalaxySpiral } from './environment'
 import { createProjectileTrails } from './projectile-trail'
 import { createShipDamageVfx } from './ship-damage-vfx'
+import { subscribePauseSettings } from './pause-settings'
+import { createRetroRenderer } from './retro-mode'
 
 import type { TutorialStep } from '@/hooks/useTutorial'
 import type { Upgrades } from '@/lib/schemas'
@@ -164,6 +172,10 @@ const CAMERA_HEIGHT = 150
 const STAR_COUNT = 400
 const BLACK_HOLE_ALERT_RADIUS = 120
 const BLACK_HOLE_EVENT_HORIZON_RADIUS = 12
+// Slightly outside the pull radius (120) so the warning fires before any
+// gravity is felt — the player reads the popup, then decides whether to
+// commit. Tight enough that they have to actively head toward the hole.
+const BLACK_HOLE_WARN_RADIUS = 150
 
 export { PLAYER_MAX_HP } from './game-tick'
 
@@ -183,8 +195,15 @@ export interface GameSceneOptions {
   onScrapCollected?: () => void
   onNearStation?: () => void
   onStationRange?: (inRange: boolean) => void
+  /** Fires the tick the ship physically touches the station with no
+   *  hostiles in the lockout radius — page layer auto-opens the trade
+   *  menu in response. */
+  onStationContact?: () => void
+  /** Fires the tick the ship touches the station but hostiles are in the
+   *  lockout radius — page layer shows a brief warning banner instead of
+   *  opening the trade menu. */
+  onStationContactBlocked?: () => void
   onStationDriveThrough?: () => void
-  onCrystallineDeflect?: () => void
   onToolChange?: (tool: MiningTool) => void
   /** Endless mode — fired when the integer Ledger value changes. */
   onLedgerChanged?: (ledger: number) => void
@@ -198,12 +217,42 @@ export interface GameSceneOptions {
   /** Fires whenever the active mining drone count changes (build/destroy). */
   onMiningDroneCountChanged?: (count: number) => void
   onArmorChanged?: (charges: number) => void
+  /** Fires when a hull module is torn off by a hit (or restocked at the trade
+   *  station). Page mirrors the value into upgrades.hull. */
+  onHullChanged?: (charges: number) => void
   onSmartBomb?: () => void
+  /** Fires the first time the player closes to within the warning radius
+   *  of the black hole during free play. One-shot per scene lifetime —
+   *  the page layer is responsible for any cross-session "already seen"
+   *  persistence. */
+  onBlackHoleNearby?: () => void
+  /** Fires once per scene the first time any defensive layer absorbs a hit
+   *  (shield / hull module / armor). Used to surface the defense-system
+   *  explainer popup the moment the mechanic first matters. */
+  onFirstDefensiveHit?: () => void
+  /** Fires once per scene the first time a wedge formation spawns. */
+  onFirstFormation?: () => void
+  /** Fires once per scene the first time a splitter enemy spawns. */
+  onFirstSplitter?: () => void
   // Prologue callbacks
   onPrologueReady?: () => void
   onFieldCleared?: () => void
   onArbiterArrived?: () => void
   onStripComplete?: () => void
+}
+
+/** Mid-run statistics snapshot returned by {@link GameScene.getRunStats}. */
+export interface RunStatsSnapshot {
+  /** Seconds the player has been in endless play this run. */
+  runTimeSec: number
+  /** Current Ledger value (escalation meter). */
+  ledger: number
+  /** Highest Ledger this run reached. */
+  peakLedger: number
+  /** Arbiters destroyed this run. */
+  marksDefeated: number
+  /** Composite score = peakLedger + marksDefeated × 500. */
+  score: number
 }
 
 export interface GameScene {
@@ -221,6 +270,20 @@ export interface GameScene {
   buildMiningDrone: () => boolean
   /** Current count of active mining drones (for the trade menu UI). */
   getMiningDroneCount: () => number
+  /** Snapshot of in-progress run stats — used by the pause menu panel. */
+  getRunStats: () => RunStatsSnapshot
+  /**
+   * Toggle photo mode. While on, the camera detaches from the ship and pans
+   * with movement input; the page layer is responsible for also pausing the
+   * simulation so the world freezes for framing.
+   */
+  setPhotoMode: (on: boolean) => void
+  /**
+   * Capture the current rendered frame as a PNG blob. Returns null if the
+   * browser refused the conversion (e.g. tainted canvas, OOM). The caller
+   * is responsible for triggering the download or sharing the blob.
+   */
+  takeScreenshot: () => Promise<Blob | null>
   respawnAfterDeath: () => void
   /** Debug-only API. Stays in the build; webpack tree-shakes use-sites that
    *  guard with DEBUG_ENABLED, but the methods themselves are always available
@@ -318,8 +381,9 @@ export function createGameScene(
   const onScrapCollected = options?.onScrapCollected
   const onNearStation = options?.onNearStation
   const onStationRange = options?.onStationRange
+  const onStationContact = options?.onStationContact
+  const onStationContactBlocked = options?.onStationContactBlocked
   const onStationDriveThrough = options?.onStationDriveThrough
-  const onCrystallineDeflect = options?.onCrystallineDeflect
   const onToolChange = options?.onToolChange
   const onLedgerChanged = options?.onLedgerChanged
   const onArbiterChanged = options?.onArbiterChanged
@@ -328,14 +392,23 @@ export function createGameScene(
   const onShieldChanged = options?.onShieldChanged
   const onMiningDroneCountChanged = options?.onMiningDroneCountChanged
   const onArmorChanged = options?.onArmorChanged
+  const onHullChanged = options?.onHullChanged
   const onSmartBomb = options?.onSmartBomb
+  const onBlackHoleNearby = options?.onBlackHoleNearby
+  const onFirstDefensiveHit = options?.onFirstDefensiveHit
+  const onFirstFormation = options?.onFirstFormation
+  const onFirstSplitter = options?.onFirstSplitter
   const onPrologueReady = options?.onPrologueReady
   const onFieldCleared = options?.onFieldCleared
   const onArbiterArrived = options?.onArbiterArrived
   const onStripComplete = options?.onStripComplete
 
   // --- Renderer ---
-  const renderer = new THREE.WebGLRenderer({ antialias: true })
+  // `preserveDrawingBuffer: true` keeps the canvas readable after each
+  // composite so the photo-mode screenshot can call `toBlob` without the
+  // contents getting wiped by the browser. Minor GPU cost; acceptable for
+  // the sharing feature it enables.
+  const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
   renderer.setSize(container.clientWidth, container.clientHeight)
   renderer.setClearColor(0x0a0a1a)
@@ -383,6 +456,12 @@ export function createGameScene(
     renderer, scene, camera,
     container.clientWidth, container.clientHeight,
   )
+
+  // --- Retro render path (cosmetic) ---
+  // Renders to a low-res target with NEAREST upscale, replacing the bloom
+  // composer when the pause-settings toggle is on. Cheap to keep around
+  // even when disabled — the offscreen target only holds ~320×180 pixels.
+  const retroRenderer = createRetroRenderer(renderer)
 
   // --- Cinematic Camera ---
   const cineCam = createCinematicCamera(camera)
@@ -767,31 +846,49 @@ export function createGameScene(
       ? window.matchMedia('(prefers-reduced-motion: reduce)')
       : null
 
-  function applyReducedMotion(reduced: boolean): void {
-    if (reduced) {
-      // Force the post-process passes to silent values. The bloom.update()
-      // call in the main loop will be undone by these setters because we
-      // re-apply them after update via the existing debug-overlay path.
-      debugBloomEnabled = false
-      debugVignetteEnabled = false
-      debugChromaticEnabled = false
+  // Two independent signals decide whether motion + post-FX run at full
+  // strength:
+  //   1. OS-level prefers-reduced-motion (forces both off when active)
+  //   2. User pause-menu toggles (`screenShake` and `flashIntensity`)
+  // We track both and AND them together so either source can silence an
+  // effect. The pause settings are stored in localStorage by the user;
+  // subscribePauseSettings fires once on subscribe with the current values.
+  let osReducedMotion = reducedMotionMQ?.matches ?? false
+  let userScreenShake = true
+  let userFlashIntensity = true
+  let userRetroMode = false
+
+  // Photo mode flag. Independent of pause: while on, the simulation freezes
+  // (page sets paused=true alongside) AND the camera detaches from the ship
+  // so WASD / arrows pan it freely for framing screenshots.
+  let photoModeActive = false
+  const PHOTO_PAN_SPEED = 80 // world units per second
+
+  function applyMotionState(): void {
+    const flashOn = !osReducedMotion && userFlashIntensity
+    const shakeOn = !osReducedMotion && userScreenShake
+    debugBloomEnabled = flashOn
+    debugVignetteEnabled = flashOn
+    debugChromaticEnabled = flashOn
+    if (!flashOn) {
       bloom.setBloom(0, true)
       bloom.setVignette(0)
       bloom.setChromaticAberration(0)
-      screenShake.enabled = false
-    } else {
-      debugBloomEnabled = true
-      debugVignetteEnabled = true
-      debugChromaticEnabled = true
-      screenShake.enabled = true
     }
+    screenShake.enabled = shakeOn
   }
-  // Apply once now, then listen for OS-level changes (e.g. the user toggles
-  // the system pref while the game is running).
-  applyReducedMotion(reducedMotionMQ?.matches ?? false)
+
+  const unsubscribePauseSettings = subscribePauseSettings((s) => {
+    userScreenShake = s.screenShake
+    userFlashIntensity = s.flashIntensity
+    userRetroMode = s.retroMode
+    applyMotionState()
+  })
+
   if (reducedMotionMQ) {
     const onReducedMotionChange = (e: MediaQueryListEvent): void => {
-      applyReducedMotion(e.matches)
+      osReducedMotion = e.matches
+      applyMotionState()
     }
     // Older Safari only supports addListener; modern is addEventListener.
     if (reducedMotionMQ.addEventListener) {
@@ -947,6 +1044,10 @@ export function createGameScene(
     // Ignore OS key-repeat — without this, even a brief hold cycles past
     // the tool the player meant to land on.
     if (e.repeat) return
+    // Don't steal Q / 1-3 while the player is typing in an input (e.g. the
+    // run-summary initials box). Otherwise picking the letter Q for their
+    // initials would silently flip the active mining tool.
+    if (isEditableTarget(e.target)) return
     if (e.code === 'KeyQ') {
       toggleMiningTool()
     }
@@ -962,6 +1063,10 @@ export function createGameScene(
   let mouseCollecting = false
 
   function onCollectKeyDown(e: KeyboardEvent): void {
+    // Same input-focus guard as the tool toggle — don't intercept E / Space
+    // while the player is typing. Keyup stays unguarded so a held-collect
+    // releases cleanly if focus changes mid-press.
+    if (isEditableTarget(e.target)) return
     if (e.code === 'KeyE' || e.code === 'Space') {
       if (!collectKeyDown) {
         collectKeyDown = true
@@ -1003,6 +1108,7 @@ export function createGameScene(
     camera.updateProjectionMatrix()
     renderer.setSize(w, h)
     bloom.resize(w, h)
+    retroRenderer.resize(w, h)
   }
   window.addEventListener('resize', onResize)
 
@@ -1020,6 +1126,45 @@ export function createGameScene(
   let prevTime = performance.now()
   let animId = 0
   let wasPaused = false
+  // One-shot latch for the black-hole warning popup. Reset only by a fresh
+  // scene mount — cross-session "already seen" persistence lives in the
+  // page layer (per-slot localStorage flag).
+  let blackHoleWarnFired = false
+
+  // One-shot tutorial-popup latches. Each fires the first time the matching
+  // condition is true after a scene mount; cross-session "already seen"
+  // persistence is handled in the page layer via per-slot localStorage flags.
+  let firstDefensiveHitFired = false
+  let firstFormationFired = false
+  let firstSplitterFired = false
+
+  // --- Tab visibility ---
+  // Browsers throttle requestAnimationFrame to ~1 Hz while a tab is hidden,
+  // but the WebAudio thread keeps running at full speed. Without explicit
+  // handling, sirens / drill / engine loops keep wailing in the background
+  // and time-gated prologue beats (Arbiter approach, dialogue) drip-feed
+  // forward at 1 fps. Treat hidden as a transparent pause: mute loops the
+  // moment we lose visibility (the next rAF is too slow to do it for us)
+  // and reset prevTime on return so the first re-tick doesn't carry a
+  // spurious elapsed-while-hidden delta.
+  let tabHidden = typeof document !== 'undefined' && document.hidden
+  const onVisibilityChange = (): void => {
+    if (document.hidden) {
+      tabHidden = true
+      suspendEngineSound()
+      stopCollectorHum()
+      suspendDrillSound()
+      stopArbiterSiren()
+      suspendMusic()
+      wasPaused = true
+    } else {
+      tabHidden = false
+      prevTime = performance.now()
+    }
+  }
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', onVisibilityChange)
+  }
   let prevLedgerInt = -1
   let prevArbiterKey = ''
   let prevTractorActive = false
@@ -1138,7 +1283,7 @@ export function createGameScene(
     const dt = rawDt * slowMo
 
     // --- Build per-frame input for the shared tick function ---
-    const paused = getPaused()
+    const paused = getPaused() || tabHidden
 
     // --- Gamepad poll: writes to inputState/aimState, returns firing intent ---
     const gamepadResult = gamepad.poll()
@@ -1291,7 +1436,7 @@ export function createGameScene(
         }
       }
 
-      const hpRatio = tickState.playerHp / effectivePlayerMaxHp(tickState)
+      const hpRatio = tickState.playerHp / effectivePlayerMaxHp()
       bloom.setVignette(Math.max(0, (1 - hpRatio) * 0.6))
       if (hpRatio < 0.3) {
         bloom.setChromaticAberration((0.3 - hpRatio) * 0.8)
@@ -1598,6 +1743,17 @@ export function createGameScene(
         const hm = createHealthMeter(-Math.max(HEALTH_BAR_OFFSET_Y, ae.collisionRadius + 8))
         ae.mesh.add(hm)
         ae.mesh.userData.healthMeter = hm
+        // One-shot tutorial-popup latches — fired the first time the player
+        // encounters each new threat kind. Cheap per-frame check; we early
+        // out after the first hit so steady-state spawns are a no-op.
+        if (!firstFormationFired && ae.kind === 'wedge') {
+          firstFormationFired = true
+          onFirstFormation?.()
+        }
+        if (!firstSplitterFired && ae.kind === 'splitter') {
+          firstSplitterFired = true
+          onFirstSplitter?.()
+        }
       }
 
       // Ambush enemies destroyed — remove mesh, spawn explosion + wreckage
@@ -1638,7 +1794,6 @@ export function createGameScene(
       // --- Fire callbacks from tick result ---
       if (result.shipMoved) onShipMoved?.()
       if (result.asteroidHit) onAsteroidHit?.()
-      if (result.crystallineDeflect) onCrystallineDeflect?.()
       if (result.metalSpawned) onMetalSpawned?.()
       for (const mc of result.metalCollected) {
         onCollect?.(mc.variant)
@@ -1654,6 +1809,8 @@ export function createGameScene(
       if (result.nearStation) onNearStation?.()
       if (result.stationRangeChanged !== null) onStationRange?.(result.stationRangeChanged)
       if (result.stationRepaired) onStationDriveThrough?.()
+      if (result.stationContactRequest) onStationContact?.()
+      if (result.stationContactBlocked) onStationContactBlocked?.()
 
       if (result.smartBombDetonated) {
         addTrauma(screenShake, 1.2)
@@ -2166,9 +2323,30 @@ export function createGameScene(
         shieldMat.opacity = 0.06 + tickState.shieldCharges * 0.02 + Math.sin(now / 160) * 0.01
         shieldMat.emissiveIntensity = 0.6 + Math.sin(now / 100) * 0.2
       }
+      // Fire the defensive-hierarchy tutorial popup once per scene the first
+      // time *any* layer absorbs a hit. Done before the layer-specific
+      // handlers below so the popup beats their visual effects to the
+      // player's attention.
+      if (
+        !firstDefensiveHitFired &&
+        (result.shieldHit || result.hullModuleLost || result.armorHit)
+      ) {
+        firstDefensiveHitFired = true
+        onFirstDefensiveHit?.()
+      }
       if (result.shieldHit) {
         addTrauma(screenShake, 0.35)
         onShieldChanged?.(tickState.shieldCharges)
+      }
+      if (result.hullModuleLost) {
+        // Drop the outermost visible module immediately so the player sees
+        // the piece tear off in the same frame the absorb happened. The
+        // React round-trip (onHullChanged → upgrades.hull update →
+        // setCombatUpgrades → applyHullModules) will then re-run with the
+        // same value — a no-op visually, but keeps state authoritative.
+        applyHullModules(shipModel, tickState.hullCharges)
+        addTrauma(screenShake, 0.45)
+        onHullChanged?.(tickState.hullCharges)
       }
       if (result.armorHit) {
         addTrauma(screenShake, 0.5)
@@ -2199,7 +2377,18 @@ export function createGameScene(
       if (tickState.arbiter && tickState.arbiter.mode === 'hunting') combatIntensity = 1.0
       combatIntensity = Math.max(combatIntensity, tickState.ambushEnemies.filter((e) => e.alive).length * 0.15)
 
-      cineCam.update(dt, ship.x, ship.y, ship.velocityX, ship.velocityY, combatIntensity, screenShake)
+      if (photoModeActive) {
+        // Photo mode: detach from the ship and pan the camera directly with
+        // movement input. We use rawDt (not dt) so panning works at full
+        // speed even though the simulation slow-mo / pause is in effect.
+        const pan = PHOTO_PAN_SPEED * rawDt
+        if (inputState.up) camera.position.y += pan
+        if (inputState.down) camera.position.y -= pan
+        if (inputState.left) camera.position.x -= pan
+        if (inputState.right) camera.position.x += pan
+      } else {
+        cineCam.update(dt, ship.x, ship.y, ship.velocityX, ship.velocityY, combatIntensity, screenShake)
+      }
 
       stars.position.x = camera.position.x * 0.5
       stars.position.y = camera.position.y * 0.5
@@ -2230,6 +2419,14 @@ export function createGameScene(
           updateArbiterSiren(Math.max(0.2, Math.min(1, intensity)))
         } else {
           stopArbiterSiren()
+        }
+        // First-time warning popup — fires just outside the pull radius so
+        // the player gets the explanation before any gravity is felt. The
+        // page layer gates this against a per-slot localStorage flag so
+        // it only ever shows once; the scene-side latch is per-session.
+        if (!blackHoleWarnFired && hdist <= BLACK_HOLE_WARN_RADIUS) {
+          blackHoleWarnFired = true
+          onBlackHoleNearby?.()
         }
       } else {
         stopArbiterSiren()
@@ -2311,13 +2508,21 @@ export function createGameScene(
     dustMotes.update(dt, camera.position.x, camera.position.y)
     galaxySpiral.update(now / 1000, camera.position.x, camera.position.y)
 
-    bloom.composer.render()
+    // Retro mode bypasses the bloom composer — chunky pixels and glow
+    // don't mix. Both paths still pay for the same lighting + transform
+    // work above; this only swaps the final composition step.
+    if (userRetroMode) {
+      retroRenderer.render(scene, camera)
+    } else {
+      bloom.composer.render()
+    }
   }
   loop()
 
   // --- Cleanup ---
   function dispose(): void {
     cancelAnimationFrame(animId)
+    unsubscribePauseSettings()
     inputHandler.detach()
     aimHandler.detach()
     joystick.detach()
@@ -2332,6 +2537,9 @@ export function createGameScene(
     window.removeEventListener('keyup', onCollectKeyUp)
     window.removeEventListener('keydown', onToolToggleKeyDown)
     window.removeEventListener('resize', onResize)
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
 
     // Clean up projectile tracking state
     projectileModels.clear()
@@ -2420,6 +2628,7 @@ export function createGameScene(
 
     // Clean up new visual systems
     bloom.dispose()
+    retroRenderer.dispose()
     cineCam.dispose()
     explosionGlowParticles.dispose()
     engineGlowParticles.dispose()
@@ -2467,11 +2676,15 @@ export function createGameScene(
     lazerUnlocked = upgrades.lazer > 0
     tickState.autoToolUnlocked = upgrades.autoTool > 0
     // Bulk the visible ship to match the player's purchases — scoop at tier
-    // 1, cargo pods at tier 2, swept wings + gold accents at tier 3.
+    // 1, cargo pods at tier 2, swept wings + gold accents at tier 3. The
+    // hull count is also the consumable defensive layer: a hit tears off the
+    // outermost module, decrementing both the visible tier and the charge
+    // count in lockstep. Both flow through this same setter via the
+    // onHullChanged → setUpgradeLevel round-trip.
     applyHullModules(shipModel, upgrades.hull)
+    tickState.hullCharges = upgrades.hull
     tickState.coolingTier = upgrades.cooling
     tickState.magnetTier = upgrades.magnet
-    tickState.hullPlatingTier = upgrades.hullPlating
     tickState.bountyTier = upgrades.bounty
     tickState.missileBiasUnlocked = upgrades.missileBias > 0
     tickState.thrustersUnlocked = upgrades.thrusters > 0
@@ -2501,7 +2714,7 @@ export function createGameScene(
     ship.velocityY = 0
 
     // Restore full HP
-    tickState.playerHp = effectivePlayerMaxHp(tickState)
+    tickState.playerHp = effectivePlayerMaxHp()
     onPlayerDamage?.(tickState.playerHp)
 
     // Reset to tier-1 ship and clear prologue state. The intro hands the
@@ -2525,7 +2738,7 @@ export function createGameScene(
     tickState.autoToolUnlocked = false
     tickState.coolingTier = 0
     tickState.magnetTier = 0
-    tickState.hullPlatingTier = 0
+    tickState.hullCharges = 0
     tickState.bountyTier = 0
     tickState.missileBiasUnlocked = false
     tickState.thrustersUnlocked = false
@@ -2554,6 +2767,7 @@ export function createGameScene(
     tickState.prologueArbiterDistance = 0
     tickState.prologueFieldSpawned = false
     tickState.prologueEnemiesSpawned = false
+    tickState.prologueReinforcementSpawned = false
     tickState.prologueStripPhase = 0
     tickState.prologueStripTimer = 0
     tickState.ambushSpawned = false
@@ -2674,7 +2888,7 @@ export function createGameScene(
     ship.y = GAS_STATION_Y + STATION_ENTER_DISTANCE - 10
     ship.velocityX = 0
     ship.velocityY = 0
-    tickState.playerHp = effectivePlayerMaxHp(tickState)
+    tickState.playerHp = effectivePlayerMaxHp()
     onPlayerDamage?.(tickState.playerHp)
 
     // Drop the Arbiter
@@ -2812,6 +3026,26 @@ export function createGameScene(
     },
     getMiningDroneCount() {
       return tickState.miningDrones.length
+    },
+    getRunStats() {
+      return {
+        runTimeSec: tickState.runTime,
+        ledger: tickState.ledger,
+        peakLedger: tickState.peakLedger,
+        marksDefeated: tickState.marksDefeated,
+        score: computeScore(tickState.peakLedger, tickState.marksDefeated),
+      }
+    },
+    setPhotoMode(on: boolean) {
+      photoModeActive = on
+    },
+    takeScreenshot() {
+      // toBlob is async but reads the canvas synchronously at call time —
+      // preserveDrawingBuffer keeps the contents valid in between. We wrap
+      // in a Promise so callers can `await` and trigger a download cleanly.
+      return new Promise<Blob | null>((resolve) => {
+        renderer.domElement.toBlob((blob) => resolve(blob), 'image/png')
+      })
     },
     respawnAfterDeath,
     debugApi: {

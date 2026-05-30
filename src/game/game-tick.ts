@@ -68,11 +68,13 @@ import {
   DRONE_DAMAGE_MULT,
   SCAVENGER_GRAB_RANGE,
   SCAVENGER_ESCAPE_DISTANCE,
+  DRIFTER_SPEED,
+  SPLITTER_CHILD_COUNT,
 } from './enemy-ship'
 import type { EnemyKind } from './enemy-ship'
 import { createScrapBox, updateScrapBox, attractScrapBoxToShip, SCRAP_BOX_VALUE } from './scrap-box'
 import { HITS_PER_BREAK } from './asteroid-debris'
-import { spawnEdgeAsteroid } from './asteroid-spawner'
+import { spawnEdgeAsteroid, spawnPrologueReinforcement } from './asteroid-spawner'
 import {
   LEDGER_PER_ASTEROID,
   LEDGER_PER_METAL,
@@ -101,6 +103,8 @@ import {
   PROLOGUE_SHIP,
   PROLOGUE_MINING_TARGET,
   PROLOGUE_FIELD_RADIUS,
+  PROLOGUE_REINFORCEMENT_THRESHOLD,
+  PROLOGUE_REINFORCEMENT_ASTEROIDS,
   ARBITER_STRIP_DELAY,
   ARBITER_SPAWN_DISTANCE,
   ARBITER_APPROACH_SPEED,
@@ -115,6 +119,19 @@ const ENEMY_NEARBY_DISTANCE = 60
 const STATION_NEAR_DISTANCE = 80
 const STATION_ENTER_DISTANCE = 60
 const STATION_REPAIR_DISTANCE = 30
+// Auto-open trade menu when the ship is physically *inside* the station —
+// not merely touching the outer hull. The platform extends roughly ±20 in
+// X and ±12 in Y from the station anchor (see gas-station-model.ts), so
+// 15 sits well inside the structure footprint without demanding pinpoint
+// accuracy. The 30-unit heal fires first as the ship crosses in, then
+// this trigger lands once they're "in the building" — feels much more
+// like docking than the previous touch-to-open behaviour.
+const STATION_AUTO_TRADE_DISTANCE = 15
+// Active-hostile lockout — any live enemy within this radius blocks the
+// trade-menu auto-open, so the player can't use the station to escape a
+// pursuit. Calibrated to roughly the radar range so off-map fights don't
+// gate shopping but anything actually chasing the player does.
+const STATION_HOSTILE_LOCKOUT_RADIUS = 180
 const AMBUSH_SHOOT_MIN = 0.3
 const AMBUSH_SHOOT_MAX = 0.5
 const AMBUSH_PROJECTILE_DAMAGE = 20
@@ -178,8 +195,13 @@ export interface TickState {
   coolingTier: number
   /** Magnetic Hopper 0-3: extra pickup radius multiplier (+30% per tier). */
   magnetTier: number
-  /** Hull Plating Mk 0-3: +25 max HP per tier. */
-  hullPlatingTier: number
+  /**
+   * Hull modules — consumable defensive layer. Each module bolts a visible
+   * piece onto the ship and absorbs one hit before tearing off. Mirrors
+   * upgrades.hull; range 0-3. Purchased per-charge at the trade station,
+   * decremented on hit between shield and armor in the damage hierarchy.
+   */
+  hullCharges: number
   /** Bounty Manifest 0-3: +15% enemy-kill scrap per tier. */
   bountyTier: number
   /** Heat-Seeker Bias 0/1: missiles prefer Arbiter + carriers when on. */
@@ -238,6 +260,10 @@ export interface TickState {
   wasPaused: boolean
   nearStationFired: boolean
   wasInStationRange: boolean
+  /** Latch — true while the ship is inside STATION_AUTO_TRADE_DISTANCE.
+   *  Rising edge fires either stationContactRequest (clear) or
+   *  stationContactBlocked (hostiles nearby) exactly once per entry. */
+  wasInStationContact: boolean
   repairedThisVisit: boolean
   firstMetalCollectedTime: number | null
   enemySpawned: boolean
@@ -285,6 +311,9 @@ export interface TickState {
   prologueFieldSpawned: boolean
   prologueAsteroidsDestroyed: number
   prologueEnemiesSpawned: boolean
+  /** Latch — second-wave reinforcement (asteroids + a few enemies) fires once
+   *  the player has destroyed PROLOGUE_REINFORCEMENT_THRESHOLD of the field. */
+  prologueReinforcementSpawned: boolean
   prologueEnemiesKilled: number
   prologueArbiterSpawned: boolean
   prologueShipFrozen: boolean
@@ -383,13 +412,20 @@ export interface TickResult {
   // Callback events (booleans/counts for scene.ts callbacks)
   shipMoved: boolean
   asteroidHit: boolean
-  crystallineDeflect: boolean
   metalSpawned: boolean
   metalCollectedEvent: boolean
   enemyNearby: boolean
   nearStation: boolean
   stationRangeChanged: boolean | null // true=entered, false=left, null=no change
   stationRepaired: boolean
+  /** Set the tick the ship first enters STATION_AUTO_TRADE_DISTANCE with
+   *  no hostiles within STATION_HOSTILE_LOCKOUT_RADIUS — page layer opens
+   *  the trade menu in response. */
+  stationContactRequest: boolean
+  /** Set the tick the ship enters auto-trade range but hostiles are present
+   *  in the lockout radius. Page layer shows a brief "clear the sector"
+   *  banner instead of opening the trade menu. */
+  stationContactBlocked: boolean
   playerDamaged: boolean
   playerKilled: boolean
   enemyDestroyedEvent: boolean
@@ -403,6 +439,9 @@ export interface TickResult {
   prologuePlayerKilled: boolean
   shieldHit: boolean
   armorHit: boolean
+  /** A hull module was torn off this tick — scene re-applies modules at the
+   *  new (lower) tickState.hullCharges to drop the outermost visible piece. */
+  hullModuleLost: boolean
   /** The tick a Smart Bomb detonates (auto-bomb on death). */
   smartBombDetonated: boolean
   // Endless mode
@@ -493,7 +532,7 @@ export function createTickState(config?: TickStateConfig): TickState {
     spreadTier: 0,
     coolingTier: 0,
     magnetTier: 0,
-    hullPlatingTier: 0,
+    hullCharges: 0,
     bountyTier: 0,
     missileBiasUnlocked: false,
     thrustersUnlocked: false,
@@ -522,6 +561,7 @@ export function createTickState(config?: TickStateConfig): TickState {
     wasPaused: false,
     nearStationFired: false,
     wasInStationRange: false,
+    wasInStationContact: false,
     repairedThisVisit: false,
     firstMetalCollectedTime: null,
     enemySpawned: false,
@@ -554,6 +594,7 @@ export function createTickState(config?: TickStateConfig): TickState {
     prologueFieldSpawned: false,
     prologueAsteroidsDestroyed: 0,
     prologueEnemiesSpawned: false,
+    prologueReinforcementSpawned: false,
     prologueEnemiesKilled: 0,
     prologueArbiterSpawned: false,
     prologueShipFrozen: false,
@@ -610,13 +651,14 @@ function emptyResult(): TickResult {
     blackHoleAsteroidsConsumed: [],
     shipMoved: false,
     asteroidHit: false,
-    crystallineDeflect: false,
     metalSpawned: false,
     metalCollectedEvent: false,
     enemyNearby: false,
     nearStation: false,
     stationRangeChanged: null,
     stationRepaired: false,
+    stationContactRequest: false,
+    stationContactBlocked: false,
     playerDamaged: false,
     playerKilled: false,
     enemyDestroyedEvent: false,
@@ -629,6 +671,7 @@ function emptyResult(): TickResult {
     prologuePlayerKilled: false,
     shieldHit: false,
     armorHit: false,
+    hullModuleLost: false,
     smartBombDetonated: false,
     ledger: 0,
     newAsteroids: [],
@@ -949,9 +992,15 @@ function redirectEnemyShotAtDrone(
   proj.vy = (dy / dist) * speed
 }
 
-/** Player's actual max HP = base + 25 per Hull Plating tier. */
-export function effectivePlayerMaxHp(state: TickState): number {
-  return PLAYER_MAX_HP + 25 * state.hullPlatingTier
+/**
+ * Player's max HP. Now a flat constant — under the one-shot model the HP
+ * value is essentially binary (alive at PLAYER_MAX_HP, dead at 0), and the
+ * old Hull Plating scaling has no effect because any unabsorbed hit drops
+ * HP straight to 0. Kept as a function so existing callsites don't have to
+ * change shape if the model evolves again later.
+ */
+export function effectivePlayerMaxHp(): number {
+  return PLAYER_MAX_HP
 }
 
 /** Bounty-Manifest-adjusted scrap value for an enemy-kill drop. */
@@ -966,6 +1015,19 @@ function absorbDamageWithShield(state: TickState, result: TickResult): boolean {
   return true
 }
 
+/**
+ * Absorb a hit with a hull module — visible bolt-on piece tears off. Each
+ * module corresponds one-to-one with a tier of {@link applyHullModules}; the
+ * scene re-applies modules on the new (lower) charge count to drop the
+ * outermost piece.
+ */
+function absorbDamageWithHull(state: TickState, result: TickResult): boolean {
+  if (state.hullCharges <= 0) return false
+  state.hullCharges -= 1
+  result.hullModuleLost = true
+  return true
+}
+
 function absorbDamageWithArmor(state: TickState, result: TickResult): boolean {
   if (state.armorCharges <= 0) return false
   state.armorCharges -= 1
@@ -973,6 +1035,21 @@ function absorbDamageWithArmor(state: TickState, result: TickResult): boolean {
   return true
 }
 
+/**
+ * Apply one unit of incoming damage.
+ *
+ * Damage hierarchy (one-shot world):
+ *   1. Shield charge — energy bubble, absorbed cleanly with a flash
+ *   2. Hull module — outer bolt-on piece visibly tears off
+ *   3. Armor charge — internal plating, absorbed cleanly
+ *   4. Smart bomb — resurrects at HP=1 + clears nearby threats
+ *   5. Death — HP drops to 0 and the run ends
+ *
+ * The `damage` value is preserved for the non-oneHitKill code path (the
+ * prologue is the only place that ever runs with oneHitKill=false today).
+ * In one-shot mode, any defense failing to absorb means an immediate kill,
+ * regardless of how much damage the projectile carried.
+ */
 function damagePlayer(
   state: TickState,
   result: TickResult,
@@ -981,14 +1058,16 @@ function damagePlayer(
 ): void {
   if (state.debugGodMode) return
   // The prologue is a scripted power demo — the player isn't supposed to
-  // die in it. With one-shot-kill on, a single stray hit during the intro
-  // would zero HP and lock firing (firingAllowed is gated on playerHp > 0),
-  // leaving the player stuck unable to mine the asteroids that gate the
-  // next tutorial step. So damage is fully absorbed while in the prologue.
+  // die in it. A single stray hit during the intro would zero HP and lock
+  // firing (firingAllowed is gated on playerHp > 0), leaving the player
+  // stuck unable to mine the asteroids that gate the next tutorial step.
+  // So damage is fully absorbed while in the prologue.
   if (state.prologueInvulnerable) return
   if (state.invulnerabilityTimer > 0) return
+
   if (absorbDamageWithShield(state, result)) return
-  if (oneHitKill && absorbDamageWithArmor(state, result)) return
+  if (absorbDamageWithHull(state, result)) return
+  if (absorbDamageWithArmor(state, result)) return
 
   const nextHp = oneHitKill ? 0 : Math.max(0, state.playerHp - damage)
 
@@ -1194,7 +1273,7 @@ function prologueTick(state: TickState, input: TickInput, result: TickResult): v
       state.smartBombCount = 1
       state.coolingTier = 3
       state.magnetTier = 3
-      state.hullPlatingTier = 3
+      state.hullCharges = 3
       state.bountyTier = 3
       state.missileBiasUnlocked = true
       state.thrustersUnlocked = true
@@ -1215,7 +1294,7 @@ function prologueTick(state: TickState, input: TickInput, result: TickResult): v
         )
       }
       // Heal to the inflated HP cap so the new plating actually shows.
-      state.playerHp = effectivePlayerMaxHp(state)
+      state.playerHp = effectivePlayerMaxHp()
     }
     // Clear any stale Arbiter-approach state so the scripted fly-in always
     // plays from full distance. Without this a leftover `prologueArbiterSpawned`
@@ -1245,6 +1324,52 @@ function prologueTick(state: TickState, input: TickInput, result: TickResult): v
         const ex = state.ship.x + Math.cos(angle) * ENEMY_SPAWN_DISTANCE
         const ey = state.ship.y + Math.sin(angle) * ENEMY_SPAWN_DISTANCE
         const enemy = createEnemyShip(ex, ey, AMBUSH_PROJECTILE_DAMAGE, fleet[i])
+        state.ambushEnemies.push(enemy)
+        result.ambushEnemiesSpawned.push(enemy)
+      }
+    }
+
+    // Reinforcement wave — once the player has cleared most of the initial
+    // field, drop in a second batch of asteroids plus a small enemy squad.
+    // Without this the 80 + 6 starting field tops out below the 100-rock
+    // mining target and the objective can never complete.
+    if (
+      !state.prologueReinforcementSpawned &&
+      state.prologueEnemiesSpawned &&
+      state.prologueAsteroidsDestroyed >= PROLOGUE_REINFORCEMENT_THRESHOLD
+    ) {
+      state.prologueReinforcementSpawned = true
+
+      // Wave drifts in from the outer containment ring so the rocks glide
+      // into view from beyond the play area rather than popping in on top
+      // of the player. At ~22 units/sec inward, a rock spawned at the edge
+      // reaches the 30–120 play ring in roughly 6–11 seconds (the per-rock
+      // speed jitter inside the helper staggers individual arrivals).
+      const reinforcement = spawnPrologueReinforcement(
+        0,
+        0,
+        PROLOGUE_REINFORCEMENT_ASTEROIDS,
+        'wave2',
+        PROLOGUE_FIELD_RADIUS,
+        22,
+      )
+      for (const a of reinforcement) {
+        state.asteroids.push(a)
+        state.asteroidHitCounts.set(a.id, 0)
+        result.newAsteroids.push(a)
+      }
+
+      // Small enemy reinforcement — pressure-on-pressure with the wave of
+      // rocks. The advance gate already requires all ambush enemies dead,
+      // so these must be defeated before the prologue can complete.
+      const wave: EnemyKind[] = ['grunt', 'grunt', 'sniper']
+      for (let i = 0; i < wave.length; i++) {
+        // Offset by π/4 so the second wave doesn't drop in the exact same
+        // angular slots as the initial fleet (which used i/6 * 2π).
+        const angle = (i / wave.length) * Math.PI * 2 + Math.PI / 4
+        const ex = state.ship.x + Math.cos(angle) * ENEMY_SPAWN_DISTANCE
+        const ey = state.ship.y + Math.sin(angle) * ENEMY_SPAWN_DISTANCE
+        const enemy = createEnemyShip(ex, ey, AMBUSH_PROJECTILE_DAMAGE, wave[i])
         state.ambushEnemies.push(enemy)
         result.ambushEnemiesSpawned.push(enemy)
       }
@@ -1532,7 +1657,7 @@ export function tick(state: TickState, input: TickInput): TickResult {
     }
 
     if (!resolveShipAsteroidCollision(state.ship, a)) continue
-    if (isPrologue || state.drillNoseTier <= 0) continue
+    if (state.drillNoseTier <= 0) continue
     if (!ramming) continue
 
     const drillDamage = 8 * state.drillNoseTier * dt
@@ -1659,9 +1784,12 @@ export function tick(state: TickState, input: TickInput): TickResult {
 
       const processBeamAsteroidHits = (hits: BeamHit[]): void => {
         for (const hit of hits) {
-          if (hit.deflected) {
-            result.crystallineDeflect = true
-          } else {
+          // `hit.deflected` (kept on BeamHit / ProjectileHit for future VFX
+          // hookup) used to drive a tutorial popup that nagged the player to
+          // buy the Lazer. Removed because the affinity matrix now lets the
+          // blaster chip basalt slowly — the popup was technically wrong
+          // and the paused-modal UX bred input-routing bugs.
+          if (!hit.deflected) {
             result.asteroidHit = true
             const prevHits = state.asteroidHitCounts.get(hit.asteroidId) ?? 0
             const newHits = prevHits + 1
@@ -1979,9 +2107,6 @@ export function tick(state: TickState, input: TickInput): TickResult {
     if (hits.some((h) => !h.deflected)) {
       result.asteroidHit = true
     }
-    if (hits.some((h) => h.deflected)) {
-      result.crystallineDeflect = true
-    }
 
     for (const hit of hits) {
       state.projectileElapsed.delete(hit.projectileId)
@@ -2246,6 +2371,12 @@ export function tick(state: TickState, input: TickInput): TickResult {
     if (!inStationRange) state.repairedThisVisit = false
   }
 
+  // Station drive-through detection. The auto-heal that used to live here was
+  // removed when the game committed to the one-shot kill model — there is no
+  // partial-HP state for healing to repair. The latch + result event remain
+  // because the tutorial uses `onStationDriveThrough` to advance the
+  // approach-station beat, and the one-per-visit gate is still what keeps
+  // the signal from firing every frame the ship is inside the pump.
   if (
     inStationRange &&
     !state.repairedThisVisit &&
@@ -2253,9 +2384,58 @@ export function tick(state: TickState, input: TickInput): TickResult {
     state.playerHp > 0
   ) {
     state.repairedThisVisit = true
-    state.playerHp = effectivePlayerMaxHp(state)
     result.stationRepaired = true
-    result.playerDamaged = true // triggers onPlayerDamage callback with restored HP
+  }
+
+  // Auto-trade contact + hostile lockout. Fly the ship physically into the
+  // station to open the trade menu — but in endless mode only if the sector
+  // is clear. Any live hostile inside STATION_HOSTILE_LOCKOUT_RADIUS
+  // (~radar range) blocks the open and the page layer shows a brief
+  // warning banner instead, so the station can't be used as a panic dock
+  // to escape a pursuit. Tutorial and prologue beats skip the lockout —
+  // their scripted pacing already controls when hostiles are around, and
+  // tutorial step `approach-station` relies on contact to advance.
+  const inStationContact = sDist <= STATION_AUTO_TRADE_DISTANCE
+  if (inStationContact !== state.wasInStationContact) {
+    state.wasInStationContact = inStationContact
+    if (inStationContact && !tutStep.startsWith('prologue-')) {
+      const lockoutActive = tutStep === 'done'
+      let hostilesNearby = false
+      if (lockoutActive) {
+        const lockoutSq = STATION_HOSTILE_LOCKOUT_RADIUS * STATION_HOSTILE_LOCKOUT_RADIUS
+        const shipX = state.ship.x
+        const shipY = state.ship.y
+        const within = (x: number, y: number): boolean => {
+          const dx = x - shipX
+          const dy = y - shipY
+          return dx * dx + dy * dy <= lockoutSq
+        }
+        if (state.enemy && state.enemy.alive && within(state.enemy.x, state.enemy.y)) {
+          hostilesNearby = true
+        }
+        if (!hostilesNearby) {
+          for (const ae of state.ambushEnemies) {
+            if (ae.alive && within(ae.x, ae.y)) {
+              hostilesNearby = true
+              break
+            }
+          }
+        }
+        if (
+          !hostilesNearby &&
+          state.arbiter &&
+          state.arbiter.mode === 'hunting' &&
+          within(state.arbiter.x, state.arbiter.y)
+        ) {
+          hostilesNearby = true
+        }
+      }
+      if (hostilesNearby) {
+        result.stationContactBlocked = true
+      } else {
+        result.stationContactRequest = true
+      }
+    }
   }
 
   // Drone Repair Bay: while near the station and the upgrade is owned,
@@ -2457,7 +2637,7 @@ function updateEndlessMode(
         state.scrapBoxes.push(createScrapBox(arb.x + Math.cos(a) * r, arb.y + Math.sin(a) * r, bountyScrapValue(state)))
       }
       state.ledger = Math.max(0, state.ledger * ARBITER_DEFEAT_LEDGER_FACTOR)
-      state.playerHp = effectivePlayerMaxHp(state)
+      state.playerHp = effectivePlayerMaxHp()
       state.marksDefeated++
       result.playerDamaged = true
       result.arbiterDefeated = { x: arb.x, y: arb.y, mark: arb.mark }
@@ -2495,11 +2675,40 @@ function updateEndlessMode(
   }
 
   // --- Enemy director: escalating patrols (paused while the Arbiter is here) ---
+  //
+  // Once per cadence the director picks ONE of two events:
+  //   • a normal patrol of `patrolSize(ledger)` mixed kinds drawn from
+  //     `pickPatrolKind`, or
+  //   • a Galaga-style formation swoop (a wedge of 5 flying in along a single
+  //     bearing toward the player).
+  //
+  // The formation roll is gated by Ledger so a fresh run sees plain patrols
+  // first and formations emerge as a mid-run escalation beat. Formations
+  // replace a patrol rather than stacking on top of one — the wedge IS the
+  // wave that tick.
   if (!state.arbiter && !state.debugDisableEnemySpawns) {
     state.patrolTimer -= dt
     if (state.patrolTimer <= 0) {
       state.patrolTimer = patrolInterval(state.ledger)
-      spawnPatrol(state, result, patrolSize(state.ledger), viewDiag)
+      const rollFormation = state.ledger >= 220 && Math.random() < 0.28
+      if (rollFormation) {
+        spawnWedgeFormation(state, result, viewDiag)
+      } else {
+        spawnPatrol(state, result, patrolSize(state.ledger), viewDiag)
+      }
+    }
+  }
+
+  // --- Splitter death → spawn 3 grunt children ---
+  // Done after all damage / death detection sites have pushed to
+  // ambushEnemiesDestroyed and BEFORE the prune step, so newly-spawned
+  // children are immediately part of the live pool and the next tick can
+  // run their AI without a one-frame gap.
+  if (result.ambushEnemiesDestroyed.length > 0) {
+    for (const dead of result.ambushEnemiesDestroyed) {
+      if (dead.kind === 'splitter') {
+        spawnSplitterChildren(state, result, dead)
+      }
     }
   }
 
@@ -2518,12 +2727,21 @@ function updateEndlessMode(
 /**
  * Pick a patrol enemy class. The roster opens up as the Ledger climbs, so a
  * fresh run faces plain grunts and later runs see the full bestiary.
+ *
+ * Drifters are sprinkled in at all Ledger values as low-stakes XP filler —
+ * 1 HP and no weapon, they read as a "feel powerful" beat rather than a
+ * threat. Splitters appear once the player can routinely handle splash damage.
  */
 function pickPatrolKind(ledger: number): EnemyKind {
   const r = Math.random()
-  if (ledger > 2000 && r < 0.14) return 'carrier'
-  if (ledger > 900 && r < 0.36) return 'scavenger'
-  if (ledger > 300 && r < 0.62) return 'sniper'
+  if (ledger > 2200 && r < 0.10) return 'splitter'
+  if (ledger > 2000 && r < 0.18) return 'carrier'
+  if (ledger > 900 && r < 0.34) return 'scavenger'
+  if (ledger > 300 && r < 0.56) return 'sniper'
+  // Drifters cap out at a small share so they remain a flavour spawn, not the
+  // dominant patrol enemy. Slight bias to early game where the XP matters more.
+  const drifterChance = ledger < 200 ? 0.18 : 0.1
+  if (r < drifterChance) return 'drifter'
   return 'grunt'
 }
 
@@ -2543,9 +2761,132 @@ function spawnPatrol(
     const angle = Math.random() * Math.PI * 2
     const ex = state.ship.x + Math.cos(angle) * ringRadius
     const ey = state.ship.y + Math.sin(angle) * ringRadius
-    const enemy = createEnemyShip(ex, ey, damage, pickPatrolKind(state.ledger))
+    const kind = pickPatrolKind(state.ledger)
+    const enemy = createEnemyShip(ex, ey, damage, kind)
+    // Drifters have no steering AI — give them a fixed velocity at spawn so
+    // they cross the screen on a straight line. Aimed roughly at the player
+    // with a small angular jitter so the path varies between spawns.
+    if (kind === 'drifter') {
+      const toPlayer = Math.atan2(state.ship.y - ey, state.ship.x - ex)
+      const jitter = (Math.random() - 0.5) * 0.6
+      const heading = toPlayer + jitter
+      enemy.vx = Math.cos(heading) * DRIFTER_SPEED
+      enemy.vy = Math.sin(heading) * DRIFTER_SPEED
+      enemy.heading = heading
+    }
     state.ambushEnemies.push(enemy)
     result.ambushEnemiesSpawned.push(enemy)
+  }
+}
+
+/**
+ * V-formation slot offsets (5 ships), measured from the leader along the
+ * swoop axes: `x` is lateral (perpendicular to flight), `y` is trailing
+ * (negative = behind the leader).
+ *
+ * Layout:
+ * ```
+ *          (0,0)            <- leader
+ *      .          .
+ *   (-8,-8)     (8,-8)      <- inner wings
+ *      .          .
+ *  (-16,-16)   (16,-16)     <- outer wings
+ * ```
+ */
+const WEDGE_SLOTS: readonly { x: number; y: number }[] = [
+  { x: 0, y: 0 },
+  { x: -8, y: -8 },
+  { x: 8, y: -8 },
+  { x: -16, y: -16 },
+  { x: 16, y: -16 },
+] as const
+
+/**
+ * Spawn a wedge formation: 5 wedge ships, off-screen on a random bearing,
+ * pointed at the player. The leader flies straight along the bearing;
+ * followers hold a V-slot relative to the leader until the wing breaks
+ * (see {@link updateWedgeAI} for the break conditions).
+ *
+ * Stays within MAX_PATROL_ENEMIES — if the cap is tight, we spawn fewer
+ * followers rather than skipping the formation entirely so the bearing
+ * threat still telegraphs.
+ */
+function spawnWedgeFormation(state: TickState, result: TickResult, viewDiag: number): void {
+  const aliveEnemies = state.ambushEnemies.reduce((n, e) => n + (e.alive ? 1 : 0), 0)
+  const budget = MAX_PATROL_ENEMIES - aliveEnemies
+  if (budget <= 0) return
+  const count = Math.min(WEDGE_SLOTS.length, budget)
+  const damage = patrolEnemyDamage(state.ledger)
+
+  // Spawn on a ring well outside the camera diagonal so the formation has
+  // travel room before reaching engagement range. The swoop bearing points
+  // FROM the spawn point TOWARD the ship.
+  const spawnDist = viewDiag + 50
+  const fromAngle = Math.random() * Math.PI * 2
+  const spawnAnchorX = state.ship.x + Math.cos(fromAngle) * spawnDist
+  const spawnAnchorY = state.ship.y + Math.sin(fromAngle) * spawnDist
+  const swoopBearing = Math.atan2(
+    state.ship.y - spawnAnchorY,
+    state.ship.x - spawnAnchorX,
+  )
+  const cos = Math.cos(swoopBearing)
+  const sin = Math.sin(swoopBearing)
+
+  let leader: EnemyShip | null = null
+  for (let i = 0; i < count; i++) {
+    const slot = WEDGE_SLOTS[i]
+    // Slot offset rotated into the swoop axes: forward = (cos, sin), lateral = (-sin, cos).
+    const sx = spawnAnchorX + slot.y * cos + slot.x * -sin
+    const sy = spawnAnchorY + slot.y * sin + slot.x * cos
+    const enemy = createEnemyShip(sx, sy, damage, 'wedge')
+    enemy.inFormation = true
+    enemy.swoopBearing = swoopBearing
+    enemy.formationSlotX = slot.x
+    enemy.formationSlotY = slot.y
+    enemy.heading = swoopBearing
+    enemy.rotation = swoopBearing - Math.PI / 2
+    if (i === 0) {
+      leader = enemy
+      enemy.formationLeader = null
+    } else {
+      enemy.formationLeader = leader
+    }
+    state.ambushEnemies.push(enemy)
+    result.ambushEnemiesSpawned.push(enemy)
+  }
+}
+
+/**
+ * Spawn SPLITTER_CHILD_COUNT grunt children radiating outward from a
+ * splitter's death point. Called once per splitter death; the children are
+ * regular grunts (not recursive splitters) so we don't end up with a
+ * runaway swarm.
+ */
+function spawnSplitterChildren(
+  state: TickState,
+  result: TickResult,
+  parent: EnemyShip,
+): void {
+  const aliveEnemies = state.ambushEnemies.reduce((n, e) => n + (e.alive ? 1 : 0), 0)
+  const budget = MAX_PATROL_ENEMIES - aliveEnemies
+  if (budget <= 0) return
+  const count = Math.min(SPLITTER_CHILD_COUNT, budget)
+  for (let i = 0; i < count; i++) {
+    const angle = (i / SPLITTER_CHILD_COUNT) * Math.PI * 2 + Math.random() * 0.4
+    const r = 8
+    const cx = parent.x + Math.cos(angle) * r
+    const cy = parent.y + Math.sin(angle) * r
+    const child = createEnemyShip(cx, cy, parent.projectileDamage, 'grunt')
+    // Outward kick + heading so the children visibly burst from the wreck
+    // rather than smoothly orbiting from frame one.
+    child.vx = Math.cos(angle) * 22
+    child.vy = Math.sin(angle) * 22
+    child.heading = angle
+    // Children spawn at full HP so they're a real threat — without this,
+    // the grunt-default half-HP would make splitter death too cheap.
+    child.hp = child.maxHp
+    state.ambushEnemies.push(child)
+    result.ambushEnemiesSpawned.push(child)
   }
 }
 
