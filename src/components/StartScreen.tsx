@@ -368,8 +368,8 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
         <br />
         FRAK&apos;R
       </h1>
-      <p className="font-sans text-sm md:text-base text-hud-amber/70 mb-6 relative z-10">
-        Blast. Collect. Scrap. Upgrade.
+      <p className="font-sans text-sm md:text-base tracking-[0.2em] text-hud-amber/70 mb-6 relative z-10">
+        FRAK, SCRAP &amp; UPGRADE
       </p>
       {bestEntry && (
         <p className="font-mono text-xs md:text-sm tracking-[0.18em] text-hud-amber/65 mb-8 relative z-10">
