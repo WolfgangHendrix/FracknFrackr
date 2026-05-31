@@ -850,6 +850,7 @@ export default function Home() {
           arbiter={arbiterHud}
           isSaving={isSaving}
           onPause={togglePause}
+          tradeMenuOpen={tradeMenuOpen}
         />
       )}
       {!inPrologue && <ArbiterBanner banner={arbiterBanner} />}

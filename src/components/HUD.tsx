@@ -20,6 +20,10 @@ interface HUDProps {
   arbiter: ArbiterHudInfo | null
   isSaving: boolean
   onPause: () => void
+  /** When the trade menu (store) is open the game is already effectively
+   * paused, and the pause button would otherwise open the pause overlay
+   * underneath the store. Hide the button while it's up. */
+  tradeMenuOpen?: boolean
 }
 
 /**
@@ -110,6 +114,7 @@ export function HUD({
   arbiter,
   isSaving,
   onPause,
+  tradeMenuOpen = false,
 }: HUDProps) {
   const cargoPercent = cargo.capacity > 0 ? Math.round((cargo.fragments / cargo.capacity) * 100) : 0
   const ledgerInfo = ledgerStatus(ledger)
@@ -165,13 +170,15 @@ export function HUD({
               </div>
             )}
           </div>
-          <button
-            onClick={onPause}
-            className="pointer-events-auto relative z-[60] px-2 py-1.5 sm:px-3 sm:py-2 bg-space-800/80 border border-hud-green/30 rounded text-hud-green text-xs sm:text-sm hover:bg-space-700/80 active:scale-95 transition-all min-w-[44px] min-h-[44px] flex items-center justify-center"
-            aria-label={paused ? 'Resume game' : 'Pause game'}
-          >
-            {paused ? '\u25B6' : 'II'}
-          </button>
+          {!tradeMenuOpen && (
+            <button
+              onClick={onPause}
+              className="pointer-events-auto relative z-[60] px-2 py-1.5 sm:px-3 sm:py-2 bg-space-800/80 border border-hud-green/30 rounded text-hud-green text-xs sm:text-sm hover:bg-space-700/80 active:scale-95 transition-all min-w-[44px] min-h-[44px] flex items-center justify-center"
+              aria-label={paused ? 'Resume game' : 'Pause game'}
+            >
+              {paused ? '\u25B6' : 'II'}
+            </button>
+          )}
         </div>
       </div>
 
