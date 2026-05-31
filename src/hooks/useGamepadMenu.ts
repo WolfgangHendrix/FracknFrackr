@@ -61,6 +61,33 @@ function focusFirst(): void {
   if (items.length > 0) items[0].focus()
 }
 
+/** True when the focused element is a range-input slider — used to remap
+ *  left/right from focus-walk to value-nudge. */
+function focusedRange(): HTMLInputElement | null {
+  const el = document.activeElement
+  if (el instanceof HTMLInputElement && el.type === 'range') return el
+  return null
+}
+
+/** Nudge a focused range input by ±step and notify React. */
+function nudgeRange(input: HTMLInputElement, direction: 1 | -1): void {
+  const step = Number(input.step) || 1
+  const min = Number(input.min) || 0
+  const max = Number(input.max) || 100
+  const current = Number(input.value)
+  const next = Math.max(min, Math.min(max, current + direction * step))
+  if (next === current) return
+  // React's onChange listens for the native 'input' event under the hood
+  // — setting .value alone won't trigger it. Use the prototype setter to
+  // bypass React's value-tracker, then dispatch a bubbling input event.
+  const setter = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    'value',
+  )?.set
+  setter?.call(input, String(next))
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
 export function useGamepadMenu({ enabled, resetKey }: UseGamepadMenuOptions): void {
   // Reset DOM focus when the visible menu changes.
   useEffect(() => {
@@ -153,6 +180,12 @@ export function useGamepadMenu({ enabled, resetKey }: UseGamepadMenuOptions): vo
     left: false,
     right: false,
   })
+  // Hold-repeat timing for slider nudges. After an initial delay (~400ms at
+  // 60fps) the value re-nudges every `RANGE_REPEAT_INTERVAL` frames (~80ms),
+  // so a held d-pad sweeps the slider smoothly instead of tapping once.
+  const rangeHold = useRef({ frames: 0, direction: 0 as -1 | 0 | 1 })
+  const RANGE_REPEAT_DELAY = 24
+  const RANGE_REPEAT_INTERVAL = 5
 
   useEffect(() => {
     if (!enabled) return
@@ -190,8 +223,34 @@ export function useGamepadMenu({ enabled, resetKey }: UseGamepadMenuOptions): vo
 
       if (upDown && !prev.current.up) moveFocus(-1)
       if (downDown && !prev.current.down) moveFocus(+1)
-      if (leftDown && !prev.current.left) moveFocus(-1)
-      if (rightDown && !prev.current.right) moveFocus(+1)
+
+      // Left/right: on a slider, nudge value; otherwise walk focus. Holding
+      // a direction on a slider repeats the nudge after a short delay so the
+      // player can sweep across the range without spamming d-pad presses.
+      const range = focusedRange()
+      if (range) {
+        const direction: -1 | 0 | 1 = leftDown ? -1 : rightDown ? 1 : 0
+        if (direction !== 0 && direction !== rangeHold.current.direction) {
+          // Fresh press (or swapped direction) — nudge once and reset timer.
+          nudgeRange(range, direction)
+          rangeHold.current.direction = direction
+          rangeHold.current.frames = 0
+        } else if (direction !== 0) {
+          rangeHold.current.frames += 1
+          const f = rangeHold.current.frames
+          if (f >= RANGE_REPEAT_DELAY && (f - RANGE_REPEAT_DELAY) % RANGE_REPEAT_INTERVAL === 0) {
+            nudgeRange(range, direction)
+          }
+        } else {
+          rangeHold.current.direction = 0
+          rangeHold.current.frames = 0
+        }
+      } else {
+        rangeHold.current.direction = 0
+        rangeHold.current.frames = 0
+        if (leftDown && !prev.current.left) moveFocus(-1)
+        if (rightDown && !prev.current.right) moveFocus(+1)
+      }
 
       // Press: low note. Release: click (which fires the high note via the
       // click listener). Themed sounds (sell/buy) skip the press blip so

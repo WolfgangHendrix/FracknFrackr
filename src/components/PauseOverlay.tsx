@@ -240,11 +240,14 @@ function Slider({
       </div>
       <input
         type="range"
+        data-menu-item
         min={0}
         max={100}
+        step={5}
         value={Math.round(value * 100)}
         onChange={(e) => onChange(Number(e.target.value) / 100)}
-        className="w-full h-5 rounded-full appearance-none cursor-pointer accent-hud-blue bg-space-700"
+        className="w-full h-5 rounded-full appearance-none cursor-pointer accent-hud-blue bg-space-700 focus:outline-none focus:ring-2 focus:ring-hud-blue rounded-full"
+        aria-label={label}
       />
     </label>
   )
