@@ -15,7 +15,7 @@
  *                       and restarts 00 from the top.
  */
 
-import { getMusicVolume } from '@/game/volume-control'
+import { getMusicVolume, subscribeVolume } from '@/game/volume-control'
 
 const MENU_TRACK = './audio/mus_mainmenu_00.ogg'
 const GAMEPLAY_TRACK = './audio/mus_mainmenu_01.ogg'
@@ -31,6 +31,17 @@ let gestureCleanup: (() => void) | null = null
 // the music for some other reason (or the volume slider muted it).
 let pausedByVisibility = false
 let visibilityHandlerInstalled = false
+let volumeSubscribed = false
+
+function ensureVolumeSubscription(): void {
+  if (volumeSubscribed) return
+  volumeSubscribed = true
+  // Live-track slider changes so master/music updates apply to the currently
+  // playing track without waiting for a restart.
+  subscribeVolume(() => {
+    if (audio) audio.volume = getMusicVolume()
+  })
+}
 
 function installVisibilityHandler(): void {
   if (visibilityHandlerInstalled) return
@@ -67,6 +78,7 @@ function ensureAudio(): HTMLAudioElement | null {
   }
   audio.volume = getMusicVolume()
   installVisibilityHandler()
+  ensureVolumeSubscription()
   return audio
 }
 

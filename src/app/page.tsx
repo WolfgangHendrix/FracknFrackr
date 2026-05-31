@@ -31,7 +31,8 @@ import { useGamepadMenu } from '@/hooks/useGamepadMenu'
 import { useGamepadButton } from '@/hooks/useGamepadButton'
 import type { MiningTool, MetalVariant } from '@/game/types'
 import type { Upgrades, SaveSlotId } from '@/lib/schemas'
-import { getSfxVolume, setPauseDampening } from '@/game/volume-control'
+import { setPauseDampening } from '@/game/volume-control'
+import { playVoice } from '@/lib/voice'
 import type { PauseRunStats } from '@/components/PauseOverlay'
 
 type Screen = 'title' | 'start' | 'game'
@@ -660,9 +661,7 @@ export default function Home() {
     if (!voiceSrc || playedPrologueFadeVoicesRef.current.has(prologueFade)) return
 
     playedPrologueFadeVoicesRef.current.add(prologueFade)
-    const voice = new Audio(voiceSrc)
-    voice.preload = 'auto'
-    voice.volume = 0.62 * getSfxVolume()
+    const voice = playVoice(voiceSrc, 0.62)
     prologueVoiceRefs.current.push(voice)
     voice.addEventListener(
       'ended',
@@ -671,7 +670,6 @@ export default function Home() {
       },
       { once: true },
     )
-    void voice.play().catch(() => {})
   }, [prologueFade])
 
   useEffect(() => {

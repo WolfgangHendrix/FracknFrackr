@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { TutorialStep } from '@/hooks/useTutorial'
 import { ARBITER_DIALOGUE } from '@/game/prologue-config'
-import { getSfxVolume } from '@/game/volume-control'
+import { playVoice } from '@/lib/voice'
 
 const ARBITER_VOICE_LINES = [
   './audio/vo_arbeter01.wav',
@@ -70,14 +70,18 @@ function ArbiterDialogue({ onComplete }: { onComplete: () => void }) {
     }
 
     voiceRef.current?.pause()
-    const voice = new Audio(ARBITER_VOICE_LINES[lineIndex] ?? '')
-    voice.preload = 'auto'
-    voice.volume = 0.9 * getSfxVolume()
-    voiceRef.current = voice
-
     const startedAt = performance.now()
     let advanceTimer: ReturnType<typeof setTimeout> | null = null
     let cancelled = false
+    const voice = playVoice(
+      ARBITER_VOICE_LINES[lineIndex] ?? '',
+      0.9,
+      // Autoplay blocked or load failed — schedule the same way. At this
+      // point voice.duration may be 0, so the schedule falls back to the
+      // text estimate and the line still advances on its own.
+      () => scheduleAdvance(),
+    )
+    voiceRef.current = voice
 
     // Single scheduler used by both the natural-end path and the
     // play()-rejected fallback. Waits until max(actual audio duration,
@@ -104,13 +108,6 @@ function ArbiterDialogue({ onComplete }: { onComplete: () => void }) {
 
     const onEnded = (): void => scheduleAdvance()
     voice.addEventListener('ended', onEnded, { once: true })
-
-    void voice.play().catch(() => {
-      // Autoplay blocked or load failed — schedule the same way. At this
-      // point voice.duration may be 0, so the schedule falls back to the
-      // text estimate and the line still advances on its own.
-      scheduleAdvance()
-    })
 
     return () => {
       cancelled = true
@@ -159,9 +156,7 @@ export function PrologueOverlay({ step, onSkip, onDialogueComplete }: PrologueOv
     if (!voiceSrc || playedFrackerStepsRef.current.has(step)) return
 
     playedFrackerStepsRef.current.add(step)
-    const voice = new Audio(voiceSrc)
-    voice.preload = 'auto'
-    voice.volume = 0.62 * getSfxVolume()
+    const voice = playVoice(voiceSrc, 0.62)
     frackerVoicesRef.current.push(voice)
     voice.addEventListener(
       'ended',
@@ -170,7 +165,6 @@ export function PrologueOverlay({ step, onSkip, onDialogueComplete }: PrologueOv
       },
       { once: true },
     )
-    void voice.play().catch(() => {})
   }, [step])
 
   useEffect(() => {
