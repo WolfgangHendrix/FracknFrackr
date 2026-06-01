@@ -70,8 +70,10 @@ import {
   SCAVENGER_ESCAPE_DISTANCE,
   DRIFTER_SPEED,
   SPLITTER_CHILD_COUNT,
+  MISSILE_LIFETIME,
 } from './enemy-ship'
 import type { EnemyKind } from './enemy-ship'
+import { SHIP_COLLISION_RADIUS } from './collision-constants'
 import { createScrapBox, updateScrapBox, attractScrapBoxToShip, SCRAP_BOX_VALUE } from './scrap-box'
 import { HITS_PER_BREAK } from './asteroid-debris'
 import { spawnEdgeAsteroid, spawnPrologueReinforcement } from './asteroid-spawner'
@@ -89,6 +91,8 @@ import {
   arbiterThreshold,
   ARBITER_DEFEAT_LEDGER_FACTOR,
   ARBITER_EVADE_LEDGER_RELIEF,
+  computePowerIndex,
+  threatBonus,
 } from './ledger-config'
 import {
   createArbiterState,
@@ -96,7 +100,10 @@ import {
   checkProjectileArbiterCollisions,
   checkBeamArbiterCollisions,
   applyTractorPull,
+  arbiterMissileDamage,
   ARBITER_COLLISION_RADIUS,
+  ARBITER_MISSILE_MARK,
+  ARBITER_BULLET_HELL_MARK,
 } from './arbiter'
 import type { ArbiterState } from './arbiter'
 import {
@@ -136,10 +143,10 @@ const AMBUSH_SHOOT_MIN = 0.3
 const AMBUSH_SHOOT_MAX = 0.5
 const AMBUSH_PROJECTILE_DAMAGE = 20
 const DRONE_POST_LAUNCH_SHOOT_DELAY = 0.8
-const BLACK_HOLE_PULL_RADIUS = 120
+const BLACK_HOLE_PULL_RADIUS = 200
 const BLACK_HOLE_EVENT_HORIZON_RADIUS = 12
-const BLACK_HOLE_PULL_ACCEL = 180
-const BLACK_HOLE_PLAYER_PULL_MULT = 0.45
+const BLACK_HOLE_PULL_ACCEL = 480
+const BLACK_HOLE_PLAYER_PULL_MULT = 0.8
 
 const DRONE_LAUNCH_SLOTS: readonly {
   bayX: number
@@ -296,6 +303,13 @@ export interface TickState {
   asteroidSpawnCounter: number
   /** The active Arbiter boss, or null when no encounter is underway. */
   arbiter: ArbiterState | null
+  /**
+   * A second, lighter Arbiter that flanks the primary during the twin-encounter
+   * Marks (ARBITER_MISSILE_MARK..ARBITER_BULLET_HELL_MARK − 1). No tractor, no
+   * missiles, reduced hull — a readiness gate before the bullet-hell Marks.
+   * Null outside a twin encounter.
+   */
+  arbiterEscort: ArbiterState | null
   /** Number of Arbiter encounters started so far (the current/last Mark). */
   arbiterMark: number
   /** Highest Ledger value reached this run (end-of-run scoring). */
@@ -343,8 +357,8 @@ export interface TickInput {
   tutorialStep: TutorialStep
   /** Camera-visible world-space rectangle, for gating fire to on-screen targets. */
   viewBounds: { centerX: number; centerY: number; halfW: number; halfH: number }
-  /** Active black-hole hazard position, matching the visible background object. */
-  blackHole: { x: number; y: number } | null
+  /** Active black-hole hazard positions (one per visible black hole). */
+  blackHoles: { x: number; y: number }[]
 }
 
 import type { MetalVariant } from './types'
@@ -455,6 +469,9 @@ export interface TickResult {
   arbiterSpawned: { mark: number } | null
   /** Set the tick the Arbiter is destroyed by the player. */
   arbiterDefeated: { x: number; y: number; mark: number } | null
+  /** Set the tick the twin escort is destroyed — drives its explosion VFX only
+   *  (no comms banner; the primary owns the encounter's defeat banner). */
+  arbiterEscortDefeated: { x: number; y: number; mark: number } | null
   /** Set the tick the Arbiter gives up and withdraws. */
   arbiterWithdrawn: { mark: number } | null
   /** True on any tick the player damaged the Arbiter. */
@@ -585,6 +602,7 @@ export function createTickState(config?: TickStateConfig): TickState {
     asteroidRespawnTimer: ASTEROID_REPLENISH_INTERVAL,
     asteroidSpawnCounter: 1,
     arbiter: null,
+    arbiterEscort: null,
     arbiterMark: 0,
     peakLedger: 0,
     marksDefeated: 0,
@@ -678,6 +696,7 @@ function emptyResult(): TickResult {
     expiredAsteroidIds: [],
     arbiterSpawned: null,
     arbiterDefeated: null,
+    arbiterEscortDefeated: null,
     arbiterWithdrawn: null,
     arbiterHit: false,
     arbiterCaptureHit: false,
@@ -768,8 +787,8 @@ function aimLineHasVisibleTarget(
       return true
     }
   }
-  if (state.arbiter && state.arbiter.hp > 0 && state.arbiter.mode === 'hunting') {
-    const ar = state.arbiter
+  for (const ar of [state.arbiter, state.arbiterEscort]) {
+    if (!ar || ar.hp <= 0 || ar.mode !== 'hunting') continue
     if (
       onScreen(ar.x, ar.y, ARBITER_COLLISION_RADIUS) &&
       pointToSegmentDistSq(ar.x, ar.y, ship.x, ship.y, endX, endY) <
@@ -832,6 +851,9 @@ function nearestHomingTarget(state: TickState, x: number, y: number): PositionBo
     if (state.arbiter && state.arbiter.hp > 0 && state.arbiter.mode === 'hunting') {
       return state.arbiter
     }
+    if (state.arbiterEscort && state.arbiterEscort.hp > 0 && state.arbiterEscort.mode === 'hunting') {
+      return state.arbiterEscort
+    }
     let bestCarrier: PositionBody | null = null
     let bestCarrierSq = Infinity
     for (const e of state.ambushEnemies) {
@@ -862,6 +884,8 @@ function nearestHomingTarget(state: TickState, x: number, y: number): PositionBo
   for (const e of state.ambushEnemies) if (e.alive) consider(e)
   if (state.arbiter && state.arbiter.hp > 0 && state.arbiter.mode === 'hunting')
     consider(state.arbiter)
+  if (state.arbiterEscort && state.arbiterEscort.hp > 0 && state.arbiterEscort.mode === 'hunting')
+    consider(state.arbiterEscort)
   return best
 }
 
@@ -874,6 +898,9 @@ function steerMissiles(state: TickState, dt: number): void {
   for (const e of state.ambushEnemies) if (e.alive) targets.push({ x: e.x, y: e.y, id: e.id })
   if (state.arbiter && state.arbiter.hp > 0 && state.arbiter.mode === 'hunting') {
     targets.push({ x: state.arbiter.x, y: state.arbiter.y, id: 'arbiter' })
+  }
+  if (state.arbiterEscort && state.arbiterEscort.hp > 0 && state.arbiterEscort.mode === 'hunting') {
+    targets.push({ x: state.arbiterEscort.x, y: state.arbiterEscort.y, id: 'arbiter-escort' })
   }
   // Add some asteroids as fallback targets
   if (targets.length < 5) {
@@ -913,6 +940,8 @@ function steerMissiles(state: TickState, dt: number): void {
       if (data.targetId) {
         if (data.targetId === 'arbiter') {
           if (state.arbiter && state.arbiter.hp > 0) target = state.arbiter
+        } else if (data.targetId === 'arbiter-escort') {
+          if (state.arbiterEscort && state.arbiterEscort.hp > 0) target = state.arbiterEscort
         } else if (data.targetId === state.enemy?.id) {
           if (state.enemy.alive) target = state.enemy
         } else {
@@ -1119,15 +1148,17 @@ function detonateSmartBomb(state: TickState, result: TickResult): void {
   damageEnemy(state.enemy)
   for (const ae of state.ambushEnemies) damageEnemy(ae)
 
-  if (state.arbiter && state.arbiter.hp > 0) {
-    const dx = state.arbiter.x - state.ship.x
-    const dy = state.arbiter.y - state.ship.y
-    const d2 = dx * dx + dy * dy
-    if (d2 < BOMB_RADIUS * BOMB_RADIUS) {
-      state.arbiter.hp -= BOMB_DAMAGE
+  const bombArbiter = (arb: ArbiterState | null): void => {
+    if (!arb || arb.hp <= 0) return
+    const dx = arb.x - state.ship.x
+    const dy = arb.y - state.ship.y
+    if (dx * dx + dy * dy < BOMB_RADIUS * BOMB_RADIUS) {
+      arb.hp -= BOMB_DAMAGE
       result.arbiterHit = true
     }
   }
+  bombArbiter(state.arbiter)
+  bombArbiter(state.arbiterEscort)
 }
 
 type PositionBody = { x: number; y: number }
@@ -1148,7 +1179,7 @@ function blackHolePullFactor(
   return {
     nx: dx / dist,
     ny: dy / dist,
-    factor: proximity * proximity,
+    factor: proximity,
   }
 }
 
@@ -1177,12 +1208,6 @@ function applyBlackHolePullToVBody(body: VBody, hole: PositionBody, dt: number):
   body.vy += pull.ny * accel * dt
 }
 
-function applyBlackHolePullAndDriftToVBody(body: VBody, hole: PositionBody, dt: number): void {
-  applyBlackHolePullToVBody(body, hole, dt)
-  body.x += body.vx * dt
-  body.y += body.vy * dt
-}
-
 function applyBlackHolePullToVelocityBody(
   body: VelocityBody,
   hole: PositionBody,
@@ -1198,29 +1223,44 @@ function isInsideBlackHole(body: PositionBody, hole: PositionBody): boolean {
 }
 
 function applyBlackHoleConsumption(state: TickState, input: TickInput, result: TickResult): void {
-  const hole = input.blackHole
-  if (!hole) return
+  const holes = input.blackHoles
+  if (holes.length === 0) return
 
-  if (isInsideBlackHole(state.ship, hole) && !state.endlessDeathFired) {
-    state.playerHp = 0
-    state.endlessDeathFired = true
-    result.playerDamaged = true
-    result.playerKilled = true
+  for (const hole of holes) {
+    if (isInsideBlackHole(state.ship, hole) && !state.endlessDeathFired) {
+      state.playerHp = 0
+      state.endlessDeathFired = true
+      result.playerDamaged = true
+      result.playerKilled = true
+      break
+    }
   }
 
   if (state.enemy && state.enemy.alive) {
-    applyBlackHolePullAndDriftToVBody(state.enemy, hole, input.dt)
-    if (isInsideBlackHole(state.enemy, hole)) {
-      result.enemyDestroyed = { x: state.enemy.x, y: state.enemy.y }
-      result.enemyDestroyedEvent = true
-      state.enemy.alive = false
-      state.enemy = null
+    for (const hole of holes) {
+      applyBlackHolePullToVBody(state.enemy, hole, input.dt)
+    }
+    state.enemy.x += state.enemy.vx * input.dt
+    state.enemy.y += state.enemy.vy * input.dt
+    for (const hole of holes) {
+      if (isInsideBlackHole(state.enemy, hole)) {
+        result.enemyDestroyed = { x: state.enemy.x, y: state.enemy.y }
+        result.enemyDestroyedEvent = true
+        state.enemy.alive = false
+        state.enemy = null
+        break
+      }
     }
   }
 
   for (let i = state.asteroids.length - 1; i >= 0; i--) {
     const a = state.asteroids[i]
-    if (a.hp <= 0 || !isInsideBlackHole(a, hole)) continue
+    if (a.hp <= 0) continue
+    let consumed = false
+    for (const hole of holes) {
+      if (isInsideBlackHole(a, hole)) { consumed = true; break }
+    }
+    if (!consumed) continue
     result.expiredAsteroidIds.push(a.id)
     result.blackHoleAsteroidsConsumed.push(a.id)
     state.asteroidHitCounts.delete(a.id)
@@ -1545,8 +1585,10 @@ export function tick(state: TickState, input: TickInput): TickResult {
     : { ...input.inputState, boost: state.boostActiveTimer > 0 }
   const speedMultiplier = 1 + state.speedTier * 0.1
   updateShip(state.ship, effectiveInput, dt, speedMultiplier)
-  if (endlessActive && input.blackHole) {
-    applyBlackHolePullToBody(state.ship, input.blackHole, dt, BLACK_HOLE_PLAYER_PULL_MULT)
+  if (endlessActive && input.blackHoles.length > 0) {
+    for (const hole of input.blackHoles) {
+      applyBlackHolePullToBody(state.ship, hole, dt, BLACK_HOLE_PLAYER_PULL_MULT)
+    }
   }
 
   // Prologue speed override: boost acceleration and raise speed cap.
@@ -1595,8 +1637,10 @@ export function tick(state: TickState, input: TickInput): TickResult {
 
   // --- Asteroid drift ---
   for (const a of state.asteroids) {
-    if (endlessActive && input.blackHole && a.hp > 0) {
-      applyBlackHolePullToAsteroid(a, input.blackHole, dt)
+    if (endlessActive && input.blackHoles.length > 0 && a.hp > 0) {
+      for (const hole of input.blackHoles) {
+        applyBlackHolePullToAsteroid(a, hole, dt)
+      }
     }
     if (a.velocityX !== 0 || a.velocityY !== 0) {
       a.x += a.velocityX * dt
@@ -1897,15 +1941,16 @@ export function tick(state: TickState, input: TickInput): TickResult {
       result.beamEndX = clippedPrimary.endX
       result.beamEndY = clippedPrimary.endY
 
-      // --- Beam vs Arbiter — truncate the beam to the boss if it reaches ---
-      if (state.arbiter) {
+      // --- Beam vs Arbiter(s) — truncate the beam to the nearest boss hit ---
+      for (const arb of [state.arbiter, state.arbiterEscort]) {
+        if (!arb) continue
         const ab = checkBeamArbiterCollisions(
           state.ship.x,
           state.ship.y,
           result.beamEndX,
           result.beamEndY,
           frameDamage,
-          state.arbiter,
+          arb,
         )
         if (ab.hit) {
           result.arbiterHit = true
@@ -1948,14 +1993,15 @@ export function tick(state: TickState, input: TickInput): TickResult {
         result.beamHits.push(...optionBeamResult.hits)
         processBeamAsteroidHits(optionBeamResult.hits)
 
-        if (state.arbiter) {
+        for (const arb of [state.arbiter, state.arbiterEscort]) {
+          if (!arb) continue
           const ab = checkBeamArbiterCollisions(
             option.x,
             option.y,
             clippedOption.endX,
             clippedOption.endY,
             frameDamage,
-            state.arbiter,
+            arb,
           )
           if (ab.hit) {
             result.arbiterHit = true
@@ -2078,11 +2124,15 @@ export function tick(state: TickState, input: TickInput): TickResult {
   }
 
   // --- Projectile update ---
-  if (endlessActive && input.blackHole) {
+  if (endlessActive && input.blackHoles.length > 0) {
     for (let i = state.projectiles.length - 1; i >= 0; i--) {
       const p = state.projectiles[i]
-      applyBlackHolePullToVelocityBody(p, input.blackHole, dt)
-      if (!isInsideBlackHole(p, input.blackHole)) continue
+      let consumed = false
+      for (const hole of input.blackHoles) {
+        applyBlackHolePullToVelocityBody(p, hole, dt)
+        if (isInsideBlackHole(p, hole)) consumed = true
+      }
+      if (!consumed) continue
       result.expiredProjectileIds.push(p.id)
       state.projectileElapsed.delete(p.id)
       state.projectiles.splice(i, 1)
@@ -2203,9 +2253,13 @@ export function tick(state: TickState, input: TickInput): TickResult {
 
   // --- Enemy projectile update ---
   for (let i = state.enemyProjectiles.length - 1; i >= 0; i--) {
-    if (endlessActive && input.blackHole) {
-      applyBlackHolePullToVBody(state.enemyProjectiles[i], input.blackHole, dt)
-      if (isInsideBlackHole(state.enemyProjectiles[i], input.blackHole)) {
+    if (endlessActive && input.blackHoles.length > 0) {
+      let consumed = false
+      for (const hole of input.blackHoles) {
+        applyBlackHolePullToVBody(state.enemyProjectiles[i], hole, dt)
+        if (isInsideBlackHole(state.enemyProjectiles[i], hole)) consumed = true
+      }
+      if (consumed) {
         result.expiredEnemyProjectileIds.push(state.enemyProjectiles[i].id)
         state.enemyProjectiles.splice(i, 1)
         continue
@@ -2280,9 +2334,13 @@ export function tick(state: TickState, input: TickInput): TickResult {
 
   // --- Scrap box update & collection ---
   for (let i = state.scrapBoxes.length - 1; i >= 0; i--) {
-    if (endlessActive && input.blackHole) {
-      applyBlackHolePullToVBody(state.scrapBoxes[i], input.blackHole, dt)
-      if (isInsideBlackHole(state.scrapBoxes[i], input.blackHole)) {
+    if (endlessActive && input.blackHoles.length > 0) {
+      let consumed = false
+      for (const hole of input.blackHoles) {
+        applyBlackHolePullToVBody(state.scrapBoxes[i], hole, dt)
+        if (isInsideBlackHole(state.scrapBoxes[i], hole)) consumed = true
+      }
+      if (consumed) {
         result.scrapStolen.push(state.scrapBoxes[i].id)
         state.scrapBoxes.splice(i, 1)
         continue
@@ -2306,9 +2364,13 @@ export function tick(state: TickState, input: TickInput): TickResult {
   // --- Metal chunk update & collection ---
   for (let i = state.metalChunks.length - 1; i >= 0; i--) {
     const metal = state.metalChunks[i]
-    if (endlessActive && input.blackHole) {
-      applyBlackHolePullToVBody(metal, input.blackHole, dt)
-      if (isInsideBlackHole(metal, input.blackHole)) {
+    if (endlessActive && input.blackHoles.length > 0) {
+      let consumed = false
+      for (const hole of input.blackHoles) {
+        applyBlackHolePullToVBody(metal, hole, dt)
+        if (isInsideBlackHole(metal, hole)) consumed = true
+      }
+      if (consumed) {
         result.metalStolen.push(metal.id)
         state.metalChunks.splice(i, 1)
         continue
@@ -2421,13 +2483,13 @@ export function tick(state: TickState, input: TickInput): TickResult {
             }
           }
         }
-        if (
-          !hostilesNearby &&
-          state.arbiter &&
-          state.arbiter.mode === 'hunting' &&
-          within(state.arbiter.x, state.arbiter.y)
-        ) {
-          hostilesNearby = true
+        if (!hostilesNearby) {
+          for (const arb of [state.arbiter, state.arbiterEscort]) {
+            if (arb && arb.mode === 'hunting' && within(arb.x, arb.y)) {
+              hostilesNearby = true
+              break
+            }
+          }
         }
       }
       if (hostilesNearby) {
@@ -2481,11 +2543,34 @@ export function tick(state: TickState, input: TickInput): TickResult {
         state.enemyProjectiles.push(proj)
         result.newEnemyProjectiles.push(proj)
       }
-      if (endlessActive && input.blackHole) {
-        applyBlackHolePullAndDriftToVBody(ae, input.blackHole, dt)
-        if (isInsideBlackHole(ae, input.blackHole)) {
+      if (endlessActive && input.blackHoles.length > 0) {
+        let consumed = false
+        for (const hole of input.blackHoles) {
+          applyBlackHolePullToVBody(ae, hole, dt)
+          if (isInsideBlackHole(ae, hole)) consumed = true
+        }
+        ae.x += ae.vx * dt
+        ae.y += ae.vy * dt
+        if (consumed) {
           ae.alive = false
           result.enemiesEscaped.push(ae)
+        }
+      }
+      // Missiles: detonate on the hull (damaging the player), or fizzle out
+      // when their fuel runs dry. Both route through ambushEnemiesDestroyed so
+      // the scene removes the mesh and plays a wreck — never a silent prune.
+      if (ae.alive && ae.kind === 'missile') {
+        ae.lifeTimer -= dt
+        const mdx = ae.x - state.ship.x
+        const mdy = ae.y - state.ship.y
+        const hitR = ae.collisionRadius + SHIP_COLLISION_RADIUS
+        if (mdx * mdx + mdy * mdy <= hitR * hitR) {
+          ae.alive = false
+          result.ambushEnemiesDestroyed.push(ae)
+          damagePlayer(state, result, ae.projectileDamage, endlessActive)
+        } else if (ae.lifeTimer <= 0) {
+          ae.alive = false
+          result.ambushEnemiesDestroyed.push(ae)
         }
       }
     }
@@ -2515,11 +2600,15 @@ export function tick(state: TickState, input: TickInput): TickResult {
         state.projectiles = surviving
 
         if (!ae.alive) {
-          const box = createScrapBox(ae.x, ae.y, bountyScrapValue(state))
-          state.scrapBoxes.push(box)
+          // Missiles are a threat to neutralise, not loot — shooting one down
+          // gives the explosion but no scrap box and no scavenger drop.
+          if (ae.kind !== 'missile') {
+            const box = createScrapBox(ae.x, ae.y, bountyScrapValue(state))
+            state.scrapBoxes.push(box)
+            dropScavengerLoot(state, result, ae)
+          }
           result.enemyDestroyed = { x: ae.x, y: ae.y }
           result.enemyDestroyedEvent = true
-          dropScavengerLoot(state, result, ae)
           result.ambushEnemiesDestroyed.push(ae)
         }
       }
@@ -2530,7 +2619,7 @@ export function tick(state: TickState, input: TickInput): TickResult {
   if (endlessActive && asteroidsAliveBefore) {
     updateEndlessMode(state, input, result, asteroidsAliveBefore)
   }
-  if (endlessActive && input.blackHole) {
+  if (endlessActive && input.blackHoles.length > 0) {
     applyBlackHoleConsumption(state, input, result)
   }
   result.ledger = state.ledger
@@ -2610,55 +2699,20 @@ function updateEndlessMode(
     state.asteroidRespawnTimer = ASTEROID_REPLENISH_INTERVAL
   }
 
-  // --- The Arbiter — recurring boss encounter ---
+  // --- The Arbiter(s) — recurring boss encounter ---
+  // Both the primary and (during twin Marks) the escort run the same combat
+  // step; only the primary owns the Ledger relief, hull refresh, and comms
+  // banners (see processArbiterCombat). The next Mark can't spawn until BOTH
+  // slots are clear.
   if (state.arbiter) {
-    const arb = state.arbiter
-
-    // Player projectiles vs the Arbiter
-    if (state.projectiles.length > 0) {
-      const { surviving, hitProjectileIds } = checkProjectileArbiterCollisions(
-        state.projectiles,
-        arb,
-      )
-      for (const id of hitProjectileIds) {
-        state.projectileElapsed.delete(id)
-        result.expiredProjectileIds.push(id)
-      }
-      state.projectiles = surviving
-      if (hitProjectileIds.length > 0) result.arbiterHit = true
-    }
-
-    if (arb.hp <= 0) {
-      // Destroyed — scrap payout, full hull restored, hard Ledger relief.
-      const boxCount = 4 + arb.mark
-      for (let i = 0; i < boxCount; i++) {
-        const a = (i / boxCount) * Math.PI * 2 + Math.random() * 0.5
-        const r = 5 + Math.random() * 8
-        state.scrapBoxes.push(createScrapBox(arb.x + Math.cos(a) * r, arb.y + Math.sin(a) * r, bountyScrapValue(state)))
-      }
-      state.ledger = Math.max(0, state.ledger * ARBITER_DEFEAT_LEDGER_FACTOR)
-      state.playerHp = effectivePlayerMaxHp()
-      state.marksDefeated++
-      result.playerDamaged = true
-      result.arbiterDefeated = { x: arb.x, y: arb.y, mark: arb.mark }
-      state.arbiter = null
-    } else {
-      // Still in the fight — move, fire volleys, call reinforcements.
-      const upd = updateArbiter(arb, state.ship, dt)
-      for (const p of upd.projectiles) {
-        state.enemyProjectiles.push(p)
-        result.newEnemyProjectiles.push(p)
-      }
-      if (upd.reinforcements > 0) {
-        spawnPatrol(state, result, upd.reinforcements, viewDiag)
-      }
-      if (upd.finishedWithdrawing) {
-        state.ledger = Math.max(0, state.ledger - ARBITER_EVADE_LEDGER_RELIEF)
-        result.arbiterWithdrawn = { mark: arb.mark }
-        state.arbiter = null
-      }
-    }
-  } else if (
+    state.arbiter = processArbiterCombat(state, result, state.arbiter, dt, viewDiag, true)
+  }
+  if (state.arbiterEscort) {
+    state.arbiterEscort = processArbiterCombat(state, result, state.arbiterEscort, dt, viewDiag, false)
+  }
+  if (
+    !state.arbiter &&
+    !state.arbiterEscort &&
     state.ledger >= arbiterThreshold(state.arbiterMark + 1) &&
     !state.debugDisableEnemySpawns
   ) {
@@ -2666,12 +2720,32 @@ function updateEndlessMode(
     state.arbiterMark++
     const angle = Math.random() * Math.PI * 2
     const r = viewDiag + 45
+    const cos = Math.cos(angle)
+    const sin = Math.sin(angle)
     state.arbiter = createArbiterState(
       state.arbiterMark,
-      state.ship.x + Math.cos(angle) * r,
-      state.ship.y + Math.sin(angle) * r,
+      state.ship.x + cos * r,
+      state.ship.y + sin * r,
     )
     result.arbiterSpawned = { mark: state.arbiterMark }
+    // Twin encounter (Marks ARBITER_MISSILE_MARK..ARBITER_BULLET_HELL_MARK − 1):
+    // a lighter escort flanks in from the opposite bearing — no tractor, no
+    // missiles, 70% hull — as a readiness gate before the bullet-hell Marks.
+    if (
+      state.arbiterMark >= ARBITER_MISSILE_MARK &&
+      state.arbiterMark < ARBITER_BULLET_HELL_MARK
+    ) {
+      const escort = createArbiterState(
+        state.arbiterMark,
+        state.ship.x - cos * r,
+        state.ship.y - sin * r,
+        { tractorEnabled: false },
+      )
+      escort.missilesEnabled = false
+      escort.maxHp = Math.round(escort.maxHp * 0.7)
+      escort.hp = escort.maxHp
+      state.arbiterEscort = escort
+    }
   }
 
   // --- Enemy director: escalating patrols (paused while the Arbiter is here) ---
@@ -2686,15 +2760,22 @@ function updateEndlessMode(
   // first and formations emerge as a mid-run escalation beat. Formations
   // replace a patrol rather than stacking on top of one — the wedge IS the
   // wave that tick.
-  if (!state.arbiter && !state.debugDisableEnemySpawns) {
+  if (!state.arbiter && !state.arbiterEscort && !state.debugDisableEnemySpawns) {
     state.patrolTimer -= dt
     if (state.patrolTimer <= 0) {
-      state.patrolTimer = patrolInterval(state.ledger)
-      const rollFormation = state.ledger >= 220 && Math.random() < 0.28
+      const threat = combatThreat(state)
+      state.patrolTimer = patrolInterval(threat)
+      const rollFormation = threat >= 220 && Math.random() < 0.28
       if (rollFormation) {
-        spawnWedgeFormation(state, result, viewDiag)
+        // Phalanx (hornet dive-bomber wave) emerges as a higher-threat beat;
+        // below that, or on the coin-flip, fall back to the wedge swoop.
+        if (threat >= 450 && Math.random() < 0.5) {
+          spawnPhalanxFormation(state, result, viewDiag)
+        } else {
+          spawnWedgeFormation(state, result, viewDiag)
+        }
       } else {
-        spawnPatrol(state, result, patrolSize(state.ledger), viewDiag)
+        spawnPatrol(state, result, patrolSize(threat), viewDiag)
       }
     }
   }
@@ -2725,6 +2806,111 @@ function updateEndlessMode(
 }
 
 /**
+ * Run one Arbiter's combat for a tick: player-projectile hits, then either the
+ * destruction payout or the live update (movement, volleys, reinforcements,
+ * missiles, withdraw). Returns the slot's new value (the same Arbiter, or null
+ * once it dies or withdraws).
+ *
+ * `isPrimary` gates the encounter-level effects that must happen exactly once:
+ * the multiplicative Ledger relief, the hull refresh, and the comms banners.
+ * The escort grants its own scrap + Mark credit and drives only its explosion
+ * VFX (result.arbiterEscortDefeated); on withdraw it simply leaves (the scene
+ * removes its mesh when the slot goes null).
+ */
+function processArbiterCombat(
+  state: TickState,
+  result: TickResult,
+  arb: ArbiterState,
+  dt: number,
+  viewDiag: number,
+  isPrimary: boolean,
+): ArbiterState | null {
+  // Player projectiles vs this Arbiter.
+  if (state.projectiles.length > 0) {
+    const { surviving, hitProjectileIds } = checkProjectileArbiterCollisions(state.projectiles, arb)
+    for (const id of hitProjectileIds) {
+      state.projectileElapsed.delete(id)
+      result.expiredProjectileIds.push(id)
+    }
+    state.projectiles = surviving
+    if (hitProjectileIds.length > 0) result.arbiterHit = true
+  }
+
+  if (arb.hp <= 0) {
+    // Destroyed — scrap payout + Mark credit for either Arbiter.
+    const boxCount = 4 + arb.mark
+    for (let i = 0; i < boxCount; i++) {
+      const a = (i / boxCount) * Math.PI * 2 + Math.random() * 0.5
+      const r = 5 + Math.random() * 8
+      state.scrapBoxes.push(
+        createScrapBox(arb.x + Math.cos(a) * r, arb.y + Math.sin(a) * r, bountyScrapValue(state)),
+      )
+    }
+    state.marksDefeated++
+    if (isPrimary) {
+      // Encounter-level rewards: hard Ledger relief, full hull, defeat banner.
+      state.ledger = Math.max(0, state.ledger * ARBITER_DEFEAT_LEDGER_FACTOR)
+      state.playerHp = effectivePlayerMaxHp()
+      result.playerDamaged = true
+      result.arbiterDefeated = { x: arb.x, y: arb.y, mark: arb.mark }
+    } else {
+      result.arbiterEscortDefeated = { x: arb.x, y: arb.y, mark: arb.mark }
+    }
+    return null
+  }
+
+  // Still in the fight — move, fire volleys, call reinforcements + missiles.
+  const upd = updateArbiter(arb, state.ship, dt)
+  for (const p of upd.projectiles) {
+    state.enemyProjectiles.push(p)
+    result.newEnemyProjectiles.push(p)
+  }
+  if (upd.reinforcements > 0) spawnPatrol(state, result, upd.reinforcements, viewDiag)
+  if (upd.missiles > 0) spawnArbiterMissiles(state, result, arb, upd.missiles)
+  if (upd.finishedWithdrawing) {
+    // Only the primary's withdrawal grants Ledger relief + a comms banner; the
+    // escort just peels off (its mesh is removed when the slot goes null).
+    if (isPrimary) {
+      state.ledger = Math.max(0, state.ledger - ARBITER_EVADE_LEDGER_RELIEF)
+      result.arbiterWithdrawn = { mark: arb.mark }
+    }
+    return null
+  }
+  return arb
+}
+
+/**
+ * The Ledger value the enemy director actually balances against: the raw
+ * Ledger plus the auto-balance phantom Ledger derived from the player's
+ * loadout, Arbiter kills, and run depth (see threatBonus). Mining still drives
+ * the raw Ledger and the HUD threat meter; this only steers spawn pressure, so
+ * a strong loadout faces denser, harder, more varied waves at the same Ledger.
+ */
+function combatThreat(state: TickState): number {
+  const power = computePowerIndex({
+    blasterTier: state.blasterTier,
+    collectorTier: state.collectorTier,
+    speedTier: state.speedTier,
+    spreadTier: state.spreadTier,
+    missileTier: state.missileTier,
+    optionCount: state.optionCount,
+    coolingTier: state.coolingTier,
+    magnetTier: state.magnetTier,
+    sensorTier: state.sensorTier,
+    drillNoseTier: state.drillNoseTier,
+    bountyTier: state.bountyTier,
+    droneTier: state.miningDroneCap,
+    rippleUnlocked: state.rippleUnlocked,
+    autoToolUnlocked: state.autoToolUnlocked,
+    thrustersUnlocked: state.thrustersUnlocked,
+    droneRepairUnlocked: state.droneRepairUnlocked,
+    missileBiasUnlocked: state.missileBiasUnlocked,
+    smartBomb: state.smartBombCount > 0,
+  })
+  return state.ledger + threatBonus(power, state.marksDefeated, state.peakLedger)
+}
+
+/**
  * Pick a patrol enemy class. The roster opens up as the Ledger climbs, so a
  * fresh run faces plain grunts and later runs see the full bestiary.
  *
@@ -2738,6 +2924,9 @@ function pickPatrolKind(ledger: number): EnemyKind {
   if (ledger > 2000 && r < 0.18) return 'carrier'
   if (ledger > 900 && r < 0.34) return 'scavenger'
   if (ledger > 300 && r < 0.56) return 'sniper'
+  // Hornets (Galaga-style dive-bombers) join the roster mid-run as a nimble,
+  // aggressive change of pace from the orbiting grunts.
+  if (ledger > 600 && r < 0.70) return 'hornet'
   // Drifters cap out at a small share so they remain a flavour spawn, not the
   // dominant patrol enemy. Slight bias to early game where the XP matters more.
   const drifterChance = ledger < 200 ? 0.18 : 0.1
@@ -2755,13 +2944,14 @@ function spawnPatrol(
   const aliveEnemies = state.ambushEnemies.reduce((n, e) => n + (e.alive ? 1 : 0), 0)
   const count = Math.min(requested, MAX_PATROL_ENEMIES - aliveEnemies)
   if (count <= 0) return
-  const damage = patrolEnemyDamage(state.ledger)
+  const threat = combatThreat(state)
+  const damage = patrolEnemyDamage(threat)
   const ringRadius = viewDiag + 25
   for (let i = 0; i < count; i++) {
     const angle = Math.random() * Math.PI * 2
     const ex = state.ship.x + Math.cos(angle) * ringRadius
     const ey = state.ship.y + Math.sin(angle) * ringRadius
-    const kind = pickPatrolKind(state.ledger)
+    const kind = pickPatrolKind(threat)
     const enemy = createEnemyShip(ex, ey, damage, kind)
     // Drifters have no steering AI — give them a fixed velocity at spawn so
     // they cross the screen on a straight line. Aimed roughly at the player
@@ -2816,7 +3006,7 @@ function spawnWedgeFormation(state: TickState, result: TickResult, viewDiag: num
   const budget = MAX_PATROL_ENEMIES - aliveEnemies
   if (budget <= 0) return
   const count = Math.min(WEDGE_SLOTS.length, budget)
-  const damage = patrolEnemyDamage(state.ledger)
+  const damage = patrolEnemyDamage(combatThreat(state))
 
   // Spawn on a ring well outside the camera diagonal so the formation has
   // travel room before reaching engagement range. The swoop bearing points
@@ -2853,6 +3043,84 @@ function spawnWedgeFormation(state: TickState, result: TickResult, viewDiag: num
     }
     state.ambushEnemies.push(enemy)
     result.ambushEnemiesSpawned.push(enemy)
+  }
+}
+
+/** Hornets in a phalanx wave. */
+const PHALANX_SIZE = 5
+/** Lateral spacing between hornets in the entry line (world units). */
+const PHALANX_SPACING = 13
+
+/**
+ * Spawn a Galaga-style phalanx: a line of hornets sweeps in abreast from a
+ * random bearing, then peels off into staggered dive-bombing runs (see
+ * updateHornetAI). The per-hornet entry stagger makes them break into dives in
+ * sequence rather than all at once. Stays within MAX_PATROL_ENEMIES.
+ */
+function spawnPhalanxFormation(state: TickState, result: TickResult, viewDiag: number): void {
+  const aliveEnemies = state.ambushEnemies.reduce((n, e) => n + (e.alive ? 1 : 0), 0)
+  const budget = MAX_PATROL_ENEMIES - aliveEnemies
+  if (budget <= 0) return
+  const count = Math.min(PHALANX_SIZE, budget)
+  const damage = patrolEnemyDamage(combatThreat(state))
+
+  const spawnDist = viewDiag + 45
+  const fromAngle = Math.random() * Math.PI * 2
+  const anchorX = state.ship.x + Math.cos(fromAngle) * spawnDist
+  const anchorY = state.ship.y + Math.sin(fromAngle) * spawnDist
+  const bearing = Math.atan2(state.ship.y - anchorY, state.ship.x - anchorX)
+  // Lateral axis perpendicular to the entry bearing, to lay the line abreast.
+  const latX = -Math.sin(bearing)
+  const latY = Math.cos(bearing)
+
+  for (let i = 0; i < count; i++) {
+    const off = (i - (count - 1) / 2) * PHALANX_SPACING
+    const h = createEnemyShip(anchorX + latX * off, anchorY + latY * off, damage, 'hornet')
+    // Enter in the regroup (approach) state, with a slight per-ship stagger so
+    // they commit to dives in sequence — the classic peel-off cascade.
+    h.idling = true
+    h.idleTimer = 0.6 + i * 0.09
+    h.strafeDir = i % 2 === 0 ? 1 : -1
+    h.heading = bearing
+    h.rotation = bearing - Math.PI / 2
+    state.ambushEnemies.push(h)
+    result.ambushEnemiesSpawned.push(h)
+  }
+}
+
+/** Hard cap on concurrent Arbiter missiles so salvos can't wall the player in. */
+const MAX_ARBITER_MISSILES = 6
+
+/**
+ * Launch a salvo of homing missiles from the Arbiter. They burst outward from
+ * the hull, then home on the player (see updateMissileAI); the player must
+ * shoot them down or out-juke them before they detonate on the hull. Capped at
+ * MAX_ARBITER_MISSILES live at once so a salvo never becomes an unfair wall.
+ */
+function spawnArbiterMissiles(
+  state: TickState,
+  result: TickResult,
+  arb: ArbiterState,
+  count: number,
+): void {
+  const aliveMissiles = state.ambushEnemies.reduce(
+    (n, e) => n + (e.kind === 'missile' && e.alive ? 1 : 0),
+    0,
+  )
+  const n = Math.min(count, MAX_ARBITER_MISSILES - aliveMissiles)
+  if (n <= 0) return
+  const damage = arbiterMissileDamage(arb.mark)
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2 + (i / Math.max(1, count)) * Math.PI * 2
+    const r = ARBITER_COLLISION_RADIUS + 4
+    const m = createEnemyShip(arb.x + Math.cos(a) * r, arb.y + Math.sin(a) * r, damage, 'missile')
+    m.lifeTimer = MISSILE_LIFETIME
+    // Burst outward before the homing AI takes over, so the launch reads.
+    m.heading = a
+    m.vx = Math.cos(a) * 40
+    m.vy = Math.sin(a) * 40
+    state.ambushEnemies.push(m)
+    result.ambushEnemiesSpawned.push(m)
   }
 }
 

@@ -170,12 +170,42 @@ function disposeMesh(obj: THREE.Object3D): void {
 
 const CAMERA_HEIGHT = 150
 const STAR_COUNT = 400
-const BLACK_HOLE_ALERT_RADIUS = 120
+const BLACK_HOLE_ALERT_RADIUS = 200
 const BLACK_HOLE_EVENT_HORIZON_RADIUS = 12
-// Slightly outside the pull radius (120) so the warning fires before any
-// gravity is felt — the player reads the popup, then decides whether to
-// commit. Tight enough that they have to actively head toward the hole.
-const BLACK_HOLE_WARN_RADIUS = 150
+// Slightly outside the pull radius so the warning fires before any
+// gravity is felt.
+const BLACK_HOLE_WARN_RADIUS = 230
+
+// Station is at (30, 200). Rings are defined in background-parallax space.
+// Angles spread evenly so black holes surround every direction of escape.
+// Each ring activates when the player first reaches that distance from station.
+const BLACK_HOLE_SPAWN_RINGS: { threshold: number; positions: { x: number; y: number }[] }[] = [
+  {
+    threshold: 280,
+    positions: [
+      { x: 330, y: 200 },   // right
+      { x: -120, y: 460 },  // upper-left
+      { x: -120, y: -60 },  // lower-left
+    ],
+  },
+  {
+    threshold: 480,
+    positions: [
+      { x: 280, y: 633 },   // upper-right
+      { x: -470, y: 200 },  // left
+      { x: 280, y: -233 },  // lower-right
+    ],
+  },
+  {
+    threshold: 680,
+    positions: [
+      { x: 636, y: 550 },   // far upper-right
+      { x: -576, y: 550 },  // far upper-left
+      { x: -576, y: -150 }, // far lower-left
+      { x: 636, y: -150 },  // far lower-right
+    ],
+  },
+]
 
 export { PLAYER_MAX_HP } from './game-tick'
 
@@ -702,6 +732,10 @@ export function createGameScene(
 
   // --- Arbiter (added to scene during prologue-arbiter step) ---
   let arbiterModel: THREE.Group | null = null
+  // Twin-encounter escort — a second Arbiter mesh shown only while
+  // tickState.arbiterEscort is live (endless twin Marks). Never used in the
+  // prologue, so it has no scripted-approach fallback.
+  let arbiterEscortModel: THREE.Group | null = null
 
   // --- Recharge Meter (positioned at ship, but not parented to avoid rotation) ---
   const rechargeMeter = createRechargeMeter()
@@ -905,8 +939,8 @@ export function createGameScene(
   const nebulaSystem: NebulaSystem = createNebulaSystem()
   scene.add(nebulaSystem.group)
 
-  const blackHole: BlackHole = createBlackHole(-200, 200)
-  scene.add(blackHole.group)
+  const blackHoles: BlackHole[] = [createBlackHole(-200, 200)]
+  scene.add(blackHoles[0].group)
 
   // --- Engine Trail ---
   const engineTrail: EngineTrail = createEngineTrail()
@@ -1130,6 +1164,8 @@ export function createGameScene(
   // scene mount — cross-session "already seen" persistence lives in the
   // page layer (per-slot localStorage flag).
   let blackHoleWarnFired = false
+  let blackHoleMaxDistFromStation = 0
+  let blackHoleNextRing = 0
 
   // One-shot tutorial-popup latches. Each fires the first time the matching
   // condition is true after a scene mount; cross-session "already seen"
@@ -1391,10 +1427,10 @@ export function createGameScene(
         halfW: camHalfW,
         halfH: camHalfH,
       },
-      blackHole: {
-        x: blackHole.x + camera.position.x * 0.1,
-        y: blackHole.y + camera.position.y * 0.1,
-      },
+      blackHoles: blackHoles.map((h) => ({
+        x: h.x + camera.position.x * 0.1,
+        y: h.y + camera.position.y * 0.1,
+      })),
     }
 
     // Snapshot mesh-bearing objects before tick (tick may splice them out)
@@ -1410,7 +1446,11 @@ export function createGameScene(
     let musicIntensity = 0
     if (tickState.enemy && tickState.enemy.alive) musicIntensity = 0.6
     if (tickState.ambushEnemies.some((e) => e.alive)) musicIntensity = 0.8
-    if (tickState.arbiter && tickState.arbiter.mode === 'hunting') musicIntensity = 1.0
+    if (
+      (tickState.arbiter && tickState.arbiter.mode === 'hunting') ||
+      (tickState.arbiterEscort && tickState.arbiterEscort.mode === 'hunting')
+    )
+      musicIntensity = 1.0
     // Subtle build-up based on asteroid proximity
     if (musicIntensity === 0) {
       const nearest = asteroids.find((a) => a.hp > 0)
@@ -1873,6 +1913,20 @@ export function createGameScene(
         }
       }
 
+      // --- Twin escort visual management (endless only) ---
+      if (tickState.arbiterEscort && !arbiterEscortModel) {
+        arbiterEscortModel = createArbiterModel()
+        scene.add(arbiterEscortModel)
+      } else if (!tickState.arbiterEscort && arbiterEscortModel) {
+        scene.remove(arbiterEscortModel)
+        arbiterEscortModel.traverse(disposeMesh)
+        arbiterEscortModel = null
+      }
+      if (arbiterEscortModel && tickState.arbiterEscort) {
+        arbiterEscortModel.position.set(tickState.arbiterEscort.x, tickState.arbiterEscort.y, 0)
+        arbiterEscortModel.rotation.z = tickState.arbiterEscort.rotation
+      }
+
       // --- Arbiter encounter events ---
       if (result.arbiterSpawned) {
         addTrauma(screenShake, 0.6)
@@ -1903,6 +1957,27 @@ export function createGameScene(
         })
         playExplosion()
         onArbiterEvent?.({ type: 'defeated', mark })
+      }
+      if (result.arbiterEscortDefeated) {
+        // Escort destruction — same spectacle as the primary, but no comms
+        // banner or camera zoom (the primary owns the encounter's beats).
+        const { x, y } = result.arbiterEscortDefeated
+        addTrauma(screenShake, 0.9)
+        bloom.setBloom(0.9, true)
+        for (let i = 0; i < 5; i++) {
+          const boom = createExplosion(x + (Math.random() - 0.5) * 22, y + (Math.random() - 0.5) * 22)
+          scene.add(boom.group)
+          explosions.push(boom)
+        }
+        const wreck = createShipwreckDebris(x, y)
+        scene.add(wreck.group)
+        shipwreckDebrisList.push(wreck)
+        dynamicLights.flashExplosion(x, y, 3)
+        explosionGlowParticles.emit(x, y, 28, {
+          lifetime: 0.8, speed: 50, size: 2.5,
+          colors: [0x00ffff, 0x88eeff, 0xffffff, 0xff6600],
+        })
+        playExplosion()
       }
       if (result.arbiterWithdrawn) {
         onArbiterEvent?.({ type: 'withdrawn', mark: result.arbiterWithdrawn.mark })
@@ -1981,7 +2056,10 @@ export function createGameScene(
       }
 
       // --- Arbiter HUD sync (only when Mark / hull / phase changes) ---
-      const arb = tickState.arbiter
+      // The boss bar tracks the primary; if it falls first during a twin
+      // encounter, fall back to the surviving escort so the bar doesn't blink
+      // out while a boss is still on the field.
+      const arb = tickState.arbiter ?? tickState.arbiterEscort
       const arbiterKey = arb ? `${arb.mark}:${Math.ceil(arb.hp)}:${arb.phase}` : 'none'
       if (arbiterKey !== prevArbiterKey) {
         prevArbiterKey = arbiterKey
@@ -2179,7 +2257,28 @@ export function createGameScene(
       // --- Background Effects ---
       updateTwinkleStars(twinkleStars, now / 1000, camera.position.x, camera.position.y)
       updateNebulaSystem(nebulaSystem, now / 1000, camera.position.x, camera.position.y)
-      updateBlackHole(blackHole, now / 1000, camera.position.x, camera.position.y)
+      for (const h of blackHoles) {
+        updateBlackHole(h, now / 1000, camera.position.x, camera.position.y)
+      }
+
+      // Spawn black hole rings as the player ventures further from the station
+      const bhdx = ship.x - GAS_STATION_X
+      const bhdy = ship.y - GAS_STATION_Y
+      const bhDist = Math.sqrt(bhdx * bhdx + bhdy * bhdy)
+      if (bhDist > blackHoleMaxDistFromStation) {
+        blackHoleMaxDistFromStation = bhDist
+        while (
+          blackHoleNextRing < BLACK_HOLE_SPAWN_RINGS.length &&
+          blackHoleMaxDistFromStation >= BLACK_HOLE_SPAWN_RINGS[blackHoleNextRing].threshold
+        ) {
+          for (const pos of BLACK_HOLE_SPAWN_RINGS[blackHoleNextRing].positions) {
+            const newHole = createBlackHole(pos.x, pos.y)
+            scene.add(newHole.group)
+            blackHoles.push(newHole)
+          }
+          blackHoleNextRing++
+        }
+      }
 
       // --- Tutorial: Station Arrow ---
       const sdx = GAS_STATION_X - ship.x
@@ -2374,7 +2473,11 @@ export function createGameScene(
       let combatIntensity = 0
       if (tickState.enemy && tickState.enemy.alive) combatIntensity = 0.4
       if (tickState.ambushEnemies.some((e) => e.alive)) combatIntensity = 0.6
-      if (tickState.arbiter && tickState.arbiter.mode === 'hunting') combatIntensity = 1.0
+      if (
+        (tickState.arbiter && tickState.arbiter.mode === 'hunting') ||
+        (tickState.arbiterEscort && tickState.arbiterEscort.mode === 'hunting')
+      )
+        combatIntensity = 1.0
       combatIntensity = Math.max(combatIntensity, tickState.ambushEnemies.filter((e) => e.alive).length * 0.15)
 
       if (photoModeActive) {
@@ -2395,36 +2498,40 @@ export function createGameScene(
 
       // --- Arbiter approach siren ---
       // Wails throughout the prologue-arbiter beat, rising as it closes in.
+      const sirenArb =
+        tickState.arbiter?.mode === 'hunting'
+          ? tickState.arbiter
+          : tickState.arbiterEscort?.mode === 'hunting'
+            ? tickState.arbiterEscort
+            : null
       if (currentStep === 'prologue-arbiter') {
         startArbiterSiren()
         updateArbiterSiren(1 - tickState.prologueArbiterDistance / ARBITER_SPAWN_DISTANCE)
-      } else if (tickState.arbiter && tickState.arbiter.mode === 'hunting') {
+      } else if (sirenArb) {
         startArbiterSiren()
-        const adx = tickState.arbiter.x - ship.x
-        const ady = tickState.arbiter.y - ship.y
+        const adx = sirenArb.x - ship.x
+        const ady = sirenArb.y - ship.y
         const adist = Math.sqrt(adx * adx + ady * ady)
         updateArbiterSiren(Math.max(0.15, Math.min(1, 1 - adist / 220)))
       } else if (getTutorialStep() === 'done') {
-        const holeX = blackHole.x + camera.position.x * 0.1
-        const holeY = blackHole.y + camera.position.y * 0.1
-        const hdx = holeX - ship.x
-        const hdy = holeY - ship.y
-        const hdist = Math.sqrt(hdx * hdx + hdy * hdy)
-        if (hdist <= BLACK_HOLE_ALERT_RADIUS) {
+        let closestHoleDist = Infinity
+        for (const h of blackHoles) {
+          const hx = h.x + camera.position.x * 0.1
+          const hy = h.y + camera.position.y * 0.1
+          const dist = Math.sqrt((hx - ship.x) ** 2 + (hy - ship.y) ** 2)
+          if (dist < closestHoleDist) closestHoleDist = dist
+        }
+        if (closestHoleDist <= BLACK_HOLE_ALERT_RADIUS) {
           startArbiterSiren()
           const intensity =
             1 -
-            Math.max(0, hdist - BLACK_HOLE_EVENT_HORIZON_RADIUS) /
+            Math.max(0, closestHoleDist - BLACK_HOLE_EVENT_HORIZON_RADIUS) /
               (BLACK_HOLE_ALERT_RADIUS - BLACK_HOLE_EVENT_HORIZON_RADIUS)
           updateArbiterSiren(Math.max(0.2, Math.min(1, intensity)))
         } else {
           stopArbiterSiren()
         }
-        // First-time warning popup — fires just outside the pull radius so
-        // the player gets the explanation before any gravity is felt. The
-        // page layer gates this against a per-slot localStorage flag so
-        // it only ever shows once; the scene-side latch is per-session.
-        if (!blackHoleWarnFired && hdist <= BLACK_HOLE_WARN_RADIUS) {
+        if (!blackHoleWarnFired && closestHoleDist <= BLACK_HOLE_WARN_RADIUS) {
           blackHoleWarnFired = true
           onBlackHoleNearby?.()
         }
@@ -2622,7 +2729,7 @@ export function createGameScene(
     // Clean up background effects & engine trail
     disposeTwinkleStars(twinkleStars)
     disposeNebulaSystem(nebulaSystem)
-    disposeBlackHole(blackHole)
+    for (const h of blackHoles) disposeBlackHole(h)
     disposeEngineTrail(engineTrail)
     disposeWarpStreaks(warpStreaks)
 
@@ -2785,6 +2892,7 @@ export function createGameScene(
     tickState.asteroidRespawnTimer = ASTEROID_REPLENISH_INTERVAL
     tickState.asteroidSpawnCounter = 1
     tickState.arbiter = null
+    tickState.arbiterEscort = null
     tickState.arbiterMark = 0
     prevLedgerInt = -1
     prevArbiterKey = ''
@@ -2802,6 +2910,11 @@ export function createGameScene(
       scene.remove(arbiterModel)
       arbiterModel.traverse(disposeMesh)
       arbiterModel = null
+    }
+    if (arbiterEscortModel) {
+      scene.remove(arbiterEscortModel)
+      arbiterEscortModel.traverse(disposeMesh)
+      arbiterEscortModel = null
     }
 
     // Remove ambush enemies
@@ -2893,6 +3006,7 @@ export function createGameScene(
 
     // Drop the Arbiter
     tickState.arbiter = null
+    tickState.arbiterEscort = null
     tickState.arbiterMark = 0
 
     // Remove all enemies
@@ -3148,6 +3262,7 @@ export function createGameScene(
           tickState.enemy = null
         }
         tickState.arbiter = null
+        tickState.arbiterEscort = null
         tickState.arbiterMark = 0
       },
 
