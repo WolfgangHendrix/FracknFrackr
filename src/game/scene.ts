@@ -2400,7 +2400,7 @@ export function createGameScene(
 
       // Aim guide — line from ship to aim point, with reticle ring at the
       // tip. Hidden while paused or when no aim is being tracked.
-      if (!paused && !inputLocked && aimWorldPosition) {
+      if (!paused && !inputLocked && aimWorldPosition && currentStep !== 'prologue-arbiter') {
         const pos = aimLineGeom.attributes.position as THREE.BufferAttribute
         pos.setXYZ(0, ship.x, ship.y, 0.5)
         pos.setXYZ(1, aimWorldPosition.x, aimWorldPosition.y, 0.5)
