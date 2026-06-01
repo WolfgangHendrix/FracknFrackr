@@ -234,12 +234,17 @@ export function updateRadar(radar: Radar, data: RadarData): void {
   }
 
   // --- Enemy ships — pulsing red dots ---
+  // Tier 0-2: only paint contacts within scan range.
+  // Tier 3: also paint out-of-range contacts clamped to the rim (dimmer, smaller).
   const pulse = 0.55 + 0.45 * Math.sin(performance.now() / 180)
-  ctx.fillStyle = `rgba(255, 60, 60, ${pulse.toFixed(3)})`
   for (const e of data.enemies) {
-    const { px, py } = project(e.x, e.y)
+    const { px, py, clamped } = project(e.x, e.y)
+    if (clamped && data.sensorTier < 3) continue
+    ctx.fillStyle = clamped
+      ? `rgba(255, 60, 60, ${(pulse * 0.45).toFixed(3)})`
+      : `rgba(255, 60, 60, ${pulse.toFixed(3)})`
     ctx.beginPath()
-    ctx.arc(px, py, 3, 0, Math.PI * 2)
+    ctx.arc(px, py, clamped ? 1.8 : 3, 0, Math.PI * 2)
     ctx.fill()
   }
 

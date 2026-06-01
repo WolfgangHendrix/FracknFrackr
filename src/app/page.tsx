@@ -298,9 +298,6 @@ export default function Home() {
       }
       buyUpgrade(type, cost, (ok) => {
         if (!ok) return
-        if (type === 'blaster') {
-          gameCanvasRef.current?.setFireRateBonus(1.1)
-        }
         if (type === 'collector') {
           // upgrades.collector hasn't applied yet (setState scheduled); pass +1
           gameCanvasRef.current?.setCollectorTier(upgrades.collector + 1)

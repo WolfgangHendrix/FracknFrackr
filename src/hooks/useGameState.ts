@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { defaultGameState } from '@/lib/schemas'
 import type { Cargo, GameState, Upgrades } from '@/lib/schemas'
 import type { MetalVariant } from '@/game/scene'
@@ -92,16 +92,25 @@ export function useGameState(): GameStateHook {
   const [achievements, setAchievements] = useState<string[]>([])
   const [metrics, setMetrics] = useState(() => defaultGameState().metrics)
 
+  // Keep cargo capacity in sync with the storage upgrade tier (50 per tier).
+  // Runs on mount (covers saves loaded with storage > 1) and on every purchase.
+  useEffect(() => {
+    setCargo((prev) => ({ ...prev, capacity: 50 * upgrades.storage }))
+  }, [upgrades.storage])
+
   const togglePause = useCallback(() => {
     setPaused((p) => !p)
   }, [])
 
   const onCollect = useCallback((variant: MetalVariant) => {
-    setCargo((prev) => ({
-      ...prev,
-      fragments: prev.fragments + 1,
-      [variant]: prev[variant] + 1,
-    }))
+    setCargo((prev) => {
+      if (prev.fragments >= prev.capacity) return prev
+      return {
+        ...prev,
+        fragments: prev.fragments + 1,
+        [variant]: prev[variant] + 1,
+      }
+    })
   }, [])
 
   const onPlayerDamage = useCallback((hp: number) => {

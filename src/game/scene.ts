@@ -2770,6 +2770,7 @@ export function createGameScene(
 
   function setCombatUpgrades(upgrades: Upgrades) {
     tickState.blasterTier = upgrades.blaster
+    tickState.fireRateBonus = 1.1 ** (upgrades.blaster - 1)
     tickState.collectorTier = upgrades.collector
     tickState.missileTier = upgrades.missiles
     tickState.rippleUnlocked = upgrades.ripple > 0
