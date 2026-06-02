@@ -1,17 +1,8 @@
 import * as THREE from 'three'
-import { SHIP_COLORS, VOXEL_SIZE } from './ship-constants'
+import { VOXEL_SIZE } from './ship-constants'
 
-/** Prologue ship voxel size — larger for imposing scale. */
-const PROLOGUE_VOXEL = 0.8
-
-/** Prologue-specific colors. */
-const PROLOGUE_COLORS = {
-  gold: 0xccaa44,
-  turret: 0xffaa00,
-  scoop: 0x44cc88,
-  cargo: 0x888899,
-  lazerLens: 0x00ffff,
-}
+/** Dark gunmetal used for all three armor layers. */
+const ARMOR_COLOR = 0x445566
 
 /** Industrial palette for the asteroid-mining vessel. */
 const MINING_COLORS = {
@@ -45,11 +36,16 @@ function addVoxel(group: THREE.Group, x: number, y: number, z: number, color: nu
 
 /**
  * Build a voxel-style player ship.
- * @param variant - 'normal' for standard ship, 'prologue' for maxed ship with modules
+ * 'prologue' applies all hull and armor modules on top of the normal ship
+ * so the intro shows exactly the ship the player is working toward.
  */
 export function createShipModel(variant: 'normal' | 'prologue' = 'normal'): THREE.Group {
-  if (variant === 'prologue') return createPrologueShipModel()
-  return createMiningShipModel()
+  const ship = createMiningShipModel()
+  if (variant === 'prologue') {
+    applyHullModules(ship, 3)
+    applyArmorModules(ship, 3)
+  }
+  return ship
 }
 
 /**
@@ -258,81 +254,76 @@ export function applyHullModules(ship: THREE.Group, tier: number): void {
   if (wantWings && !ship.getObjectByName('hullWings')) ship.add(buildHullWingsModule())
 }
 
-/**
- * Build the prologue maxed-out ship (~8×6×4 world units) with detachable module groups.
- * Named child groups: 'turrets', 'scoop', 'cargoPods', 'lazerLens'
- */
-function createPrologueShipModel(): THREE.Group {
-  const ship = new THREE.Group()
-  const v = PROLOGUE_VOXEL
-  const { hull, cockpit, engine, wingTip } = SHIP_COLORS
-  const { gold, scoop, cargo, lazerLens } = PROLOGUE_COLORS
+// ---------------------------------------------------------------------------
+// Armor modules — three layers of plating that sit above the hull geometry.
+// Lost one-at-a-time when armor charges are depleted; reattached when the
+// player re-purchases Armor Plating at the trade station.
+// ---------------------------------------------------------------------------
 
-  // Main body — scaled up version of normal hull with gold accents
-  let voxelCount = 0
-  for (let row = -2; row <= 3; row++) {
-    const color = voxelCount++ % 3 === 0 ? gold : hull
-    addVoxelSized(ship, 0, row, 0, color, v)
-    if (row >= -1 && row <= 2) {
-      addVoxelSized(ship, -1, row, 0, voxelCount++ % 3 === 0 ? gold : hull, v)
-      addVoxelSized(ship, 1, row, 0, voxelCount++ % 3 === 0 ? gold : hull, v)
+const ARMOR_MODULE_NAMES = ['armorBody', 'armorWings', 'armorTurret'] as const
+
+/** Tier 1: dorsal spine plates over the hull midsection. */
+function buildArmorBodyModule(): THREE.Group {
+  const g = new THREE.Group()
+  g.name = 'armorBody'
+  for (const [x, y] of [
+    [0, -1], [0, 0], [0, 1],
+    [-1, -1], [1, -1],
+    [-1, 0], [1, 0],
+  ] as [number, number][]) {
+    addVoxel(g, x, y, 1, ARMOR_COLOR)
+  }
+  return g
+}
+
+/** Tier 2: shoulder guards above the ore-pod positions. */
+function buildArmorWingsModule(): THREE.Group {
+  const g = new THREE.Group()
+  g.name = 'armorWings'
+  for (const side of [-1, 1]) {
+    addVoxel(g, side * 2, -2, 1, ARMOR_COLOR)
+    addVoxel(g, side * 2, -1, 1, ARMOR_COLOR)
+    addVoxel(g, side * 2, 0, 1, ARMOR_COLOR)
+  }
+  return g
+}
+
+/** Tier 3: protective cowl ringing the turret base. */
+function buildArmorTurretModule(): THREE.Group {
+  const g = new THREE.Group()
+  g.name = 'armorTurret'
+  addVoxel(g, -1, 0, 1.5, ARMOR_COLOR)
+  addVoxel(g, 1, 0, 1.5, ARMOR_COLOR)
+  addVoxel(g, 0, -1, 1.5, ARMOR_COLOR)
+  addVoxel(g, -1, -1, 1.5, ARMOR_COLOR)
+  addVoxel(g, 1, -1, 1.5, ARMOR_COLOR)
+  return g
+}
+
+/**
+ * Attach/detach armor modules to match the player's `armor` upgrade tier.
+ * Tier 0 = no armor, tier 3 = body + shoulders + turret cowl.
+ * Idempotent — safe to call on every hit or purchase.
+ */
+export function applyArmorModules(ship: THREE.Group, tier: number): void {
+  const wants: Record<(typeof ARMOR_MODULE_NAMES)[number], boolean> = {
+    armorBody: tier >= 1,
+    armorWings: tier >= 2,
+    armorTurret: tier >= 3,
+  }
+  for (const name of ARMOR_MODULE_NAMES) {
+    const existing = ship.getObjectByName(name)
+    if (!wants[name] && existing) {
+      ship.remove(existing)
+      existing.traverse((obj) => {
+        if (obj instanceof THREE.Mesh) {
+          obj.geometry.dispose()
+          if (obj.material instanceof THREE.Material) obj.material.dispose()
+        }
+      })
     }
   }
-
-  // Cockpit
-  addVoxelSized(ship, 0, 4, 0.5, cockpit, v)
-
-  // Wings — swept back, wider
-  for (let w = 2; w <= 5; w++) {
-    const row = -w + 2
-    addVoxelSized(ship, -w, row, 0, voxelCount++ % 3 === 0 ? gold : hull, v)
-    addVoxelSized(ship, w, row, 0, voxelCount++ % 3 === 0 ? gold : hull, v)
-  }
-
-  // Wing tips
-  addVoxelSized(ship, -5, -3, 0, wingTip, v)
-  addVoxelSized(ship, 5, -3, 0, wingTip, v)
-
-  // Engine glow — wider
-  for (let x = -2; x <= 2; x++) {
-    addVoxelSized(ship, x, -3, -0.3, engine, v)
-  }
-
-  // --- Detachable modules ---
-
-  // Turret: single arrow-shaped turret on top, tracks the player's aim.
-  // Larger voxel size to match the prologue scale. (Replaces the older
-  // twin-wing pods so the silhouette reads as a clear pointer at a glance.)
-  ship.add(buildArrowTurret(v))
-
-  // Collector scoop: U-shape around front
-  const scoopGroup = new THREE.Group()
-  scoopGroup.name = 'scoop'
-  addVoxelSized(scoopGroup, -2, 3, 0, scoop, v)
-  addVoxelSized(scoopGroup, 2, 3, 0, scoop, v)
-  addVoxelSized(scoopGroup, -3, 2, 0, scoop, v)
-  addVoxelSized(scoopGroup, 3, 2, 0, scoop, v)
-  addVoxelSized(scoopGroup, -3, 3, 0, scoop, v)
-  addVoxelSized(scoopGroup, 3, 3, 0, scoop, v)
-  ship.add(scoopGroup)
-
-  // Cargo pods: rectangular blocks flanking rear engine
-  const cargoPods = new THREE.Group()
-  cargoPods.name = 'cargoPods'
-  for (const side of [-1, 1]) {
-    const cx = side * 3
-    addVoxelSized(cargoPods, cx, -3, 0, cargo, v)
-    addVoxelSized(cargoPods, cx, -4, 0, cargo, v)
-    addVoxelSized(cargoPods, cx, -3, 0.8, cargo, v)
-    addVoxelSized(cargoPods, cx, -4, 0.8, cargo, v)
-  }
-  ship.add(cargoPods)
-
-  // Lazer lens: bright cyan on top of cockpit
-  const lens = new THREE.Group()
-  lens.name = 'lazerLens'
-  addVoxelSized(lens, 0, 4, 1.3, lazerLens, v)
-  ship.add(lens)
-
-  return ship
+  if (wants.armorBody && !ship.getObjectByName('armorBody')) ship.add(buildArmorBodyModule())
+  if (wants.armorWings && !ship.getObjectByName('armorWings')) ship.add(buildArmorWingsModule())
+  if (wants.armorTurret && !ship.getObjectByName('armorTurret')) ship.add(buildArmorTurretModule())
 }

@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { createShipModel, applyHullModules } from './ship-model'
+import { createShipModel, applyHullModules, applyArmorModules } from './ship-model'
 import { createAsteroidModel } from './asteroid-model'
 import { spawnAsteroidField, spawnPrologueField } from './asteroid-spawner'
 import { createArbiterModel } from './arbiter-model'
@@ -2094,9 +2094,12 @@ export function createGameScene(
         playPlayerHit()
       }
 
-      // Strip modules during prologue-strip
+      // Strip modules during prologue-strip — armor first, then hull, then turret.
       if (result.stripAdvanced) {
-        const moduleNames = ['turret', 'scoop', 'cargoPods', 'lazerLens']
+        const moduleNames = [
+          'armorTurret', 'armorWings', 'armorBody',
+          'hullWings', 'hullCargoPods', 'hullScoop',
+        ]
         const phase = tickState.prologueStripPhase - 1
         if (phase >= 0 && phase < moduleNames.length) {
           const mod = shipModel.getObjectByName(moduleNames[phase])
@@ -2448,6 +2451,7 @@ export function createGameScene(
         onHullChanged?.(tickState.hullCharges)
       }
       if (result.armorHit) {
+        applyArmorModules(shipModel, tickState.armorCharges)
         addTrauma(screenShake, 0.5)
         onArmorChanged?.(tickState.armorCharges)
       }
@@ -2791,6 +2795,7 @@ export function createGameScene(
     // onHullChanged → setUpgradeLevel round-trip.
     applyHullModules(shipModel, upgrades.hull)
     tickState.hullCharges = upgrades.hull
+    applyArmorModules(shipModel, upgrades.armor)
     tickState.coolingTier = upgrades.cooling
     tickState.magnetTier = upgrades.magnet
     tickState.bountyTier = upgrades.bounty

@@ -54,7 +54,7 @@ export const PROLOGUE_AMBUSH_SIZE = 14
 
 export const ARBITER_SPAWN_DISTANCE = 80
 export const ARBITER_APPROACH_SPEED = 30
-export const ARBITER_STRIP_DELAY = 1.5
+export const ARBITER_STRIP_DELAY = 1.0
 
 export const ARBITER_DIALOGUE = [
   'Fracker! You have exceeded authorized power limits.',

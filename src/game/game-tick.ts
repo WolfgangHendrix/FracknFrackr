@@ -1463,7 +1463,7 @@ function prologueTick(state: TickState, input: TickInput, result: TickResult): v
       state.prologueStripTimer -= ARBITER_STRIP_DELAY
       state.prologueStripPhase++
       result.stripAdvanced = true
-      if (state.prologueStripPhase >= 4) {
+      if (state.prologueStripPhase >= 6) {
         result.stripComplete = true
       }
     }
