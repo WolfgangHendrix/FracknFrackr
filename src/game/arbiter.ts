@@ -65,8 +65,18 @@ export const TRACTOR_RANGE = 115
 /** Half-angle of the capture cone (radians). */
 export const TRACTOR_CONE_HALF_ANGLE = 0.42
 
-/** Pull acceleration on a caught ship — slightly above the ship's own thrust. */
-const TRACTOR_PULL_ACCEL = 210
+/** Pull acceleration on a caught ship — well above the ship's own thrust. */
+const TRACTOR_PULL_ACCEL = 300
+
+/**
+ * Sideways (swirl) acceleration perpendicular to the beam. Because the hull
+ * faces its direction of travel, twisting the velocity vector visibly wrenches
+ * the ship's heading off-course — the beam doesn't just drag, it spins you.
+ */
+const TRACTOR_SWIRL_ACCEL = 150
+
+/** Per-second velocity drag while caught — bleeds speed so you can't power straight out. */
+const TRACTOR_SLOW_DRAG = 1.1
 
 /** How long a tractor beam stays active once fired. */
 const TRACTOR_DURATION = 2.7
@@ -117,6 +127,49 @@ export function arbiterReinforceCount(mark: number): number {
   return Math.min(4, 1 + Math.floor(mark / 2))
 }
 
+// --- Per-Mark behaviour gates ----------------------------------------------
+
+/** From this Mark on the Arbiter launches destructible homing missiles. */
+export const ARBITER_MISSILE_MARK = 3
+/** From this Mark on the Arbiter's volleys become rotating bullet-hell spirals. */
+export const ARBITER_BULLET_HELL_MARK = 5
+
+// --- Bullet-hell spiral (Mark >= ARBITER_BULLET_HELL_MARK) ------------------
+
+/** Rotation rate of the firing ring (rad/sec) — gives the spiral its spin. */
+const ARBITER_SPIRAL_SPIN_RATE = 1.1
+/** Spiral bolt speed — deliberately slow so the woven pattern is dodgeable. */
+const ARBITER_SPIRAL_BULLET_SPEED = 68
+/** Rapid sub-volley cadence; successive rings sweep into continuous arms. */
+const ARBITER_SPIRAL_INTERVAL = 0.34
+
+/** Arms (bolts per ring) in a bullet-hell volley. */
+function spiralArms(mark: number, phase: number): number {
+  const base = Math.min(6, 3 + Math.floor((mark - ARBITER_BULLET_HELL_MARK) / 2))
+  return base + (phase === 2 ? 1 : 0)
+}
+
+// --- Homing missiles (Mark >= ARBITER_MISSILE_MARK) ------------------------
+
+/** Grace period before the Arbiter's first missile salvo. */
+const MISSILE_FIRST_DELAY = 8
+
+/** Seconds between missile salvos. */
+function missileInterval(mark: number, phase: number): number {
+  const base = Math.max(4.5, 9 - mark * 0.4)
+  return phase === 2 ? base * 0.7 : base
+}
+
+/** Missiles launched per salvo. */
+export function arbiterMissileCount(mark: number): number {
+  return Math.min(3, 1 + Math.floor((mark - ARBITER_MISSILE_MARK) / 2))
+}
+
+/** Damage a homing missile deals if it detonates against the ship. */
+export function arbiterMissileDamage(mark: number): number {
+  return 14 + mark * 2
+}
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -149,10 +202,33 @@ export interface ArbiterState {
   tractorAngle: number
   /** Whether this beam has already landed its capture hit. */
   tractorHitLanded: boolean
+  // --- Per-Mark behaviour ---
+  /** Mark >= ARBITER_BULLET_HELL_MARK: volleys are rotating spirals. */
+  bulletHell: boolean
+  /** Mark >= ARBITER_MISSILE_MARK: launches destructible homing missiles. */
+  missilesEnabled: boolean
+  /** Whether this Arbiter projects a tractor beam (escorts don't, to keep the
+   *  capture single-source and avoid two beams fighting over the ship). */
+  tractorEnabled: boolean
+  /** Rotating base angle of the bullet-hell firing ring (radians). */
+  spiralAngle: number
+  /** Countdown to the next missile salvo. */
+  missileTimer: number
+}
+
+/** Optional overrides when spawning an Arbiter (e.g. a twin-encounter escort). */
+export interface ArbiterSpawnOpts {
+  /** When false, this Arbiter never fires a tractor beam. Default true. */
+  tractorEnabled?: boolean
 }
 
 /** Spawn a fresh Arbiter of the given Mark at a position. */
-export function createArbiterState(mark: number, x: number, y: number): ArbiterState {
+export function createArbiterState(
+  mark: number,
+  x: number,
+  y: number,
+  opts?: ArbiterSpawnOpts,
+): ArbiterState {
   const maxHp = arbiterMaxHp(mark)
   return {
     mark,
@@ -173,6 +249,11 @@ export function createArbiterState(mark: number, x: number, y: number): ArbiterS
     tractorElapsed: 0,
     tractorAngle: 0,
     tractorHitLanded: false,
+    bulletHell: mark >= ARBITER_BULLET_HELL_MARK,
+    missilesEnabled: mark >= ARBITER_MISSILE_MARK,
+    tractorEnabled: opts?.tractorEnabled ?? true,
+    spiralAngle: Math.random() * Math.PI * 2,
+    missileTimer: MISSILE_FIRST_DELAY,
   }
 }
 
@@ -185,6 +266,8 @@ export interface ArbiterUpdate {
   projectiles: EnemyProjectile[]
   /** Reinforcement enemies to spawn this tick (tick() performs the spawn). */
   reinforcements: number
+  /** Homing missiles to launch this tick (tick() performs the spawn). */
+  missiles: number
   /** True the tick the Arbiter has fully withdrawn and should be removed. */
   finishedWithdrawing: boolean
 }
@@ -194,10 +277,16 @@ export interface ArbiterUpdate {
  * phase transitions, and the evade-timeout that ends the encounter.
  */
 export function updateArbiter(arbiter: ArbiterState, player: Ship, dt: number): ArbiterUpdate {
-  const result: ArbiterUpdate = { projectiles: [], reinforcements: 0, finishedWithdrawing: false }
+  const result: ArbiterUpdate = {
+    projectiles: [],
+    reinforcements: 0,
+    missiles: 0,
+    finishedWithdrawing: false,
+  }
 
-  // Cosmetic spin.
+  // Cosmetic spin + the bullet-hell firing ring's rotation.
   arbiter.rotation += ARBITER_SPIN_RATE * dt
+  arbiter.spiralAngle += ARBITER_SPIRAL_SPIN_RATE * dt
 
   // --- Withdrawing: flee the player, then signal removal ---
   if (arbiter.mode === 'withdrawing') {
@@ -268,22 +357,45 @@ export function updateArbiter(arbiter: ArbiterState, player: Ship, dt: number): 
   // --- Volley fire ---
   arbiter.attackTimer -= dt
   if (arbiter.attackTimer <= 0) {
-    arbiter.attackTimer = attackInterval(arbiter.mark, arbiter.phase)
-    const aim = Math.atan2(player.y - arbiter.y, player.x - arbiter.x)
-    const n = volleyCount(arbiter.mark, arbiter.phase)
     const damage = arbiterProjectileDamage(arbiter.mark)
-    for (let i = 0; i < n; i++) {
-      const a = aim + (i - (n - 1) / 2) * ARBITER_VOLLEY_SPREAD
-      const muzzle = ARBITER_COLLISION_RADIUS + 2
+    const muzzle = ARBITER_COLLISION_RADIUS + 2
+    const fire = (a: number, speed: number): void => {
       result.projectiles.push(
         createEnemyProjectile(
           arbiter.x + Math.cos(a) * muzzle,
           arbiter.y + Math.sin(a) * muzzle,
-          Math.cos(a) * ARBITER_PROJECTILE_SPEED,
-          Math.sin(a) * ARBITER_PROJECTILE_SPEED,
+          Math.cos(a) * speed,
+          Math.sin(a) * speed,
           damage,
         ),
       )
+    }
+
+    if (arbiter.bulletHell) {
+      // Rapid rings off the rotating base angle weave into spinning spiral
+      // arms. Phase 2 adds a counter-rotating, half-offset set for a denser
+      // lattice the player must thread.
+      arbiter.attackTimer = ARBITER_SPIRAL_INTERVAL
+      const arms = spiralArms(arbiter.mark, arbiter.phase)
+      for (let i = 0; i < arms; i++) {
+        fire(arbiter.spiralAngle + (i / arms) * Math.PI * 2, ARBITER_SPIRAL_BULLET_SPEED)
+      }
+      if (arbiter.phase === 2) {
+        for (let i = 0; i < arms; i++) {
+          fire(
+            -arbiter.spiralAngle + (i / arms) * Math.PI * 2 + Math.PI / arms,
+            ARBITER_SPIRAL_BULLET_SPEED,
+          )
+        }
+      }
+    } else {
+      // Aimed fan — the classic volley for early Marks.
+      arbiter.attackTimer = attackInterval(arbiter.mark, arbiter.phase)
+      const aim = Math.atan2(player.y - arbiter.y, player.x - arbiter.x)
+      const n = volleyCount(arbiter.mark, arbiter.phase)
+      for (let i = 0; i < n; i++) {
+        fire(aim + (i - (n - 1) / 2) * ARBITER_VOLLEY_SPREAD, ARBITER_PROJECTILE_SPEED)
+      }
     }
   }
 
@@ -294,13 +406,24 @@ export function updateArbiter(arbiter: ArbiterState, player: Ship, dt: number): 
     result.reinforcements = arbiterReinforceCount(arbiter.mark)
   }
 
+  // --- Homing-missile salvos ---
+  if (arbiter.missilesEnabled) {
+    arbiter.missileTimer -= dt
+    if (arbiter.missileTimer <= 0) {
+      arbiter.missileTimer = missileInterval(arbiter.mark, arbiter.phase)
+      result.missiles = arbiterMissileCount(arbiter.mark)
+    }
+  }
+
   // --- Tractor beam charge-up: fire a capture cone at the player's bearing ---
-  arbiter.tractorTimer -= dt
-  if (arbiter.tractorTimer <= 0) {
-    arbiter.tractorActive = true
-    arbiter.tractorElapsed = 0
-    arbiter.tractorHitLanded = false
-    arbiter.tractorAngle = Math.atan2(player.y - arbiter.y, player.x - arbiter.x)
+  if (arbiter.tractorEnabled) {
+    arbiter.tractorTimer -= dt
+    if (arbiter.tractorTimer <= 0) {
+      arbiter.tractorActive = true
+      arbiter.tractorElapsed = 0
+      arbiter.tractorHitLanded = false
+      arbiter.tractorAngle = Math.atan2(player.y - arbiter.y, player.x - arbiter.x)
+    }
   }
 
   return result
@@ -334,9 +457,22 @@ export function applyTractorPull(
   while (diff < -Math.PI) diff += Math.PI * 2
   if (Math.abs(diff) > TRACTOR_CONE_HALF_ANGLE) return { captureDamage: 0 }
 
-  // Caught — haul the ship toward the Arbiter.
-  ship.velocityX -= (dx / dist) * TRACTOR_PULL_ACCEL * dt
-  ship.velocityY -= (dy / dist) * TRACTOR_PULL_ACCEL * dt
+  // Caught — the beam hauls the ship in, wrenches its heading off-course, and
+  // bleeds its speed so the player can't just hold thrust and power straight out.
+  const markScale = 1 + (arbiter.mark - 1) * 0.1
+  const ux = dx / dist
+  const uy = dy / dist
+  // Inward haul, toward the Arbiter.
+  ship.velocityX -= ux * TRACTOR_PULL_ACCEL * markScale * dt
+  ship.velocityY -= uy * TRACTOR_PULL_ACCEL * markScale * dt
+  // Swirl: a perpendicular shove that twists the direction of travel, so the
+  // hull visibly turns as it's reeled in (heading tracks velocity each frame).
+  ship.velocityX += uy * TRACTOR_SWIRL_ACCEL * markScale * dt
+  ship.velocityY -= ux * TRACTOR_SWIRL_ACCEL * markScale * dt
+  // Drag: shed speed while held, so escaping demands sustained counter-thrust.
+  const drag = Math.max(0, 1 - TRACTOR_SLOW_DRAG * dt)
+  ship.velocityX *= drag
+  ship.velocityY *= drag
 
   // Dragged into the hull — land the capture hit and fling the ship clear.
   if (!arbiter.tractorHitLanded && dist < ARBITER_COLLISION_RADIUS + 7) {

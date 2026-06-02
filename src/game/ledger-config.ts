@@ -113,6 +113,95 @@ export const ARBITER_DEFEAT_LEDGER_FACTOR = 0.35
 export const ARBITER_EVADE_LEDGER_RELIEF = 90
 
 // ---------------------------------------------------------------------------
+// Auto-balance — player-power-driven difficulty
+// ---------------------------------------------------------------------------
+//
+// The raw Ledger only climbs from mining, so a player who stops mining to fight
+// freezes their own difficulty — and a full loadout trivialises a modest
+// Ledger. Auto-balance fixes both: it derives a 0–1 "power index" from the
+// player's permanent loadout and folds it (plus run progress) into an
+// `effectiveThreat` the enemy director reads in place of the raw Ledger. A
+// maxed ship faces denser, harder, more varied waves at the same Ledger.
+//
+// Consumable charges (armor/shield/hull) are deliberately NOT inputs — they
+// refill constantly, and feeding them in would make difficulty oscillate as
+// the player spends and tops them up.
+
+/** Permanent (non-consumable) upgrade levels that define loadout strength. */
+export interface LoadoutPower {
+  blasterTier: number // 1..5
+  collectorTier: number // 1..5
+  speedTier: number // 0..5
+  spreadTier: number // 0..1
+  missileTier: number // 0..8
+  optionCount: number // 0..2
+  coolingTier: number // 0..3
+  magnetTier: number // 0..3
+  sensorTier: number // 0..3
+  drillNoseTier: number // 0..3
+  bountyTier: number // 0..3
+  droneTier: number // 0..4
+  rippleUnlocked: boolean
+  autoToolUnlocked: boolean
+  thrustersUnlocked: boolean
+  droneRepairUnlocked: boolean
+  missileBiasUnlocked: boolean
+  smartBomb: boolean
+}
+
+/** 0–1 measure of loadout completeness — 1 ≈ everything bought/maxed. */
+export function computePowerIndex(p: LoadoutPower): number {
+  const frac = (v: number, min: number, max: number) =>
+    Math.max(0, Math.min(1, (v - min) / (max - min)))
+  const parts = [
+    frac(p.blasterTier, 1, 5),
+    frac(p.collectorTier, 1, 5),
+    frac(p.speedTier, 0, 5),
+    p.spreadTier > 0 ? 1 : 0,
+    frac(p.missileTier, 0, 8),
+    frac(p.optionCount, 0, 2),
+    frac(p.coolingTier, 0, 3),
+    frac(p.magnetTier, 0, 3),
+    frac(p.sensorTier, 0, 3),
+    frac(p.drillNoseTier, 0, 3),
+    frac(p.bountyTier, 0, 3),
+    frac(p.droneTier, 0, 4),
+    p.rippleUnlocked ? 1 : 0,
+    p.autoToolUnlocked ? 1 : 0,
+    p.thrustersUnlocked ? 1 : 0,
+    p.droneRepairUnlocked ? 1 : 0,
+    p.missileBiasUnlocked ? 1 : 0,
+    p.smartBomb ? 1 : 0,
+  ]
+  const sum = parts.reduce((a, b) => a + b, 0)
+  return sum / parts.length
+}
+
+/** Phantom Ledger a full loadout (powerIndex 1) adds to the director. */
+const POWER_THREAT_MAX = 350
+/** Phantom Ledger added per Arbiter destroyed this run. */
+const MARK_THREAT_STEP = 60
+/** Fraction of peak Ledger folded back in as a slow run-depth ratchet. */
+const PEAK_THREAT_FACTOR = 0.15
+/** Cap on the run-depth contribution so it never dominates the curve. */
+const PEAK_THREAT_CAP = 200
+
+/**
+ * Extra "phantom Ledger" the enemy director sees on top of the raw Ledger,
+ * blending loadout power (the main lever), Arbiter kills, and run depth.
+ */
+export function threatBonus(
+  powerIndex: number,
+  marksDefeated: number,
+  peakLedger: number,
+): number {
+  const loadout = powerIndex * POWER_THREAT_MAX
+  const marks = marksDefeated * MARK_THREAT_STEP
+  const depth = Math.min(PEAK_THREAT_CAP, peakLedger * PEAK_THREAT_FACTOR)
+  return loadout + marks + depth
+}
+
+// ---------------------------------------------------------------------------
 // Run scoring
 // ---------------------------------------------------------------------------
 

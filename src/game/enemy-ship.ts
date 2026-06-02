@@ -129,6 +129,41 @@ const SPLITTER_COLLISION_RADIUS = 9
  *  were passing through empty space around an invisible hitbox. */
 const SPLITTER_BODY_SCALE = 3.2
 
+// --- Hornet: Galaga-style alien that sweeps in and dive-bombs in arcs ---
+export const HORNET_MAX_HP = 2
+const HORNET_COLLISION_RADIUS = 3.5
+/** Speed of a committed dive run (units/sec). */
+const HORNET_DIVE_SPEED = 60
+/** Speed while arcing back out to a standoff before the next dive. */
+const HORNET_REGROUP_SPEED = 40
+/** Steering agility — high, so the banking arcs read as nimble swoops. */
+const HORNET_TURN_RATE = 2.8
+/** Peak lateral bank added to the dive heading (radians) — makes the curved arc. */
+const HORNET_BANK = 0.95
+/** Seconds a dive run lasts before the hornet arcs back out. */
+const HORNET_DIVE_TIME = 2.0
+/** Seconds spent climbing back to a standoff between dives. */
+const HORNET_REGROUP_TIME = 1.4
+/** Standoff distance the hornet pulls back to between dives. */
+const HORNET_STANDOFF = 72
+/** Max player-distance at which a diving hornet will snap off a shot. */
+const HORNET_FIRE_RANGE = 95
+/** Seconds between a diving hornet's shots. */
+const HORNET_FIRE_INTERVAL = 1.1
+
+// --- Missile: Arbiter-launched homing warhead the player must shoot down ---
+/** Takes two blaster bolts (or one lazer tick) to destroy. */
+export const MISSILE_MAX_HP = 2
+/** Launch/cruise speed cap (units/sec). Slow enough to out-turn, fast enough to threaten. */
+const MISSILE_MAX_SPEED = 78
+/** Acceleration toward cap (units/sec²). */
+const MISSILE_ACCEL = 110
+/** Turn rate (rad/sec) — capped so a juking player can break the lock. */
+const MISSILE_TURN_RATE = 1.6
+const MISSILE_COLLISION_RADIUS = 3
+/** Seconds a missile flies before it fizzles out (handled in game-tick). */
+export const MISSILE_LIFETIME = 7
+
 /** The behavioural class of a hostile ship. */
 export type EnemyKind =
   | 'grunt'
@@ -139,6 +174,8 @@ export type EnemyKind =
   | 'drifter'
   | 'wedge'
   | 'splitter'
+  | 'missile'
+  | 'hornet'
 
 /** Colors for the enemy ship. */
 const ENEMY_COLORS = {
@@ -245,6 +282,12 @@ export interface EnemyShip {
   swoopBearing: number
   /** Player-distance at which the leader breaks formation. */
   engageDistance: number
+  /**
+   * Seconds of life remaining (missiles only). Set at spawn; game-tick
+   * decrements it and detonates the missile when it reaches 0 so the warhead
+   * can't loiter forever. Unused (0) for every other kind.
+   */
+  lifeTimer: number
 }
 
 export interface EnemyProjectile {
@@ -554,6 +597,52 @@ function createSplitterModel(): THREE.Group {
   return group
 }
 
+/** Hornet — a Galaga-style alien: squat yellow body, swept cyan wings, two
+ *  forward antenna nubs. Reads clearly as a "bug" distinct from the human
+ *  fighters so its dive-bombing telegraphs a different threat. */
+function createHornetModel(): THREE.Group {
+  const group = new THREE.Group()
+  const body = 0xffd23f
+  const wing = 0x33d6ff
+  const dark = 0x9a5b00
+  const eye = 0xff3b6b
+  // Compact 3×3 carapace.
+  for (let x = -1; x <= 1; x++) {
+    for (let y = -1; y <= 1; y++) {
+      addVoxel(group, x, y, 0, body)
+    }
+  }
+  // Swept-back wings (broad span so it reads at distance).
+  addVoxel(group, -2, 0, 0, wing)
+  addVoxel(group, 2, 0, 0, wing)
+  addVoxel(group, -3, -1, 0, wing)
+  addVoxel(group, 3, -1, 0, wing)
+  // Antenna nubs up front + glowing eyes.
+  addVoxel(group, -1, 2, 0.2, dark)
+  addVoxel(group, 1, 2, 0.2, dark)
+  addVoxel(group, 0, 1, 0.5, eye)
+  // Tail.
+  addVoxel(group, 0, -2, -0.2, dark)
+  return group
+}
+
+/** Missile — a small, glowing Arbiter warhead with a hot exhaust tail. */
+function createMissileModel(): THREE.Group {
+  const group = new THREE.Group()
+  const body = 0xffee66
+  const nose = 0xffffff
+  const fin = 0xff5522
+  // Slim 1×4 fuselage, brightest at the nose so it reads as a live warhead.
+  for (let row = -1; row <= 2; row++) addVoxel(group, 0, row, 0, body)
+  addVoxel(group, 0, 3, 0.2, nose)
+  // Stub fins at the tail.
+  addVoxel(group, -1, -1, 0, fin)
+  addVoxel(group, 1, -1, 0, fin)
+  // Exhaust glow.
+  addVoxel(group, 0, -2, -0.2, 0xff8800)
+  return group
+}
+
 /** Per-kind hull stats. */
 interface KindStats {
   maxHp: number
@@ -571,6 +660,8 @@ const KIND_STATS: Record<EnemyKind, KindStats> = {
   drifter: { maxHp: DRIFTER_MAX_HP, collisionRadius: DRIFTER_COLLISION_RADIUS },
   wedge: { maxHp: WEDGE_MAX_HP, collisionRadius: WEDGE_COLLISION_RADIUS },
   splitter: { maxHp: SPLITTER_MAX_HP, collisionRadius: SPLITTER_COLLISION_RADIUS },
+  missile: { maxHp: MISSILE_MAX_HP, collisionRadius: MISSILE_COLLISION_RADIUS },
+  hornet: { maxHp: HORNET_MAX_HP, collisionRadius: HORNET_COLLISION_RADIUS },
 }
 
 /** Build the voxel model for the given enemy kind. */
@@ -590,6 +681,10 @@ function createModelForKind(kind: EnemyKind): THREE.Group {
       return createWedgeModel()
     case 'splitter':
       return createSplitterModel()
+    case 'missile':
+      return createMissileModel()
+    case 'hornet':
+      return createHornetModel()
     default:
       return createEnemyShipModel()
   }
@@ -691,6 +786,7 @@ export function createEnemyShip(
     inFormation: false,
     swoopBearing: 0,
     engageDistance: WEDGE_ENGAGE_DISTANCE,
+    lifeTimer: 0,
   }
 }
 
@@ -802,6 +898,10 @@ export function updateEnemyShip(
       return updateWedgeAI(enemy, player, dt, asteroids)
     case 'splitter':
       return updateSplitterAI(enemy, player, dt, asteroids)
+    case 'missile':
+      return updateMissileAI(enemy, player, dt, asteroids)
+    case 'hornet':
+      return updateHornetAI(enemy, player, dt, asteroids)
     default:
       // grunt and carrier-launched drones share the orbiting dogfight AI
       return updateGruntAI(enemy, player, dt, asteroids)
@@ -967,6 +1067,124 @@ function updateSplitterAI(
         )
         newProjectiles.push(proj)
       }
+    }
+  }
+
+  finalizeEnemy(enemy, asteroids)
+  return newProjectiles
+}
+
+/**
+ * Missile AI — a homing warhead. Steers toward the player at a capped turn
+ * rate (so a juking player can slip the lock) while accelerating up to its
+ * speed cap. It never shoots; its threat is the body itself. Lifetime and the
+ * detonation-on-contact are owned by game-tick so the warhead removes cleanly
+ * with a wreck instead of being silently pruned.
+ */
+function updateMissileAI(
+  enemy: EnemyShip,
+  player: Ship,
+  dt: number,
+  asteroids: Asteroid[] = [],
+): EnemyProjectile[] {
+  const dx = player.x - enemy.x
+  const dy = player.y - enemy.y
+  const toPlayer = Math.atan2(dy, dx)
+  steerHeading(enemy, toPlayer, dt, MISSILE_TURN_RATE)
+
+  // Accelerate along the current heading toward the speed cap.
+  const hx = Math.cos(enemy.heading)
+  const hy = Math.sin(enemy.heading)
+  enemy.vx += hx * MISSILE_ACCEL * dt
+  enemy.vy += hy * MISSILE_ACCEL * dt
+  const speed = Math.hypot(enemy.vx, enemy.vy)
+  if (speed > MISSILE_MAX_SPEED) {
+    const s = MISSILE_MAX_SPEED / speed
+    enemy.vx *= s
+    enemy.vy *= s
+  }
+  enemy.x += enemy.vx * dt
+  enemy.y += enemy.vy * dt
+  enemy.rotation = enemy.heading - Math.PI / 2
+
+  finalizeEnemy(enemy, asteroids)
+  return []
+}
+
+/**
+ * Hornet AI — a Galaga-style dive-bomber. It alternates between two states
+ * (reusing the shared idle flag/timer): a committed DIVE run that banks in a
+ * curved arc toward the player (firing if close), and a REGROUP arc that pulls
+ * back out to a standoff before swooping again. The banking offset shrinks as
+ * it closes, so each pass reads as a sweeping curve rather than a straight line.
+ */
+function updateHornetAI(
+  enemy: EnemyShip,
+  player: Ship,
+  dt: number,
+  asteroids: Asteroid[] = [],
+): EnemyProjectile[] {
+  const newProjectiles: EnemyProjectile[] = []
+  const dx = player.x - enemy.x
+  const dy = player.y - enemy.y
+  const dist = Math.hypot(dx, dy) || 1
+  const toPlayer = Math.atan2(dy, dx)
+
+  // Toggle dive / regroup. `idling === true` means regrouping. Each fresh dive
+  // picks a new bank direction so successive passes sweep from varied angles.
+  enemy.idleTimer -= dt
+  if (enemy.idleTimer <= 0) {
+    enemy.idling = !enemy.idling
+    enemy.idleTimer = enemy.idling ? HORNET_REGROUP_TIME : HORNET_DIVE_TIME
+    if (!enemy.idling) enemy.strafeDir = Math.random() < 0.5 ? 1 : -1
+  }
+
+  let desired: number
+  let speed: number
+  if (!enemy.idling) {
+    // Dive: bank toward the player, the offset easing out as range closes.
+    const bank = HORNET_BANK * enemy.strafeDir * Math.min(1, dist / 80)
+    desired = toPlayer + bank
+    speed = HORNET_DIVE_SPEED
+  } else if (dist < HORNET_STANDOFF) {
+    // Regroup: arc away to a standoff above/beside the player.
+    desired = toPlayer + Math.PI + (Math.PI / 3) * enemy.strafeDir
+    speed = HORNET_REGROUP_SPEED
+  } else {
+    // Far enough out — curl back toward the player so it never wanders off.
+    desired = toPlayer + (Math.PI / 4) * enemy.strafeDir
+    speed = HORNET_REGROUP_SPEED
+  }
+
+  steerHeading(enemy, desired, dt, HORNET_TURN_RATE)
+  enemy.vx = Math.cos(enemy.heading) * speed
+  enemy.vy = Math.sin(enemy.heading) * speed
+  enemy.x += enemy.vx * dt
+  enemy.y += enemy.vy * dt
+  // Bees point where they fly (model faces +Y).
+  enemy.rotation = enemy.heading - Math.PI / 2
+
+  // Snap off shots during a dive when the player's in range and in the open.
+  enemy.shootTimer -= dt
+  if (!enemy.idling && enemy.shootTimer <= 0 && dist < HORNET_FIRE_RANGE) {
+    const losBlocked =
+      asteroids.length > 0 &&
+      segmentBlockedByAsteroid(enemy.x, enemy.y, player.x, player.y, asteroids)
+    if (losBlocked) {
+      enemy.shootTimer = 0.3
+    } else {
+      enemy.shootTimer = HORNET_FIRE_INTERVAL
+      const nx = dx / dist
+      const ny = dy / dist
+      newProjectiles.push(
+        createEnemyProjectile(
+          enemy.x + nx * 4,
+          enemy.y + ny * 4,
+          nx * ENEMY_PROJECTILE_SPEED,
+          ny * ENEMY_PROJECTILE_SPEED,
+          enemy.projectileDamage,
+        ),
+      )
     }
   }
 
