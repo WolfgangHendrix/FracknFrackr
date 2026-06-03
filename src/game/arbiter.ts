@@ -212,6 +212,9 @@ export interface ArbiterState {
   tractorEnabled: boolean
   /** Rotating base angle of the bullet-hell firing ring (radians). */
   spiralAngle: number
+  /** Count of bullet-hell volleys fired — drives the pattern rotation so the
+   *  spiral weave is periodically broken up by ring bursts and aimed fans. */
+  bulletHellVolley: number
   /** Countdown to the next missile salvo. */
   missileTimer: number
 }
@@ -253,6 +256,7 @@ export function createArbiterState(
     missilesEnabled: mark >= ARBITER_MISSILE_MARK,
     tractorEnabled: opts?.tractorEnabled ?? true,
     spiralAngle: Math.random() * Math.PI * 2,
+    bulletHellVolley: 0,
     missileTimer: MISSILE_FIRST_DELAY,
   }
 }
@@ -372,20 +376,45 @@ export function updateArbiter(arbiter: ArbiterState, player: Ship, dt: number): 
     }
 
     if (arbiter.bulletHell) {
-      // Rapid rings off the rotating base angle weave into spinning spiral
-      // arms. Phase 2 adds a counter-rotating, half-offset set for a denser
-      // lattice the player must thread.
+      // Bullet-hell repertoire: the signature rapid spinning spiral, broken up
+      // every few volleys by a set-piece — a full radial ring burst or a wide
+      // aimed fan — so the pattern reads as a varied attack, not one loop.
       arbiter.attackTimer = ARBITER_SPIRAL_INTERVAL
+      arbiter.bulletHellVolley++
       const arms = spiralArms(arbiter.mark, arbiter.phase)
-      for (let i = 0; i < arms; i++) {
-        fire(arbiter.spiralAngle + (i / arms) * Math.PI * 2, ARBITER_SPIRAL_BULLET_SPEED)
-      }
-      if (arbiter.phase === 2) {
+      const SPECIAL_EVERY = 8
+      if (arbiter.bulletHellVolley % SPECIAL_EVERY === 0) {
+        // Telegraph the set-piece with a slightly longer pause after it.
+        arbiter.attackTimer = ARBITER_SPIRAL_INTERVAL * 2.4
+        if ((arbiter.bulletHellVolley / SPECIAL_EVERY) % 2 === 0) {
+          // Radial ring burst (#1 / #8): an evenly-spaced full ring fired at
+          // once — reads as an expanding ring the player threads a gap in.
+          const ringCount = 12 + arms * 2
+          for (let i = 0; i < ringCount; i++) {
+            fire(arbiter.spiralAngle + (i / ringCount) * Math.PI * 2, ARBITER_SPIRAL_BULLET_SPEED * 0.9)
+          }
+        } else {
+          // Wide aimed fan (#3): a spread of faster bolts straight at the ship.
+          const aim = Math.atan2(player.y - arbiter.y, player.x - arbiter.x)
+          const fanN = 7
+          for (let i = 0; i < fanN; i++) {
+            fire(aim + (i - (fanN - 1) / 2) * 0.17, ARBITER_PROJECTILE_SPEED * 0.85)
+          }
+        }
+      } else {
+        // Rapid rings off the rotating base angle weave into spinning spiral
+        // arms. Phase 2 adds a counter-rotating, half-offset set for a denser
+        // lattice the player must thread.
         for (let i = 0; i < arms; i++) {
-          fire(
-            -arbiter.spiralAngle + (i / arms) * Math.PI * 2 + Math.PI / arms,
-            ARBITER_SPIRAL_BULLET_SPEED,
-          )
+          fire(arbiter.spiralAngle + (i / arms) * Math.PI * 2, ARBITER_SPIRAL_BULLET_SPEED)
+        }
+        if (arbiter.phase === 2) {
+          for (let i = 0; i < arms; i++) {
+            fire(
+              -arbiter.spiralAngle + (i / arms) * Math.PI * 2 + Math.PI / arms,
+              ARBITER_SPIRAL_BULLET_SPEED,
+            )
+          }
         }
       }
     } else {
