@@ -329,5 +329,8 @@ export function disposeMusic(): void {
   currentIntensity = 0
   targetIntensity = 0
 
-  // Don't close the context — audio.ts owns it
+  // Intentionally keep `ctx` open and non-null: music.ts owns its own
+  // AudioContext (separate from audio.ts / sfx.ts) and reuses it across scene
+  // recreations — startMusic() rebuilds the layer graph on the same context, so
+  // there's nothing to leak. It's freed when the page unloads.
 }

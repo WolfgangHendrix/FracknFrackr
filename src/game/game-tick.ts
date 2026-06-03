@@ -50,7 +50,6 @@ import { ASTEROID_SIZE_RADIUS } from './asteroid-model'
 import {
   createMetalChunk,
   updateMetalChunk,
-  bounceMetalOffShip,
   bounceMetalOffAsteroid,
   attractMetalToShip,
   METAL_SPAWN_CHANCE,
@@ -353,7 +352,6 @@ export interface TickInput {
   inputState: InputState
   /** World-space aim position (null = no active aim). */
   aimWorldPosition: { x: number; y: number } | null
-  collecting: boolean
   tutorialStep: TutorialStep
   /** Camera-visible world-space rectangle, for gating fire to on-screen targets. */
   viewBounds: { centerX: number; centerY: number; halfW: number; halfH: number }
@@ -1544,11 +1542,8 @@ export function tick(state: TickState, input: TickInput): TickResult {
   const firingAllowed =
     playerAlive && (!isPrologue || input.tutorialStep === 'prologue-mining')
 
-  // Collection is always automatic — the magnet runs by default. `input.collecting`
-  // (E key / mobile button / right-click) is now effectively cosmetic. Only the
+  // Collection is always automatic — the magnet runs by default. Only the
   // pickup range varies, driven by the Collector upgrade tier.
-  const collecting = true
-  void input.collecting
 
   // --- Endless mode: active once the tutorial is complete. Snapshot which
   // asteroids are alive now so updateEndlessMode() can count kills this tick. ---
@@ -2347,17 +2342,20 @@ export function tick(state: TickState, input: TickInput): TickResult {
       }
     }
     updateScrapBox(state.scrapBoxes[i], dt)
-    if (collecting) {
-      const collectorRange = isPrologue
-        ? PROLOGUE_SHIP.collectorRange
-        : collectorRangeForTier(state.collectorTier) * (1 + 0.3 * state.magnetTier)
-      const collected = attractScrapBoxToShip(state.scrapBoxes[i], state.ship, dt, collectorRange)
-      if (collected) {
-        result.scrapCollected.push({ id: state.scrapBoxes[i].id, value: state.scrapBoxes[i].value })
-        result.scrapCollectedEvent = true
-        state.scrapBoxes.splice(i, 1)
-        continue
-      }
+    const scrapCollectorRange = isPrologue
+      ? PROLOGUE_SHIP.collectorRange
+      : collectorRangeForTier(state.collectorTier) * (1 + 0.3 * state.magnetTier)
+    const scrapCollected = attractScrapBoxToShip(
+      state.scrapBoxes[i],
+      state.ship,
+      dt,
+      scrapCollectorRange,
+    )
+    if (scrapCollected) {
+      result.scrapCollected.push({ id: state.scrapBoxes[i].id, value: state.scrapBoxes[i].value })
+      result.scrapCollectedEvent = true
+      state.scrapBoxes.splice(i, 1)
+      continue
     }
   }
 
@@ -2378,25 +2376,20 @@ export function tick(state: TickState, input: TickInput): TickResult {
     }
     updateMetalChunk(metal, dt)
 
-    if (collecting) {
-      const metalRange = isPrologue
-        ? PROLOGUE_SHIP.collectorRange
-        : collectorRangeForTier(state.collectorTier)
-      const collected = attractMetalToShip(metal, state.ship, dt, metalRange)
-      if (collected) {
-        if (state.firstMetalCollectedTime === null) {
-          state.firstMetalCollectedTime = state.elapsedTime
-        }
-        result.metalCollected.push({ id: metal.id, variant: metal.variant })
-        result.metalCollectedEvent = true
-        state.metalChunks.splice(i, 1)
-        continue
+    const metalRange = isPrologue
+      ? PROLOGUE_SHIP.collectorRange
+      : collectorRangeForTier(state.collectorTier)
+    const collected = attractMetalToShip(metal, state.ship, dt, metalRange)
+    if (collected) {
+      if (state.firstMetalCollectedTime === null) {
+        state.firstMetalCollectedTime = state.elapsedTime
       }
+      result.metalCollected.push({ id: metal.id, variant: metal.variant })
+      result.metalCollectedEvent = true
+      state.metalChunks.splice(i, 1)
+      continue
     }
 
-    if (!collecting) {
-      bounceMetalOffShip(metal, state.ship)
-    }
     for (const a of state.asteroids) {
       bounceMetalOffAsteroid(metal, a)
     }

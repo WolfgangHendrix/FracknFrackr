@@ -728,6 +728,17 @@ export function disposeSfx(): void {
   stopEngineSound()
   stopDrillSound()
   stopArbiterSiren()
-  // Don't close ctx — shared with main audio module
-  audioCtx = null
+  // Close our OWN context. sfx.ts holds a separate AudioContext from audio.ts
+  // and music.ts (each module calls `new AudioContext()`), so nulling without
+  // closing leaked one suspended context per scene teardown. After a handful of
+  // quit-to-title → new-game cycles the browser's per-page AudioContext ceiling
+  // (~6 in Chrome) is hit, `new AudioContext()` throws, getContext() returns
+  // null, and every SFX silently dies for the rest of the session.
+  if (audioCtx) {
+    void audioCtx.close()
+    audioCtx = null
+  }
+  // Re-prime on the next playthrough's fresh context (primeAudio is a no-op
+  // while this stays true, which would reintroduce first-blip latency).
+  primed = false
 }

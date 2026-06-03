@@ -23,6 +23,13 @@ const GAMEPLAY_TRACK = './audio/mus_mainmenu_01.ogg'
 type Mode = 'idle' | 'menu' | 'handoff' | 'gameplay'
 
 let audio: HTMLAudioElement | null = null
+// A second, never-played audio element used purely to warm the browser's media
+// cache with the 3 MB gameplay track while the (small) menu loop plays. Without
+// it, the menu→gameplay handoff sets src to the gameplay track and immediately
+// play()s — on a slow connection that stalls to download first, leaving an
+// audible gap right where the seamless transition should be. Prefetching during
+// the menu means the bytes are already buffered when track 00 ends.
+let gameplayPrefetch: HTMLAudioElement | null = null
 let mode: Mode = 'idle'
 let onEndedHandler: (() => void) | null = null
 let gestureCleanup: (() => void) | null = null
@@ -82,6 +89,22 @@ function ensureAudio(): HTMLAudioElement | null {
   return audio
 }
 
+/**
+ * Begin buffering the gameplay track in the background. Idempotent — safe to
+ * call every time the menu loop (re)starts. Never played; it exists only to
+ * populate the media cache so the later handoff is instant. Failures (offline,
+ * blocked) are silent: the handoff falls back to fetching on demand as before.
+ */
+function prefetchGameplayTrack(): void {
+  if (typeof window === 'undefined') return
+  if (gameplayPrefetch) return
+  const pre = new Audio()
+  pre.preload = 'auto'
+  pre.src = GAMEPLAY_TRACK
+  pre.load()
+  gameplayPrefetch = pre
+}
+
 function clearEndedHandler(): void {
   if (audio && onEndedHandler) {
     audio.removeEventListener('ended', onEndedHandler)
@@ -93,6 +116,9 @@ function clearEndedHandler(): void {
 export function playMenuLoop(): void {
   const a = ensureAudio()
   if (!a) return
+
+  // Warm the gameplay track now so the handoff out of the menu is gapless.
+  prefetchGameplayTrack()
 
   if (mode === 'menu' && !a.paused && a.src.endsWith('mus_mainmenu_00.ogg')) {
     return // already playing the menu loop
@@ -124,6 +150,10 @@ export function enterGameplay(): void {
   if (!a) return
   if (mode === 'gameplay' || mode === 'handoff') return
 
+  // In case the menu was skipped, ensure the gameplay track is buffering. It
+  // still has track 00's remaining playback as lead time before the handoff.
+  prefetchGameplayTrack()
+
   a.loop = false
   mode = 'handoff'
 
@@ -134,6 +164,9 @@ export function enterGameplay(): void {
     audio.volume = getMusicVolume()
     mode = 'gameplay'
     void audio.play().catch(() => {})
+    // The real element now owns the track (served from the warmed cache);
+    // drop the prefetch element so its buffered copy can be reclaimed.
+    gameplayPrefetch = null
   }
   onEndedHandler = handler
   a.addEventListener('ended', handler, { once: true })

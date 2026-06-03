@@ -919,16 +919,24 @@ export function createGameScene(
     applyMotionState()
   })
 
+  // Detach handle for the reduced-motion listener, invoked in dispose(). Held
+  // at scene scope so it survives out of the `if` block below — without it the
+  // listener (and its closure over applyMotionState) leaks one entry on the
+  // MediaQueryList per scene recreation (quit-to-title → new-game).
+  let detachReducedMotion: (() => void) | null = null
   if (reducedMotionMQ) {
+    const mq = reducedMotionMQ
     const onReducedMotionChange = (e: MediaQueryListEvent): void => {
       osReducedMotion = e.matches
       applyMotionState()
     }
     // Older Safari only supports addListener; modern is addEventListener.
-    if (reducedMotionMQ.addEventListener) {
-      reducedMotionMQ.addEventListener('change', onReducedMotionChange)
+    if (mq.addEventListener) {
+      mq.addEventListener('change', onReducedMotionChange)
+      detachReducedMotion = () => mq.removeEventListener('change', onReducedMotionChange)
     } else {
-      ;(reducedMotionMQ as MediaQueryList).addListener(onReducedMotionChange)
+      ;(mq as MediaQueryList).addListener(onReducedMotionChange)
+      detachReducedMotion = () => (mq as MediaQueryList).removeListener(onReducedMotionChange)
     }
   }
 
@@ -1020,19 +1028,14 @@ export function createGameScene(
       const sx = e.clientX - rect.left
       const sy = e.clientY - rect.top
       fireTarget = screenToWorld(sx, sy)
-    } else if (e.button === 2) {
-      // Right-click: activate collector/magnet
-      mouseCollecting = true
-      collecting = true
     }
+    // Right-click no longer does anything — collection is automatic. The
+    // context menu is still suppressed by onContextMenu so it doesn't pop.
   }
 
   function onMouseUp(e: MouseEvent): void {
     if (e.button === 0) {
       mouseHoldingFire = false
-    } else if (e.button === 2) {
-      mouseCollecting = false
-      if (!collectKeyDown) collecting = false
     }
   }
 
@@ -1091,32 +1094,20 @@ export function createGameScene(
   }
   window.addEventListener('keydown', onToolToggleKeyDown)
 
-  // --- Collect (mouse right-click + keyboard + mobile button) ---
-  let collecting = false
-  let collectKeyDown = false
-  let mouseCollecting = false
-
+  // --- Audio priming via the legacy collect keys ---
+  // Collection is automatic now (the magnet always runs), so E / Space no
+  // longer toggle a pickup state. We keep a keydown listener purely so those
+  // keys still count as the user gesture that unlocks the WebAudio context
+  // for keyboard-only players who never click.
   function onCollectKeyDown(e: KeyboardEvent): void {
-    // Same input-focus guard as the tool toggle — don't intercept E / Space
-    // while the player is typing. Keyup stays unguarded so a held-collect
-    // releases cleanly if focus changes mid-press.
+    // Don't intercept E / Space while the player is typing (e.g. the
+    // run-summary initials box).
     if (isEditableTarget(e.target)) return
     if (e.code === 'KeyE' || e.code === 'Space') {
-      if (!collectKeyDown) {
-        collectKeyDown = true
-        collecting = true
-        resumeAudio()
-      }
-    }
-  }
-  function onCollectKeyUp(e: KeyboardEvent): void {
-    if (e.code === 'KeyE' || e.code === 'Space') {
-      collectKeyDown = false
-      if (!mouseCollecting) collecting = false
+      resumeAudio()
     }
   }
   window.addEventListener('keydown', onCollectKeyDown)
-  window.addEventListener('keyup', onCollectKeyUp)
 
   // Swallow right-half touches that miss the fire button so the browser
   // doesn't synthesize mouse events that rotate the ship or break the joystick.
@@ -1419,7 +1410,6 @@ export function createGameScene(
       paused,
       inputState,
       aimWorldPosition,
-      collecting,
       tutorialStep: getTutorialStep(),
       viewBounds: {
         centerX: camera.position.x,
@@ -2645,12 +2635,12 @@ export function createGameScene(
     renderer.domElement.removeEventListener('contextmenu', onContextMenu)
     container.removeEventListener('touchstart', onTouchStartSwallow)
     window.removeEventListener('keydown', onCollectKeyDown)
-    window.removeEventListener('keyup', onCollectKeyUp)
     window.removeEventListener('keydown', onToolToggleKeyDown)
     window.removeEventListener('resize', onResize)
     if (typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', onVisibilityChange)
     }
+    detachReducedMotion?.()
 
     // Clean up projectile tracking state
     projectileModels.clear()
