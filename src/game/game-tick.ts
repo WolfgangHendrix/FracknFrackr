@@ -41,6 +41,12 @@ import {
 } from './blaster'
 import { DAMAGE_PER_TIER, LAZER_BEAM_RANGE, clampTier } from './blaster-constants'
 import {
+  BLACK_HOLE_PULL_RADIUS,
+  BLACK_HOLE_PULL_ACCEL,
+  BLACK_HOLE_PLAYER_PULL_MULT,
+  BLACK_HOLE_EVENT_HORIZON_RADIUS,
+} from './black-hole-constants'
+import {
   resolveShipAsteroidCollision,
   resolveAsteroidAsteroidCollisions,
   checkProjectileAsteroidCollisions,
@@ -142,10 +148,6 @@ const AMBUSH_SHOOT_MIN = 0.3
 const AMBUSH_SHOOT_MAX = 0.5
 const AMBUSH_PROJECTILE_DAMAGE = 20
 const DRONE_POST_LAUNCH_SHOOT_DELAY = 0.8
-const BLACK_HOLE_PULL_RADIUS = 200
-const BLACK_HOLE_EVENT_HORIZON_RADIUS = 12
-const BLACK_HOLE_PULL_ACCEL = 480
-const BLACK_HOLE_PLAYER_PULL_MULT = 0.8
 
 const DRONE_LAUNCH_SLOTS: readonly {
   bayX: number
@@ -302,6 +304,10 @@ export interface TickState {
   asteroidSpawnCounter: number
   /** The active Arbiter boss, or null when no encounter is underway. */
   arbiter: ArbiterState | null
+  /** True while the ship is held in an Arbiter tractor beam (in range + cone).
+   *  Set each frame by the tractor block; gates out firing and the aim reticle
+   *  so being caught actually feels dangerous. */
+  playerTractorCaught: boolean
   /**
    * A second, lighter Arbiter that flanks the primary during the twin-encounter
    * Marks (ARBITER_MISSILE_MARK..ARBITER_BULLET_HELL_MARK − 1). No tractor, no
@@ -476,6 +482,9 @@ export interface TickResult {
   arbiterHit: boolean
   /** True the tick the Arbiter's tractor beam drags the ship into its hull. */
   arbiterCaptureHit: boolean
+  /** True while the ship is held in the tractor beam — scene hides the aim
+   *  reticle while this is set. */
+  playerTractorCaught: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -600,6 +609,7 @@ export function createTickState(config?: TickStateConfig): TickState {
     asteroidRespawnTimer: ASTEROID_REPLENISH_INTERVAL,
     asteroidSpawnCounter: 1,
     arbiter: null,
+    playerTractorCaught: false,
     arbiterEscort: null,
     arbiterMark: 0,
     peakLedger: 0,
@@ -698,6 +708,7 @@ function emptyResult(): TickResult {
     arbiterWithdrawn: null,
     arbiterHit: false,
     arbiterCaptureHit: false,
+    playerTractorCaught: false,
   }
 }
 
@@ -1173,11 +1184,14 @@ function blackHolePullFactor(
   if (distSq <= 0.0001) return { nx: 1, ny: 0, factor: 1 }
   if (distSq > BLACK_HOLE_PULL_RADIUS * BLACK_HOLE_PULL_RADIUS) return null
   const dist = Math.sqrt(distSq)
+  // Quadratic falloff: gentle out near the rim (so a thrusting ship can still
+  // claw away), ramping hard only as you close on the core. This is what gives
+  // a real escape window outside the point-of-no-return ring.
   const proximity = 1 - dist / BLACK_HOLE_PULL_RADIUS
   return {
     nx: dx / dist,
     ny: dy / dist,
-    factor: proximity,
+    factor: proximity * proximity,
   }
 }
 
@@ -1539,8 +1553,15 @@ export function tick(state: TickState, input: TickInput): TickResult {
   // the auto-fire path or missile auto-launcher conjuring shots out of the
   // wreckage. Same gate prologue cutscenes use.
   const playerAlive = state.playerHp > 0
+  // No firing while held in an Arbiter tractor beam — being caught should feel
+  // dangerous and helpless, not business-as-usual. (The prologue capture beat
+  // is already covered by the isPrologue gate.) Reads the flag set by last
+  // frame's tractor block, which is set before this runs; the 1-frame latency
+  // is imperceptible.
   const firingAllowed =
-    playerAlive && (!isPrologue || input.tutorialStep === 'prologue-mining')
+    playerAlive &&
+    !state.playerTractorCaught &&
+    (!isPrologue || input.tutorialStep === 'prologue-mining')
 
   // Collection is always automatic — the magnet runs by default. Only the
   // pickup range varies, driven by the Collector upgrade tier.
@@ -1622,13 +1643,16 @@ export function tick(state: TickState, input: TickInput): TickResult {
   }
 
   // --- Arbiter tractor beam: haul the ship in while caught in the cone ---
+  state.playerTractorCaught = false
   if (state.arbiter && state.arbiter.tractorActive) {
-    const { captureDamage } = applyTractorPull(state.arbiter, state.ship, dt)
+    const { captureDamage, caught } = applyTractorPull(state.arbiter, state.ship, dt)
+    state.playerTractorCaught = caught
     if (captureDamage > 0) {
       damagePlayer(state, result, captureDamage, endlessActive)
       result.arbiterCaptureHit = true
     }
   }
+  result.playerTractorCaught = state.playerTractorCaught
 
   // --- Asteroid drift ---
   for (const a of state.asteroids) {
@@ -1760,29 +1784,34 @@ export function tick(state: TickState, input: TickInput): TickResult {
   if (state.missileTier > 0 && state.missileCooldown <= 0 && firingAllowed) {
     const count = Math.max(1, Math.min(8, state.missileTier))
     const damage = 2 + Math.floor(state.blasterTier / 2)
+    // Missiles deploy FORWARD (the way the ship faces) in a tight fan, then the
+    // homing AI takes over after the deploy timer. They used to burst straight
+    // out the sides, which read as "shooting the wrong way" before the seek
+    // kicked in. Forward is the ship's facing: rotation + PI/2 (hull faces +Y
+    // at rotation 0). The fan + lateral spawn spacing keeps a salvo from
+    // stacking into a single missile.
+    const forward = state.ship.rotation + Math.PI / 2
+    const lateral = forward + Math.PI / 2
+    const FAN_STEP = 0.16 // radians between adjacent missiles in the fan
+    const LATERAL_SPACING = 1.6 // world units between launch tubes
     for (let i = 0; i < count; i++) {
-      const side = i % 2 === 0 ? -1 : 1
-      const row = Math.floor(i / 2)
-      // Shoot out sideways in a formation
-      const deployAngle = state.ship.rotation + (side < 0 ? Math.PI : 0)
-      const ox = Math.cos(deployAngle) * 2
-      const oy = Math.sin(deployAngle) * 2
-      const missile = createMissileProjectile(
-        state.ship.x + ox,
-        state.ship.y + oy,
-        deployAngle,
-        damage,
-      )
-      // Initial burst speed
-      missile.velocityX = Math.cos(deployAngle) * (80 + row * 20)
-      missile.velocityY = Math.sin(deployAngle) * (80 + row * 20)
+      // Symmetric offset index: 0, +1, -1, +2, -2, ... centered on forward.
+      const offsetIndex = i % 2 === 0 ? i / 2 : -(i + 1) / 2
+      const deployAngle = forward + offsetIndex * FAN_STEP
+      const spawnX = state.ship.x + Math.cos(forward) * 2 + Math.cos(lateral) * offsetIndex * LATERAL_SPACING
+      const spawnY = state.ship.y + Math.sin(forward) * 2 + Math.sin(lateral) * offsetIndex * LATERAL_SPACING
+      const missile = createMissileProjectile(spawnX, spawnY, deployAngle, damage)
+      // Initial forward burst speed.
+      const burst = 90
+      missile.velocityX = Math.cos(deployAngle) * burst
+      missile.velocityY = Math.sin(deployAngle) * burst
 
       state.projectiles.push(missile)
       result.newProjectiles.push(missile)
 
       state.missileData.set(missile.id, {
         phase: 'deploy',
-        timer: 0.3 + row * 0.1,
+        timer: 0.28 + Math.abs(offsetIndex) * 0.05,
         targetId: null,
       })
     }

@@ -23,6 +23,7 @@ export interface GameCanvasHandle {
   resetShipToStation: () => void
   setMiningTool: (tool: MiningTool) => void
   setCollectorTier: (tier: number) => void
+  setCargoFull: (full: boolean) => void
   setCombatUpgrades: (upgrades: Upgrades) => void
   buildMiningDrone: () => boolean
   getMiningDroneCount: () => number
@@ -170,6 +171,9 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
     },
     setCollectorTier: (tier: number) => {
       sceneRef.current?.setCollectorTier(tier)
+    },
+    setCargoFull: (full: boolean) => {
+      sceneRef.current?.setCargoFull(full)
     },
     setCombatUpgrades: (upgrades: Upgrades) => {
       sceneRef.current?.setCombatUpgrades(upgrades)

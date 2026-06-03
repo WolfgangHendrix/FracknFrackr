@@ -183,6 +183,10 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
   const [mode, setMode] = useState<ScreenMode>('main')
   const [summaries, setSummaries] = useState<Map<SaveSlotId, SaveSlotSummary>>(new Map())
   const [confirmSlot, setConfirmSlot] = useState<SaveSlotId | null>(null)
+  // Erase-all is a two-step confirm: the first ERASE button only *arms* the
+  // action, revealing a final "are you absolutely sure?" stage. Guards against
+  // an accidental single misclick nuking every save + the leaderboard.
+  const [eraseArmed, setEraseArmed] = useState(false)
   // Top leaderboard entry, computed once on mount. Refreshed if the player
   // exits a run back here (the menu remounts via the screen state machine).
   const bestEntry = useMemo(() => {
@@ -198,12 +202,15 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
   // B clicks the back/cancel button. resetKey re-anchors focus on view changes.
   useGamepadMenu({
     enabled: true,
-    resetKey: `${mode}:${confirmSlot ?? ''}`,
+    // Include the erase stage so gamepad focus re-anchors on the safe default
+    // when the second confirmation appears.
+    resetKey: `${mode}:${confirmSlot ?? ''}:${eraseArmed ? 'armed' : ''}`,
   })
 
   const handleBack = useCallback(() => {
     setMode('main')
     setConfirmSlot(null)
+    setEraseArmed(false)
   }, [])
 
   const handleNewGameSlot = useCallback(
@@ -418,7 +425,10 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
               destructive action isn't visually grouped with NEW GAME. */}
           <button
             data-menu-item
-            onClick={() => setMode('erase')}
+            onClick={() => {
+              setEraseArmed(false)
+              setMode('erase')
+            }}
             className="mt-2 px-3 py-2 text-white/35 font-sans text-xs tracking-[0.18em] uppercase hover:text-hud-red focus:text-hud-red focus:outline-none focus:ring-1 focus:ring-hud-red/40 rounded transition-colors"
           >
             Erase All Data
@@ -426,8 +436,8 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
         </div>
       )}
 
-      {/* Erase All Data — destructive confirmation */}
-      {mode === 'erase' && (
+      {/* Erase All Data — two-step destructive confirmation */}
+      {mode === 'erase' && !eraseArmed && (
         <div className="flex flex-col gap-4 items-center relative z-10 w-full max-w-sm px-4">
           <div className="text-3xl text-hud-red" aria-hidden="true">
             ⚠
@@ -450,15 +460,48 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
             </button>
             <button
               data-menu-item
+              onClick={() => setEraseArmed(true)}
+              className="px-5 py-3 min-h-[44px] bg-hud-red/20 border border-hud-red rounded text-hud-red font-sans text-sm font-bold hover:bg-hud-red/35 focus:bg-hud-red/35 focus:outline-none focus:ring-2 focus:ring-hud-red transition-colors"
+            >
+              ERASE EVERYTHING
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Erase All Data — final confirmation (last chance) */}
+      {mode === 'erase' && eraseArmed && (
+        <div className="flex flex-col gap-4 items-center relative z-10 w-full max-w-sm px-4">
+          <div className="text-3xl text-hud-red animate-pulse" aria-hidden="true">
+            ⚠
+          </div>
+          <p className="font-sans text-base text-hud-red text-center tracking-wider font-bold">
+            ARE YOU ABSOLUTELY SURE?
+          </p>
+          <p className="font-sans text-sm text-white/75 text-center leading-relaxed">
+            Last chance. This wipes <span className="text-hud-red font-bold">everything</span> —
+            saves, scores, settings — with no way back.
+          </p>
+          <div className="flex gap-3 mt-2">
+            <button
+              data-menu-item
+              data-menu-back
+              onClick={handleBack}
+              className="px-5 py-3 min-h-[44px] bg-space-800/80 border border-white/20 rounded text-white/70 font-sans text-sm font-bold hover:bg-space-700/80 hover:text-white focus:outline-none focus:ring-2 focus:ring-white/40 transition-colors"
+            >
+              KEEP MY DATA
+            </button>
+            <button
+              data-menu-item
               onClick={() => {
                 wipeAllGameData()
                 // Reload so every memoized read (best entry, save slots,
                 // tutorial flags, last-initials) starts from an empty slate.
                 if (typeof window !== 'undefined') window.location.reload()
               }}
-              className="px-5 py-3 min-h-[44px] bg-hud-red/20 border border-hud-red rounded text-hud-red font-sans text-sm font-bold hover:bg-hud-red/35 focus:bg-hud-red/35 focus:outline-none focus:ring-2 focus:ring-hud-red transition-colors"
+              className="px-5 py-3 min-h-[44px] bg-hud-red/30 border border-hud-red rounded text-hud-red font-sans text-sm font-bold hover:bg-hud-red/45 focus:bg-hud-red/45 focus:outline-none focus:ring-2 focus:ring-hud-red transition-colors"
             >
-              ERASE EVERYTHING
+              YES, ERASE EVERYTHING
             </button>
           </div>
         </div>

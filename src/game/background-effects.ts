@@ -4,6 +4,10 @@
  */
 
 import * as THREE from 'three'
+import {
+  BLACK_HOLE_EVENT_HORIZON_RADIUS,
+  BLACK_HOLE_POINT_OF_NO_RETURN_RADIUS,
+} from './black-hole-constants'
 
 // ---------------------------------------------------------------------------
 // Twinkling Stars — enhanced star layer with brightness variation
@@ -212,48 +216,130 @@ export function disposeNebulaSystem(system: NebulaSystem): void {
 
 export interface BlackHole {
   group: THREE.Group
-  ringMeshes: THREE.Mesh[]
+  /** Rotating voxel accretion bands (each a Group of cubes), spun in update. */
+  spinners: THREE.Group[]
+  /** The bright "point of no return" warning ring — pulses in update. */
+  dangerRing: THREE.Mesh
   coreMesh: THREE.Mesh
+  /** Time of first update, used to ramp a spawn fade-in. null until first seen.
+   *  Holes spawn at fixed positions the instant the player crosses a distance
+   *  threshold — sometimes on-screen — so we fade them in to avoid a hard pop. */
+  spawnTime: number | null
   x: number
   y: number
+}
+
+/** Seconds the spawn fade-in takes to reach full opacity. */
+const BLACK_HOLE_FADE_IN = 1.2
+
+/** Visual void radius — matches the gameplay death radius so "sucked in" reads. */
+const CORE_RADIUS = BLACK_HOLE_EVENT_HORIZON_RADIUS
+/** Warning-ring radius — the gameplay point of no return, drawn so it's legible. */
+const DANGER_RADIUS = BLACK_HOLE_POINT_OF_NO_RETURN_RADIUS
+
+/** Build one rotating band of voxel cubes orbiting at `radius`. */
+function buildAccretionBand(
+  radius: number,
+  count: number,
+  size: number,
+  color: number,
+  opacity: number,
+): THREE.Group {
+  const band = new THREE.Group()
+  const geo = new THREE.BoxGeometry(size, size, size)
+  for (let i = 0; i < count; i++) {
+    const a = (i / count) * Math.PI * 2
+    const mat = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    })
+    const cube = new THREE.Mesh(geo, mat)
+    // Slight radial + depth jitter so the disk looks churned, not stamped.
+    const r = radius + (Math.random() - 0.5) * size * 1.5
+    cube.position.set(Math.cos(a) * r, Math.sin(a) * r, (Math.random() - 0.5) * 4)
+    cube.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI)
+    band.add(cube)
+  }
+  return band
 }
 
 export function createBlackHole(x: number, y: number): BlackHole {
   const group = new THREE.Group()
   group.position.set(x, y, -10)
 
-  // Dark core
-  const coreGeo = new THREE.CircleGeometry(8, 32)
-  const coreMat = new THREE.MeshBasicMaterial({
-    color: 0x000000,
+  // Faint gravity-well glow — a big, dim red disc that gives the whole thing
+  // a sense of dread bleeding outward.
+  const glowGeo = new THREE.CircleGeometry(DANGER_RADIUS * 2.2, 48)
+  const glowMat = new THREE.MeshBasicMaterial({
+    color: 0x3a0010,
     transparent: true,
-    opacity: 0.9,
+    opacity: 0.25,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
   })
+  group.add(new THREE.Mesh(glowGeo, glowMat))
+
+  // The void — a hard black disc the size of the death radius.
+  const coreGeo = new THREE.CircleGeometry(CORE_RADIUS, 48)
+  const coreMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.97 })
   const coreMesh = new THREE.Mesh(coreGeo, coreMat)
+  coreMesh.position.z = 1 // just in front of the glow
   group.add(coreMesh)
 
-  // Accretion rings
-  const ringMeshes: THREE.Mesh[] = []
-  const ringColors = [0xff4400, 0xff8800, 0xffaa00, 0xff6600]
+  // Purple lensing rim hugging the void.
+  const rimGeo = new THREE.RingGeometry(CORE_RADIUS, CORE_RADIUS + 5, 48)
+  const rimMat = new THREE.MeshBasicMaterial({
+    color: 0x7a2cff,
+    transparent: true,
+    opacity: 0.45,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  })
+  const rim = new THREE.Mesh(rimGeo, rimMat)
+  rim.position.z = 1
+  group.add(rim)
 
-  for (let i = 0; i < 4; i++) {
-    const innerRadius = 10 + i * 4
-    const outerRadius = innerRadius + 2
-    const geo = new THREE.RingGeometry(innerRadius, outerRadius, 64)
-    const mat = new THREE.MeshBasicMaterial({
-      color: ringColors[i],
-      transparent: true,
-      opacity: 0.15 - i * 0.03,
-      blending: THREE.AdditiveBlending,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    })
-    const mesh = new THREE.Mesh(geo, mat)
-    group.add(mesh)
-    ringMeshes.push(mesh)
-  }
+  // Voxel accretion disk — chunky cubes in rotating bands, hot core to cooler
+  // edge, reaching well past the old ~26-unit footprint for real menace.
+  const spinners: THREE.Group[] = [
+    buildAccretionBand(CORE_RADIUS + 10, 16, 4.5, 0xff2200, 0.55),
+    buildAccretionBand(DANGER_RADIUS + 16, 24, 4.0, 0xff7a00, 0.34),
+    buildAccretionBand(DANGER_RADIUS + 40, 30, 3.2, 0xffbb33, 0.2),
+  ]
+  for (const band of spinners) group.add(band)
 
-  return { group, ringMeshes, coreMesh, x, y }
+  // The "point of no return" warning ring — bright, pulsing, drawn at the play
+  // plane (group sits at z=-10, so local z=+12 lands it ~z=+2 world) and with
+  // depthTest off so it always reads as the hard boundary it represents.
+  const dangerGeo = new THREE.RingGeometry(DANGER_RADIUS - 2, DANGER_RADIUS + 2, 80)
+  const dangerMat = new THREE.MeshBasicMaterial({
+    color: 0xff3322,
+    transparent: true,
+    opacity: 0.8,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+    depthTest: false,
+  })
+  const dangerRing = new THREE.Mesh(dangerGeo, dangerMat)
+  dangerRing.position.z = 12
+  dangerRing.renderOrder = 5
+  group.add(dangerRing)
+
+  // Remember each material's intended opacity so the spawn fade-in can ramp
+  // from 0 up to it (rather than guessing per-material targets in update).
+  group.traverse((o) => {
+    if (o instanceof THREE.Mesh && o.material instanceof THREE.MeshBasicMaterial) {
+      o.material.userData.baseOpacity = o.material.opacity
+      o.material.opacity = 0 // start invisible; updateBlackHole fades it in
+    }
+  })
+
+  return { group, spinners, dangerRing, coreMesh, spawnTime: null, x, y }
 }
 
 export function updateBlackHole(hole: BlackHole, time: number, camX: number, camY: number): void {
@@ -261,19 +347,39 @@ export function updateBlackHole(hole: BlackHole, time: number, camX: number, cam
   hole.group.position.x = hole.x + camX * 0.1
   hole.group.position.y = hole.y + camY * 0.1
 
-  // Spin rings at different speeds
-  for (let i = 0; i < hole.ringMeshes.length; i++) {
-    hole.ringMeshes[i].rotation.z = time * (0.3 + i * 0.15) * (i % 2 === 0 ? 1 : -1)
-    const mat = hole.ringMeshes[i].material as THREE.MeshBasicMaterial
-    mat.opacity = 0.12 - i * 0.02 + Math.sin(time * 2 + i) * 0.03
+  // Spawn fade-in: ramp every material from 0 up to its base opacity over the
+  // first ~1.2s so a hole that appears on-screen eases in instead of popping.
+  if (hole.spawnTime === null) hole.spawnTime = time
+  const fade = Math.min(1, (time - hole.spawnTime) / BLACK_HOLE_FADE_IN)
+  if (fade < 1) {
+    hole.group.traverse((o) => {
+      if (o instanceof THREE.Mesh && o.material instanceof THREE.MeshBasicMaterial) {
+        const base = (o.material.userData.baseOpacity as number | undefined) ?? o.material.opacity
+        o.material.opacity = base * fade
+      }
+    })
   }
+
+  // Spin the accretion bands at different rates and directions for churn.
+  for (let i = 0; i < hole.spinners.length; i++) {
+    hole.spinners[i].rotation.z = time * (0.25 + i * 0.18) * (i % 2 === 0 ? 1 : -1)
+  }
+
+  // Pulse the warning ring — an ominous "breathing" so it draws the eye and
+  // reads as a live hazard boundary, not scenery. Multiplied by the spawn fade
+  // so it eases in with everything else.
+  const pulse = 0.6 + 0.4 * Math.sin(time * 3.2)
+  const mat = hole.dangerRing.material as THREE.MeshBasicMaterial
+  mat.opacity = (0.45 + 0.4 * pulse) * fade
+  hole.dangerRing.scale.setScalar(1 + 0.03 * Math.sin(time * 3.2))
 }
 
 export function disposeBlackHole(hole: BlackHole): void {
-  hole.coreMesh.geometry.dispose()
-  ;(hole.coreMesh.material as THREE.Material).dispose()
-  for (const ring of hole.ringMeshes) {
-    ring.geometry.dispose()
-    ;(ring.material as THREE.Material).dispose()
-  }
+  // Walk the whole group so every cube/ring/disc geometry + material is freed.
+  hole.group.traverse((obj) => {
+    if (obj instanceof THREE.Mesh) {
+      obj.geometry.dispose()
+      if (obj.material instanceof THREE.Material) obj.material.dispose()
+    }
+  })
 }

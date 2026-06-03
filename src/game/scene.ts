@@ -116,6 +116,7 @@ import {
   disposeBlackHole,
 } from './background-effects'
 import type { TwinkleStars, NebulaSystem, BlackHole } from './background-effects'
+import { BLACK_HOLE_EVENT_HORIZON_RADIUS } from './black-hole-constants'
 import { createEngineTrail, updateEngineTrail, disposeEngineTrail } from './engine-trail'
 import type { EngineTrail } from './engine-trail'
 import { createWarpStreaks, updateWarpStreaks, disposeWarpStreaks } from './warp-streaks'
@@ -171,7 +172,6 @@ function disposeMesh(obj: THREE.Object3D): void {
 const CAMERA_HEIGHT = 150
 const STAR_COUNT = 400
 const BLACK_HOLE_ALERT_RADIUS = 200
-const BLACK_HOLE_EVENT_HORIZON_RADIUS = 12
 // Slightly outside the pull radius so the warning fires before any
 // gravity is felt.
 const BLACK_HOLE_WARN_RADIUS = 230
@@ -291,6 +291,7 @@ export interface GameScene {
   resetShipToStation: () => void
   setMiningTool: (tool: MiningTool) => void
   setCollectorTier: (tier: number) => void
+  setCargoFull: (full: boolean) => void
   setCombatUpgrades: (upgrades: Upgrades) => void
   /**
    * Build a new player mining drone at the ship. Returns true if a drone
@@ -783,6 +784,10 @@ export function createGameScene(
   gasStation.group.position.set(GAS_STATION_X, GAS_STATION_Y, 0)
   initGasStationNeon(gasStation.neonMeshes)
   scene.add(gasStation.group)
+
+  // Mirror of React's "is the cargo hold full?" state, pushed in via
+  // setCargoFull. Drives the station chevron during normal play.
+  let cargoFull = false
 
   // --- Directional Arrow (hidden until go-to-station tutorial step) ---
   const arrowGroup = new THREE.Group()
@@ -2084,17 +2089,20 @@ export function createGameScene(
         playPlayerHit()
       }
 
-      // Strip modules during prologue-strip — armor first, then hull, then turret.
+      // Strip modules during prologue-strip — armor first, then hull, peeling
+      // from the outside in (turret bulk → wings → core last).
       if (result.stripAdvanced) {
         const moduleNames = [
           'armorTurret', 'armorWings', 'armorBody',
-          'hullWings', 'hullCargoPods', 'hullScoop',
+          'hullTurretBulk', 'hullWings', 'hullCore',
         ]
         const phase = tickState.prologueStripPhase - 1
         if (phase >= 0 && phase < moduleNames.length) {
           const mod = shipModel.getObjectByName(moduleNames[phase])
           if (mod) {
-            shipModel.remove(mod)
+            // hullTurretBulk is parented to the turret, not the ship root —
+            // detach from whatever its actual parent is.
+            mod.parent?.remove(mod)
             mod.traverse(disposeMesh)
           }
         }
@@ -2279,7 +2287,13 @@ export function createGameScene(
       const sDist = Math.sqrt(sdx * sdx + sdy * sdy)
       const inStationRange = sDist <= 60
       const tutStep = getTutorialStep()
-      const showArrow = tutStep === 'go-to-station' || tutStep === 'approach-station'
+      // Show the station chevron during the tutorial steps that direct the
+      // player there, AND any time the cargo hold is full in normal play — so
+      // "time to cash in" is always signposted, not just during the tutorial.
+      const showArrow =
+        tutStep === 'go-to-station' ||
+        tutStep === 'approach-station' ||
+        (tutStep === 'done' && cargoFull)
       arrowGroup.visible = showArrow && !inStationRange
       if (showArrow) {
         const angle = Math.atan2(sdy, sdx)
@@ -2392,8 +2406,16 @@ export function createGameScene(
       }
 
       // Aim guide — line from ship to aim point, with reticle ring at the
-      // tip. Hidden while paused or when no aim is being tracked.
-      if (!paused && !inputLocked && aimWorldPosition && currentStep !== 'prologue-arbiter') {
+      // tip. Hidden while paused, when no aim is being tracked, during the
+      // prologue capture beat, and whenever an Arbiter tractor beam has the
+      // ship (firing is locked out then, so the reticle would lie).
+      if (
+        !paused &&
+        !inputLocked &&
+        aimWorldPosition &&
+        currentStep !== 'prologue-arbiter' &&
+        !result.playerTractorCaught
+      ) {
         const pos = aimLineGeom.attributes.position as THREE.BufferAttribute
         pos.setXYZ(0, ship.x, ship.y, 0.5)
         pos.setXYZ(1, aimWorldPosition.x, aimWorldPosition.y, 0.5)
@@ -2762,6 +2784,10 @@ export function createGameScene(
     tickState.collectorTier = Math.max(1, Math.min(5, Math.round(tier)))
   }
 
+  function setCargoFull(full: boolean) {
+    cargoFull = full
+  }
+
   function setCombatUpgrades(upgrades: Upgrades) {
     tickState.blasterTier = upgrades.blaster
     tickState.fireRateBonus = 1.1 ** (upgrades.blaster - 1)
@@ -3120,6 +3146,7 @@ export function createGameScene(
     resetShipToStation,
     setMiningTool,
     setCollectorTier,
+    setCargoFull,
     setCombatUpgrades,
     buildMiningDrone() {
       if (tickState.miningDrones.length >= tickState.miningDroneCap) return false

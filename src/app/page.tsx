@@ -455,6 +455,13 @@ export default function Home() {
     setPauseDampening(paused)
   }, [paused])
 
+  // Mirror "cargo hold full" into the scene so it can flash the station chevron
+  // once the hold is full during normal play (the scene owns the arrow; React
+  // owns the authoritative cargo count). Drives the player back to cash in.
+  useEffect(() => {
+    gameCanvasRef.current?.setCargoFull(cargo.fragments >= cargo.capacity)
+  }, [cargo.fragments, cargo.capacity])
+
   // Snapshot in-progress run stats whenever the pause menu opens. We sample
   // once per open rather than streaming so the menu doesn't trigger a render
   // every tick — the numbers freeze at the pause moment, which is what the

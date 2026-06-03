@@ -167,91 +167,135 @@ function buildArrowTurret(voxelSize: number): THREE.Group {
   return turret
 }
 
-/**
- * Hull-bulk module names. Stored as child Group names on the ship so we can
- * remove them by name when the player's tier drops (e.g. on respawn).
- */
-const HULL_MODULE_NAMES = ['hullScoop', 'hullCargoPods', 'hullWings'] as const
-
-/** Tier 1: front collector scoop (mint), evokes the prologue scoop. */
-function buildHullScoopModule(): THREE.Group {
-  const g = new THREE.Group()
-  g.name = 'hullScoop'
-  const scoop = 0x44cc88
-  addVoxel(g, -2, 3, 0, scoop)
-  addVoxel(g, 2, 3, 0, scoop)
-  addVoxel(g, -3, 2, 0, scoop)
-  addVoxel(g, 3, 2, 0, scoop)
-  return g
+/** Dispose every geometry/material under an object subtree. Shared by the
+ *  hull/armor detach paths so removed modules don't leak GPU resources. */
+function disposeModuleTree(root: THREE.Object3D): void {
+  root.traverse((obj) => {
+    if (obj instanceof THREE.Mesh) {
+      obj.geometry.dispose()
+      if (obj.material instanceof THREE.Material) obj.material.dispose()
+    }
+  })
 }
 
-/** Tier 2: rear cargo pods flanking the engine. */
-function buildHullCargoPodsModule(): THREE.Group {
+/**
+ * Hull-bulk module names, in build order. Stored as child Group names so we can
+ * remove them by name when the player's tier drops (respawn, prologue strip).
+ *
+ * Tier 1 bulks the central hull, tier 2 adds wings, tier 3 bulks the aim
+ * turret. NOTE: hullTurretBulk is parented to the `turret` group (not the ship
+ * root) so it spins with the player's aim — see applyHullModules.
+ */
+const HULL_MODULE_NAMES = ['hullCore', 'hullWings', 'hullTurretBulk'] as const
+
+/** Tier 1: raised armored deck that bulks up the central hull core. */
+function buildHullCoreModule(): THREE.Group {
   const g = new THREE.Group()
-  g.name = 'hullCargoPods'
-  const cargo = 0x888899
-  for (const side of [-1, 1]) {
-    const cx = side * 3
-    addVoxel(g, cx, -2, 0, cargo)
-    addVoxel(g, cx, -3, 0, cargo)
-    addVoxel(g, cx, -2, 0.6, cargo)
-    addVoxel(g, cx, -3, 0.6, cargo)
+  g.name = 'hullCore'
+  const plate = 0x6b7a8a // added steel plating
+  const hazard = 0xf2b21c // spine hazard stripe, echoes the base hull
+  const rib = 0x49545f // gunmetal reinforcement ribs
+  // Raised deck over the cargo midsection (3 wide × 5 long). The aim arrow
+  // floats above this and, under the top-down camera, occludes it cleanly.
+  for (let y = -2; y <= 2; y++) {
+    for (let x = -1; x <= 1; x++) {
+      const spineAccent = x === 0 && (y === -1 || y === 1)
+      addVoxel(g, x, y, 0.6, spineAccent ? hazard : plate)
+    }
+  }
+  // Corner ribs frame the deck for a chunkier, reinforced silhouette.
+  for (const x of [-1, 1]) {
+    for (const y of [-2, 2]) {
+      addVoxel(g, x, y, 0.95, rib)
+    }
   }
   return g
 }
 
-/** Tier 3: extended wings + gold accents along the hull. */
+/** Tier 2: swept-back wings flanking the hull, with lit tips. */
 function buildHullWingsModule(): THREE.Group {
   const g = new THREE.Group()
   g.name = 'hullWings'
-  const gold = 0xccaa44
-  const wingTip = 0xe89030
-  // Swept-back wings either side.
-  for (let w = 3; w <= 4; w++) {
-    const row = -w + 2
-    addVoxel(g, -w, row, 0, gold)
-    addVoxel(g, w, row, 0, gold)
+  const wing = 0x5a6675 // gunmetal wing plating
+  const tip = 0xff7a1a // engine-orange wingtip light
+  const strake = 0x49545f // raised root strake
+  for (const s of [-1, 1]) {
+    addVoxel(g, s * 3, 1, 0, wing)
+    addVoxel(g, s * 3, 0, 0, wing)
+    addVoxel(g, s * 3, -1, 0, wing)
+    addVoxel(g, s * 4, 0, 0, wing)
+    addVoxel(g, s * 4, -1, 0, wing)
+    addVoxel(g, s * 4, -2, 0, wing)
+    addVoxel(g, s * 4, -3, 0, tip) // swept tip
+    // Raised strake along the wing root so the wing reads from straight above.
+    addVoxel(g, s * 3, 0, 0.5, strake)
   }
-  addVoxel(g, -4, -2, 0, wingTip)
-  addVoxel(g, 4, -2, 0, wingTip)
-  // Gold spine accents.
-  addVoxel(g, 0, -1, 0.6, gold)
-  addVoxel(g, 0, 1, 0.6, gold)
   return g
 }
 
 /**
- * Attach/detach hull modules on the running ship to match the player's
- * `hull` upgrade tier. Tier 0 = stock ship, tier 3 = scoop + cargo + wings.
- * Idempotent — safe to call every frame, only touches the scene graph when
- * the visible set changes.
+ * Tier 3: bulks up the aim turret into a chunky multi-barrel cannon. Built in
+ * the turret's LOCAL frame (same coords as buildArrowTurret) and parented to
+ * the turret group, so the whole assembly spins to track the player's aim.
+ */
+function buildHullTurretBulkModule(): THREE.Group {
+  const g = new THREE.Group()
+  g.name = 'hullTurretBulk'
+  const housing = 0x55606e // gunmetal breech housing
+  const barrel = 0xff3333 // bright red, matches the arrow blade
+  const sight = 0x882222 // dark red scope
+  // Chunky breech housing wrapping the pivot.
+  addVoxel(g, -1, 0, 1.0, housing)
+  addVoxel(g, 1, 0, 1.0, housing)
+  addVoxel(g, -1, -1, 1.0, housing)
+  addVoxel(g, 0, -1, 1.0, housing)
+  addVoxel(g, 1, -1, 1.0, housing)
+  // Raised scope/sight above the breech.
+  addVoxel(g, 0, 0, 1.5, sight)
+  addVoxel(g, 0, 1, 1.5, barrel)
+  // Twin barrels flanking the central shaft.
+  addVoxel(g, -1, 1, 1.2, barrel)
+  addVoxel(g, 1, 1, 1.2, barrel)
+  // Widened, extended muzzle around the arrow point.
+  addVoxel(g, -1, 3, 1.2, barrel)
+  addVoxel(g, 1, 3, 1.2, barrel)
+  addVoxel(g, 0, 4, 1.2, barrel)
+  return g
+}
+
+/**
+ * Attach/detach hull modules on the running ship to match the player's `hull`
+ * upgrade tier. Tier 0 = stock ship; tier 3 = bulked core + wings + bulked
+ * turret. Idempotent — safe to call every frame; only touches the scene graph
+ * when the visible set changes.
+ *
+ * hullTurretBulk parents to the `turret` group so it rotates with aim; the
+ * other modules parent to the ship root. Removal finds each module wherever it
+ * lives (recursive getObjectByName) and detaches it from its actual parent.
  */
 export function applyHullModules(ship: THREE.Group, tier: number): void {
-  const wantScoop = tier >= 1
-  const wantCargo = tier >= 2
-  const wantWings = tier >= 3
   const wants: Record<(typeof HULL_MODULE_NAMES)[number], boolean> = {
-    hullScoop: wantScoop,
-    hullCargoPods: wantCargo,
-    hullWings: wantWings,
+    hullCore: tier >= 1,
+    hullWings: tier >= 2,
+    hullTurretBulk: tier >= 3,
   }
-  // Remove any modules that are no longer wanted.
+  // Remove any modules that are no longer wanted (detach from real parent).
   for (const name of HULL_MODULE_NAMES) {
     const existing = ship.getObjectByName(name)
     if (!wants[name] && existing) {
-      ship.remove(existing)
-      existing.traverse((obj) => {
-        if (obj instanceof THREE.Mesh) {
-          obj.geometry.dispose()
-          if (obj.material instanceof THREE.Material) obj.material.dispose()
-        }
-      })
+      existing.parent?.remove(existing)
+      disposeModuleTree(existing)
     }
   }
   // Attach any that are wanted but missing.
-  if (wantScoop && !ship.getObjectByName('hullScoop')) ship.add(buildHullScoopModule())
-  if (wantCargo && !ship.getObjectByName('hullCargoPods')) ship.add(buildHullCargoPodsModule())
-  if (wantWings && !ship.getObjectByName('hullWings')) ship.add(buildHullWingsModule())
+  if (wants.hullCore && !ship.getObjectByName('hullCore')) ship.add(buildHullCoreModule())
+  if (wants.hullWings && !ship.getObjectByName('hullWings')) ship.add(buildHullWingsModule())
+  if (wants.hullTurretBulk && !ship.getObjectByName('hullTurretBulk')) {
+    // Parent to the turret so the bulk spins with the aim arrow. Falls back to
+    // the ship root if the turret is somehow absent (it never should be).
+    const turret = ship.getObjectByName('turret')
+    ;(turret ?? ship).add(buildHullTurretBulkModule())
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -314,13 +358,8 @@ export function applyArmorModules(ship: THREE.Group, tier: number): void {
   for (const name of ARMOR_MODULE_NAMES) {
     const existing = ship.getObjectByName(name)
     if (!wants[name] && existing) {
-      ship.remove(existing)
-      existing.traverse((obj) => {
-        if (obj instanceof THREE.Mesh) {
-          obj.geometry.dispose()
-          if (obj.material instanceof THREE.Material) obj.material.dispose()
-        }
-      })
+      existing.parent?.remove(existing)
+      disposeModuleTree(existing)
     }
   }
   if (wants.armorBody && !ship.getObjectByName('armorBody')) ship.add(buildArmorBodyModule())

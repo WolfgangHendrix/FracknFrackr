@@ -443,19 +443,19 @@ export function applyTractorPull(
   arbiter: ArbiterState,
   ship: Ship,
   dt: number,
-): { captureDamage: number } {
-  if (!arbiter.tractorActive) return { captureDamage: 0 }
+): { captureDamage: number; caught: boolean } {
+  if (!arbiter.tractorActive) return { captureDamage: 0, caught: false }
 
   const dx = ship.x - arbiter.x
   const dy = ship.y - arbiter.y
   const dist = Math.hypot(dx, dy) || 1
-  if (dist > TRACTOR_RANGE) return { captureDamage: 0 }
+  if (dist > TRACTOR_RANGE) return { captureDamage: 0, caught: false }
 
   // Inside the capture cone?
   let diff = Math.atan2(dy, dx) - arbiter.tractorAngle
   while (diff > Math.PI) diff -= Math.PI * 2
   while (diff < -Math.PI) diff += Math.PI * 2
-  if (Math.abs(diff) > TRACTOR_CONE_HALF_ANGLE) return { captureDamage: 0 }
+  if (Math.abs(diff) > TRACTOR_CONE_HALF_ANGLE) return { captureDamage: 0, caught: false }
 
   // Caught — the beam hauls the ship in, wrenches its heading off-course, and
   // bleeds its speed so the player can't just hold thrust and power straight out.
@@ -480,9 +480,9 @@ export function applyTractorPull(
     const knockback = 95
     ship.velocityX = (dx / dist) * knockback
     ship.velocityY = (dy / dist) * knockback
-    return { captureDamage: TRACTOR_CAPTURE_DAMAGE }
+    return { captureDamage: TRACTOR_CAPTURE_DAMAGE, caught: true }
   }
-  return { captureDamage: 0 }
+  return { captureDamage: 0, caught: true }
 }
 
 // ---------------------------------------------------------------------------
