@@ -278,6 +278,10 @@ export interface EnemyShip {
   formationSlotY: number
   /** True while still flying the V-formation; false once the wing has broken. */
   inFormation: boolean
+  /** Shared id for a formation-entry forcefield. Null for non-formation ships. */
+  formationShieldId: string | null
+  /** True while the formation-entry forcefield should absorb player damage. */
+  formationShieldActive: boolean
   /** World heading the wing is sweeping along, radians. */
   swoopBearing: number
   /** Player-distance at which the leader breaks formation. */
@@ -784,6 +788,8 @@ export function createEnemyShip(
     formationSlotX: 0,
     formationSlotY: 0,
     inFormation: false,
+    formationShieldId: null,
+    formationShieldActive: false,
     swoopBearing: 0,
     engageDistance: WEDGE_ENGAGE_DISTANCE,
     lifeTimer: 0,
@@ -1136,7 +1142,10 @@ function updateHornetAI(
   if (enemy.idleTimer <= 0) {
     enemy.idling = !enemy.idling
     enemy.idleTimer = enemy.idling ? HORNET_REGROUP_TIME : HORNET_DIVE_TIME
-    if (!enemy.idling) enemy.strafeDir = Math.random() < 0.5 ? 1 : -1
+    if (!enemy.idling) {
+      enemy.inFormation = false
+      enemy.strafeDir = Math.random() < 0.5 ? 1 : -1
+    }
   }
 
   let desired: number
@@ -1660,10 +1669,12 @@ export function checkProjectileEnemyCollisions(
     }
 
     if (closestDistSq < minDist * minDist) {
-      enemy.hp = Math.max(0, enemy.hp - p.damage)
       hitProjectileIds.push(p.id)
-      if (enemy.hp <= 0) {
-        enemy.alive = false
+      if (!enemy.formationShieldActive) {
+        enemy.hp = Math.max(0, enemy.hp - p.damage)
+        if (enemy.hp <= 0) {
+          enemy.alive = false
+        }
       }
     } else {
       surviving.push(p)
@@ -1722,11 +1733,6 @@ export function checkBeamEnemyCollisions(
     return { hit: false, t: 1, killed: false }
   }
 
-  const effective = damage * LAZER_DAMAGE_MULTIPLIER
-  enemy.hp = Math.max(0, enemy.hp - effective)
-  const killed = enemy.hp <= 0
-  if (killed) enemy.alive = false
-
   const dx = endX - startX
   const dy = endY - startY
   const lenSq = dx * dx + dy * dy
@@ -1734,6 +1740,16 @@ export function checkBeamEnemyCollisions(
   if (lenSq > 0.0001) {
     t = Math.max(0, Math.min(1, ((enemy.x - startX) * dx + (enemy.y - startY) * dy) / lenSq))
   }
+
+  if (enemy.formationShieldActive) {
+    return { hit: true, t, killed: false }
+  }
+
+  const effective = damage * LAZER_DAMAGE_MULTIPLIER
+  enemy.hp = Math.max(0, enemy.hp - effective)
+  const killed = enemy.hp <= 0
+  if (killed) enemy.alive = false
+
   return { hit: true, t, killed }
 }
 

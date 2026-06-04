@@ -1,7 +1,13 @@
 import type { Ship } from '@/lib/schemas'
 import type { InputState, AimState } from './input'
 import { inputToDirection } from './input'
-import { SHIP_ACCELERATION, SHIP_MAX_SPEED, SHIP_FRICTION, SHIP_TURN_RATE } from './ship-constants'
+import {
+  SHIP_ACCELERATION,
+  SHIP_MAX_SPEED,
+  SHIP_FRICTION,
+  SHIP_TURN_RATE,
+  BOOST_MULTIPLIER,
+} from './ship-constants'
 
 /** Speed (units/sec) below which the hull keeps its current heading. */
 const HEADING_HOLD_SPEED = 4
@@ -64,8 +70,9 @@ export function updateShip(ship: Ship, input: InputState, dt: number, speedMulti
   const [dx, dy] = inputToDirection(input)
   // Thruster Vectoring boost burst — short window, big multiplier so the
   // burst feels punchy. Gameplay logic in game-tick gates this on the
-  // upgrade + cooldown, so this stays a dumb multiplier here.
-  const boostMultiplier = input.boost ? 2 : 1
+  // upgrade + cooldown and applies the instant velocity kick, so this stays a
+  // dumb multiplier here. The raised cap lets the kicked velocity persist.
+  const boostMultiplier = input.boost ? BOOST_MULTIPLIER : 1
   const accelMultiplier = speedMultiplier * boostMultiplier
 
   // Apply acceleration

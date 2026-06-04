@@ -17,6 +17,8 @@ import {
   setRetroMode,
 } from '@/game/pause-settings'
 import { LeaderboardMenu } from './LeaderboardMenu'
+import { AchievementsMenu } from './AchievementsMenu'
+import type { AchievementListItem } from './AchievementsMenu'
 
 // ---------------------------------------------------------------------------
 // Input-mode detection (keyboard / gamepad / touch)
@@ -61,6 +63,7 @@ const KEYBOARD_ROWS: ControlRow[] = [
   { binding: 'Mouse', action: 'Aim' },
   { binding: 'Left Click', action: 'Fire' },
   { binding: 'Right Click / E / Space', action: 'Collect' },
+  { binding: 'Shift', action: 'Boost' },
   { binding: 'Q', action: 'Toggle mining tool' },
   { binding: '1 / 2 / 3', action: 'Blaster / Lazer / Ripple' },
   { binding: 'ESC', action: 'Pause' },
@@ -69,7 +72,7 @@ const KEYBOARD_ROWS: ControlRow[] = [
 const GAMEPAD_ROWS: ControlRow[] = [
   { binding: 'Left Stick', action: 'Move' },
   { binding: 'Right Stick', action: 'Aim & Fire' },
-  { binding: 'Right Trigger (RT)', action: 'Fire-lock toggle' },
+  { binding: 'Left / Right Trigger', action: 'Boost' },
   { binding: 'A', action: 'Confirm / collect' },
   { binding: 'B', action: 'Back / cancel' },
   { binding: 'Y', action: 'Toggle mining tool' },
@@ -190,6 +193,7 @@ interface PauseOverlayProps {
   onEnterPhotoMode: () => void
   /** Snapshot of run stats. Null when no run is in progress. */
   runStats: PauseRunStats | null
+  achievementItems: AchievementListItem[]
 }
 
 // ---------------------------------------------------------------------------
@@ -305,6 +309,7 @@ export function PauseOverlay({
   onQuitToTitle,
   onEnterPhotoMode,
   runStats,
+  achievementItems,
 }: PauseOverlayProps) {
   // Volume sliders — initialized from the persisted volume-control values.
   // We read on mount only; the persisted store is the source of truth.
@@ -328,6 +333,7 @@ export function PauseOverlay({
   // Optional sub-views — leaderboard peek and How-to-play are rendered
   // modal-style on top of the main pause panel; closing returns to the menu.
   const [leaderboardOpen, setLeaderboardOpen] = useState(false)
+  const [achievementsOpen, setAchievementsOpen] = useState(false)
   const [howToPlayOpen, setHowToPlayOpen] = useState(false)
 
   const fullscreen = useFullscreen()
@@ -357,6 +363,10 @@ export function PauseOverlay({
         <LeaderboardMenu onBack={() => setLeaderboardOpen(false)} />
       </div>
     )
+  }
+
+  if (achievementsOpen) {
+    return <AchievementsMenu items={achievementItems} onBack={() => setAchievementsOpen(false)} />
   }
 
   // Sub-view: How to Play — a single-page gameplay loop primer. Kept inline
@@ -439,6 +449,7 @@ export function PauseOverlay({
             label={fullscreen.isFullscreen ? 'EXIT FULLSCREEN' : 'FULLSCREEN'}
             onClick={fullscreen.toggle}
           />
+          <ActionButton label="ACHIEVEMENTS" onClick={() => setAchievementsOpen(true)} />
           <ActionButton label="LEADERBOARD" onClick={() => setLeaderboardOpen(true)} />
           <ActionButton label="RESTART RUN" onClick={onRestart} variant="danger" />
           <ActionButton label="QUIT TO TITLE" onClick={onQuitToTitle} variant="danger" />

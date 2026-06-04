@@ -2,7 +2,7 @@ import type * as THREE from 'three'
 import type { ScreenShake } from './screen-shake'
 
 export interface CinematicCamera {
-  update: (dt: number, shipX: number, shipY: number, shipVX: number, shipVY: number, combatIntensity: number, screenShake: ScreenShake) => void
+  update: (dt: number, shipX: number, shipY: number, shipVX: number, shipVY: number, combatIntensity: number, screenShake: ScreenShake, boostIntensity?: number) => void
   getFOV: () => number
   getZoom: () => number
   setBaseFOV: (fov: number) => void
@@ -17,6 +17,10 @@ const LEAD_FACTOR = 0.18
 const BASE_FOV = 50
 const COMBAT_ZOOM_FOV = 44
 const COMBAT_ZOOM_SPEED = 3
+/** Extra degrees the FOV tightens at full boost — brings the camera a little closer. */
+const BOOST_ZOOM_FOV = 6
+/** How fast the boost tighten ramps in/out — snappy so the dash reads. */
+const BOOST_ZOOM_SPEED = 8
 
 export function createCinematicCamera(camera: THREE.PerspectiveCamera): CinematicCamera {
   let currentFOV = BASE_FOV
@@ -25,8 +29,11 @@ export function createCinematicCamera(camera: THREE.PerspectiveCamera): Cinemati
   let zoomDuration = 0
   let zoomAmount = 0
   let pulseTimer = 0
+  let boostZoom = 0
 
-  function update(dt: number, shipX: number, shipY: number, shipVX: number, shipVY: number, combatIntensity: number, screenShake: ScreenShake): void {
+  function update(dt: number, shipX: number, shipY: number, shipVX: number, shipVY: number, combatIntensity: number, screenShake: ScreenShake, boostIntensity = 0): void {
+    // Keep the normal lead during boost — extra lead-ahead shoved the ship off
+    // the edge of the frame. The boost sells speed via the FOV tighten below.
     const targetCamX = shipX + shipVX * LEAD_FACTOR
     const targetCamY = shipY + shipVY * LEAD_FACTOR
 
@@ -55,7 +62,12 @@ export function createCinematicCamera(camera: THREE.PerspectiveCamera): Cinemati
 
     const fovDiff = targetFOV - currentFOV
     currentFOV += fovDiff * Math.min(1, COMBAT_ZOOM_SPEED * dt)
-    camera.fov = currentFOV
+
+    // Boost tighten rides on top of the combat-zoom FOV with its own fast ramp,
+    // so a tap snaps the view in and it eases back out when the burst ends.
+    boostZoom += (boostIntensity * BOOST_ZOOM_FOV - boostZoom) * Math.min(1, BOOST_ZOOM_SPEED * dt)
+
+    camera.fov = currentFOV - boostZoom
     camera.updateProjectionMatrix()
   }
 

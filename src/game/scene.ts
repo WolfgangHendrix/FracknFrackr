@@ -84,6 +84,7 @@ import {
   playExplosion,
   playPlayerHit,
   playKlaxon,
+  playBoostWhoosh,
   startEngineSound,
   updateEngineSound,
   suspendEngineSound,
@@ -120,6 +121,7 @@ import { BLACK_HOLE_EVENT_HORIZON_RADIUS } from './black-hole-constants'
 import { createEngineTrail, updateEngineTrail, disposeEngineTrail } from './engine-trail'
 import type { EngineTrail } from './engine-trail'
 import { createWarpStreaks, updateWarpStreaks, disposeWarpStreaks } from './warp-streaks'
+import { createSpeedLines, updateSpeedLines, disposeSpeedLines } from './speed-lines'
 import {
   createEnemyShip,
   disposeEnemyProjectile,
@@ -152,6 +154,13 @@ import { createRetroRenderer } from './retro-mode'
 import type { TutorialStep } from '@/hooks/useTutorial'
 import type { Upgrades } from '@/lib/schemas'
 
+interface FormationShieldVisual {
+  group: THREE.Group
+  ring: THREE.Mesh
+  fill: THREE.Mesh
+  pulse: number
+}
+
 function disposeMesh(obj: THREE.Object3D): void {
   if (obj instanceof THREE.Mesh) {
     obj.geometry.dispose()
@@ -167,6 +176,34 @@ function disposeMesh(obj: THREE.Object3D): void {
       obj.material.dispose()
     }
   }
+}
+
+function createFormationShieldVisual(): FormationShieldVisual {
+  const group = new THREE.Group()
+  const fillMat = new THREE.MeshBasicMaterial({
+    color: 0x45f3ff,
+    transparent: true,
+    opacity: 0.12,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  })
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0x8ff8ff,
+    transparent: true,
+    opacity: 0.62,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  })
+  const fill = new THREE.Mesh(new THREE.CircleGeometry(1, 48), fillMat)
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(1, 0.035, 8, 72), ringMat)
+  fill.renderOrder = 10
+  ring.renderOrder = 11
+  group.add(fill, ring)
+  return { group, ring, fill, pulse: Math.random() * Math.PI * 2 }
+}
+
+function disposeFormationShieldVisual(visual: FormationShieldVisual): void {
+  visual.group.traverse(disposeMesh)
 }
 
 const CAMERA_HEIGHT = 150
@@ -216,12 +253,13 @@ export interface GameSceneOptions {
   onCollect?: (variant: MetalVariant) => void
   onShipMoved?: () => void
   onAsteroidHit?: () => void
+  onAsteroidsDestroyed?: (count: number) => void
   onMetalSpawned?: () => void
   onMetalCollected?: () => void
   onPlayerDamage?: (hp: number) => void
   onScrapCollect?: (amount: number) => void
   onEnemyNearby?: () => void
-  onEnemyDestroyed?: () => void
+  onEnemyDestroyed?: (kind?: EnemyKind) => void
   onScrapCollected?: () => void
   onNearStation?: () => void
   onStationRange?: (inRange: boolean) => void
@@ -234,6 +272,7 @@ export interface GameSceneOptions {
    *  opening the trade menu. */
   onStationContactBlocked?: () => void
   onStationDriveThrough?: () => void
+  onRallyPointSet?: () => void
   onToolChange?: (tool: MiningTool) => void
   /** Endless mode — fired when the integer Ledger value changes. */
   onLedgerChanged?: (ledger: number) => void
@@ -246,6 +285,10 @@ export interface GameSceneOptions {
   onShieldChanged?: (charges: number) => void
   /** Fires whenever the active mining drone count changes (build/destroy). */
   onMiningDroneCountChanged?: (count: number) => void
+  /** Fires when drones deposit scrap back at the ship. */
+  onDroneScrapDelivered?: (amount: number, dockedCount: number) => void
+  /** Fires when Drone Repair Bay rebuilds a drone. */
+  onDroneRebuilt?: () => void
   onArmorChanged?: (charges: number) => void
   /** Fires when a hull module is torn off by a hit (or restocked at the trade
    *  station). Page mirrors the value into upgrades.hull. */
@@ -256,6 +299,10 @@ export interface GameSceneOptions {
    *  the page layer is responsible for any cross-session "already seen"
    *  persistence. */
   onBlackHoleNearby?: () => void
+  /** Fires when the player backs out of the black-hole warning radius after entering it. */
+  onBlackHoleEscaped?: () => void
+  /** Fires when Drill Nose finishes one or more asteroids this tick. */
+  onDrillNoseAsteroidFinished?: (count: number) => void
   /** Fires once per scene the first time any defensive layer absorbs a hit
    *  (shield / hull module / armor). Used to surface the defense-system
    *  explainer popup the moment the mechanic first matters. */
@@ -403,6 +450,7 @@ export function createGameScene(
   const onCollect = options?.onCollect
   const onShipMoved = options?.onShipMoved
   const onAsteroidHit = options?.onAsteroidHit
+  const onAsteroidsDestroyed = options?.onAsteroidsDestroyed
   const onMetalSpawned = options?.onMetalSpawned
   const onMetalCollected = options?.onMetalCollected
   const onPlayerDamage = options?.onPlayerDamage
@@ -415,6 +463,7 @@ export function createGameScene(
   const onStationContact = options?.onStationContact
   const onStationContactBlocked = options?.onStationContactBlocked
   const onStationDriveThrough = options?.onStationDriveThrough
+  const onRallyPointSet = options?.onRallyPointSet
   const onToolChange = options?.onToolChange
   const onLedgerChanged = options?.onLedgerChanged
   const onArbiterChanged = options?.onArbiterChanged
@@ -422,10 +471,14 @@ export function createGameScene(
   const onRunEnded = options?.onRunEnded
   const onShieldChanged = options?.onShieldChanged
   const onMiningDroneCountChanged = options?.onMiningDroneCountChanged
+  const onDroneScrapDelivered = options?.onDroneScrapDelivered
+  const onDroneRebuilt = options?.onDroneRebuilt
   const onArmorChanged = options?.onArmorChanged
   const onHullChanged = options?.onHullChanged
   const onSmartBomb = options?.onSmartBomb
   const onBlackHoleNearby = options?.onBlackHoleNearby
+  const onBlackHoleEscaped = options?.onBlackHoleEscaped
+  const onDrillNoseAsteroidFinished = options?.onDrillNoseAsteroidFinished
   const onFirstDefensiveHit = options?.onFirstDefensiveHit
   const onFirstFormation = options?.onFirstFormation
   const onFirstSplitter = options?.onFirstSplitter
@@ -467,6 +520,7 @@ export function createGameScene(
       tickState.rallyPoint = null
     } else {
       tickState.rallyPoint = world
+      onRallyPointSet?.()
     }
   }
   if (radar) {
@@ -963,6 +1017,10 @@ export function createGameScene(
   const warpStreaks = createWarpStreaks()
   scene.add(warpStreaks.group)
 
+  // --- Speed Lines (directional boost-dash effect) ---
+  const speedLines = createSpeedLines()
+  scene.add(speedLines.group)
+
   // Hit counts are tracked in tickState.asteroidHitCounts
 
   // --- Input ---
@@ -984,7 +1042,7 @@ export function createGameScene(
   aimJoystick.attach()
 
   // --- Gamepad (XInput / Xbox 360 mapping) ---
-  // Left stick → movement, right stick → aim + fire, RT → toggle fire-lock.
+  // Left stick → movement, right stick → aim + fire, LT / RT → boost.
   const gamepad = createGamepadHandler(inputState, aimState, container)
   gamepad.attach()
   let lazerUnlocked = true
@@ -1160,6 +1218,7 @@ export function createGameScene(
   // scene mount — cross-session "already seen" persistence lives in the
   // page layer (per-slot localStorage flag).
   let blackHoleWarnFired = false
+  let blackHoleWarningActive = false
   let blackHoleMaxDistFromStation = 0
   let blackHoleNextRing = 0
 
@@ -1169,6 +1228,7 @@ export function createGameScene(
   let firstDefensiveHitFired = false
   let firstFormationFired = false
   let firstSplitterFired = false
+  const formationShieldVisuals = new Map<string, FormationShieldVisual>()
 
   // --- Tab visibility ---
   // Browsers throttle requestAnimationFrame to ~1 Hz while a tab is hidden,
@@ -1200,6 +1260,7 @@ export function createGameScene(
   let prevLedgerInt = -1
   let prevArbiterKey = ''
   let prevTractorActive = false
+  let prevBoostActive = false
   let lastContinuousWeaponSfxAt = 0
 
   function triggerEnemyDamageFeedback(
@@ -1251,6 +1312,72 @@ export function createGameScene(
     const falloff = Math.max(0, (shakeUntil - nowSeconds) / 0.16)
     enemy.mesh.position.x += (Math.random() - 0.5) * power * falloff
     enemy.mesh.position.y += (Math.random() - 0.5) * power * falloff
+  }
+
+  function syncFormationShieldVisuals(dt: number): void {
+    const groups = new Map<string, EnemyShip[]>()
+    for (const enemy of tickState.ambushEnemies) {
+      if (!enemy.alive || !enemy.formationShieldActive || !enemy.formationShieldId) continue
+      const members = groups.get(enemy.formationShieldId)
+      if (members) {
+        members.push(enemy)
+      } else {
+        groups.set(enemy.formationShieldId, [enemy])
+      }
+    }
+
+    for (const [id, members] of groups) {
+      let visual = formationShieldVisuals.get(id)
+      if (!visual) {
+        visual = createFormationShieldVisual()
+        formationShieldVisuals.set(id, visual)
+        scene.add(visual.group)
+      }
+
+      let minX = Infinity
+      let minY = Infinity
+      let maxX = -Infinity
+      let maxY = -Infinity
+      for (const enemy of members) {
+        minX = Math.min(minX, enemy.x - enemy.collisionRadius)
+        minY = Math.min(minY, enemy.y - enemy.collisionRadius)
+        maxX = Math.max(maxX, enemy.x + enemy.collisionRadius)
+        maxY = Math.max(maxY, enemy.y + enemy.collisionRadius)
+      }
+
+      const centerX = (minX + maxX) / 2
+      const centerY = (minY + maxY) / 2
+      const radiusX = Math.max(10, (maxX - minX) / 2 + 8)
+      const radiusY = Math.max(10, (maxY - minY) / 2 + 8)
+      visual.pulse += dt * 5.5
+      const pulse = 1 + Math.sin(visual.pulse) * 0.05
+      visual.group.position.set(centerX, centerY, 0.18)
+      visual.group.scale.set(radiusX * pulse, radiusY * pulse, 1)
+
+      const fillMat = visual.fill.material
+      if (fillMat instanceof THREE.MeshBasicMaterial) {
+        fillMat.opacity = 0.09 + (Math.sin(visual.pulse * 0.9) + 1) * 0.025
+      }
+      const ringMat = visual.ring.material
+      if (ringMat instanceof THREE.MeshBasicMaterial) {
+        ringMat.opacity = 0.48 + (Math.sin(visual.pulse) + 1) * 0.12
+      }
+    }
+
+    for (const [id, visual] of formationShieldVisuals) {
+      if (groups.has(id)) continue
+      scene.remove(visual.group)
+      disposeFormationShieldVisual(visual)
+      formationShieldVisuals.delete(id)
+    }
+  }
+
+  function clearFormationShieldVisuals(): void {
+    for (const visual of formationShieldVisuals.values()) {
+      scene.remove(visual.group)
+      disposeFormationShieldVisual(visual)
+    }
+    formationShieldVisuals.clear()
   }
 
   function syncOptionOrbs(): void {
@@ -1341,7 +1468,7 @@ export function createGameScene(
       fireTarget = null
     }
 
-    // Gamepad fire (right stick past deadzone OR fire-lock engaged with last aim)
+    // Gamepad fire (right stick past deadzone)
     if (!paused && !inputLocked && gamepadResult.firing && aimState.active) {
       const w = screenToWorld(aimState.screenX, aimState.screenY)
       tickState.fireTarget = { x: w.x, y: w.y }
@@ -1825,10 +1952,12 @@ export function createGameScene(
           ae.mesh.rotation.z = ae.rotation
         }
       }
+      syncFormationShieldVisuals(dt)
 
       // --- Fire callbacks from tick result ---
       if (result.shipMoved) onShipMoved?.()
       if (result.asteroidHit) onAsteroidHit?.()
+      if (result.asteroidsDestroyed > 0) onAsteroidsDestroyed?.(result.asteroidsDestroyed)
       if (result.metalSpawned) onMetalSpawned?.()
       for (const mc of result.metalCollected) {
         onCollect?.(mc.variant)
@@ -1840,12 +1969,15 @@ export function createGameScene(
         onScrapCollected?.()
       }
       if (result.enemyNearby) onEnemyNearby?.()
-      if (result.enemyDestroyedEvent) onEnemyDestroyed?.()
+      for (const kind of result.playerDestroyedEnemyKinds) onEnemyDestroyed?.(kind)
       if (result.nearStation) onNearStation?.()
       if (result.stationRangeChanged !== null) onStationRange?.(result.stationRangeChanged)
       if (result.stationRepaired) onStationDriveThrough?.()
       if (result.stationContactRequest) onStationContact?.()
       if (result.stationContactBlocked) onStationContactBlocked?.()
+      if (result.drillNoseAsteroidFinishes > 0) {
+        onDrillNoseAsteroidFinished?.(result.drillNoseAsteroidFinishes)
+      }
 
       if (result.smartBombDetonated) {
         addTrauma(screenShake, 1.2)
@@ -1888,8 +2020,9 @@ export function createGameScene(
         onLedgerChanged?.(ledgerInt)
       }
 
-      // --- Arbiter visual management (prologue intro OR endless boss) ---
-      const wantArbiter = tickState.prologueArbiterSpawned || tickState.arbiter !== null
+      // --- Arbiter visual management (prologue intro OR endless boss/enforcer) ---
+      const visibleArbiter = tickState.arbiter ?? tickState.runawayEnforcer
+      const wantArbiter = tickState.prologueArbiterSpawned || visibleArbiter !== null
       if (wantArbiter && !arbiterModel) {
         arbiterModel = createArbiterModel()
         scene.add(arbiterModel)
@@ -1899,9 +2032,9 @@ export function createGameScene(
         arbiterModel = null
       }
       if (arbiterModel) {
-        if (tickState.arbiter) {
-          arbiterModel.position.set(tickState.arbiter.x, tickState.arbiter.y, 0)
-          arbiterModel.rotation.z = tickState.arbiter.rotation
+        if (visibleArbiter) {
+          arbiterModel.position.set(visibleArbiter.x, visibleArbiter.y, 0)
+          arbiterModel.rotation.z = visibleArbiter.rotation
         } else {
           // Prologue: game-tick drives the scripted approach distance.
           arbiterModel.position.set(ship.x, ship.y + tickState.prologueArbiterDistance, 0)
@@ -2054,7 +2187,7 @@ export function createGameScene(
       // The boss bar tracks the primary; if it falls first during a twin
       // encounter, fall back to the surviving escort so the bar doesn't blink
       // out while a boss is still on the field.
-      const arb = tickState.arbiter ?? tickState.arbiterEscort
+      const arb = tickState.arbiter ?? tickState.runawayEnforcer ?? tickState.arbiterEscort
       const arbiterKey = arb ? `${arb.mark}:${Math.ceil(arb.hp)}:${arb.phase}` : 'none'
       if (arbiterKey !== prevArbiterKey) {
         prevArbiterKey = arbiterKey
@@ -2244,6 +2377,32 @@ export function createGameScene(
         })
       }
 
+      // --- Boost feedback: whoosh + camera punch on activation, light rumble while held ---
+      const boostActive = tickState.boostActiveTimer > 0
+      if (boostActive && !prevBoostActive) {
+        playBoostWhoosh()
+        cineCam.impactPulse()
+        addTrauma(screenShake, 0.35)
+      }
+      // A little sustained shake for the duration of the dash (frame-rate
+      // independent; finds a low equilibrium against the shake's own decay).
+      if (boostActive) addTrauma(screenShake, 0.9 * dt)
+      prevBoostActive = boostActive
+
+      // --- Speed Lines (directional dash streaks along the ship's travel) ---
+      const boostSpeed = Math.sqrt(ship.velocityX * ship.velocityX + ship.velocityY * ship.velocityY)
+      const boostDir = Math.atan2(ship.velocityY, ship.velocityX)
+      updateSpeedLines(
+        speedLines,
+        dt,
+        boostActive,
+        ship.x,
+        ship.y,
+        boostDir,
+        boostSpeed,
+        tickState.elapsedTime,
+      )
+
       // --- Warp Streaks (active when Arbiter takes control) ---
       const currentStep = getTutorialStep()
       const warpActive =
@@ -2352,6 +2511,7 @@ export function createGameScene(
       if (result.destroyedDroneIds.length > 0 || result.droneRebuilt) {
         onMiningDroneCountChanged?.(tickState.miningDrones.length)
       }
+      if (result.droneRebuilt) onDroneRebuilt?.()
       const liveDroneIds = new Set<string>()
       for (const drone of tickState.miningDrones) {
         liveDroneIds.add(drone.id)
@@ -2403,6 +2563,7 @@ export function createGameScene(
       // scrap-collect callback so the HUD updates and the save triggers.
       if (result.droneScrapDelivered > 0) {
         onScrapCollect?.(result.droneScrapDelivered)
+        onDroneScrapDelivered?.(result.droneScrapDelivered, result.droneDockCount)
       }
 
       // Aim guide — line from ship to aim point, with reticle ring at the
@@ -2506,7 +2667,8 @@ export function createGameScene(
         if (inputState.left) camera.position.x -= pan
         if (inputState.right) camera.position.x += pan
       } else {
-        cineCam.update(dt, ship.x, ship.y, ship.velocityX, ship.velocityY, combatIntensity, screenShake)
+        const boostIntensity = tickState.boostActiveTimer > 0 ? 1 : 0
+        cineCam.update(dt, ship.x, ship.y, ship.velocityX, ship.velocityY, combatIntensity, screenShake, boostIntensity)
       }
 
       stars.position.x = camera.position.x * 0.5
@@ -2517,6 +2679,8 @@ export function createGameScene(
       const sirenArb =
         tickState.arbiter?.mode === 'hunting'
           ? tickState.arbiter
+          : tickState.runawayEnforcer?.mode === 'hunting'
+            ? tickState.runawayEnforcer
           : tickState.arbiterEscort?.mode === 'hunting'
             ? tickState.arbiterEscort
             : null
@@ -2547,6 +2711,12 @@ export function createGameScene(
         } else {
           stopArbiterSiren()
         }
+        if (closestHoleDist <= BLACK_HOLE_WARN_RADIUS) {
+          blackHoleWarningActive = true
+        } else if (blackHoleWarningActive) {
+          blackHoleWarningActive = false
+          onBlackHoleEscaped?.()
+        }
         if (!blackHoleWarnFired && closestHoleDist <= BLACK_HOLE_WARN_RADIUS) {
           blackHoleWarnFired = true
           onBlackHoleNearby?.()
@@ -2570,6 +2740,10 @@ export function createGameScene(
           shipRotation: ship.rotation,
           asteroids: asteroids.filter((a) => a.hp > 0),
           enemies: radarEnemies,
+          blackHoles: blackHoles.map((h) => ({
+            x: h.x + camera.position.x * 0.1,
+            y: h.y + camera.position.y * 0.1,
+          })),
           drones: tickState.miningDrones.map((d) => ({ x: d.x, y: d.y, state: d.state })),
           station: { x: GAS_STATION_X, y: GAS_STATION_Y },
           arbiter: arbiterModel ? { x: arbiterModel.position.x, y: arbiterModel.position.y } : null,
@@ -2674,6 +2848,7 @@ export function createGameScene(
     for (const beam of optionLazerBeams) disposeLazerBeam(beam)
     disposeRippleBeam(rippleBeam)
     disposeTractorBeam(tractorBeam)
+    clearFormationShieldVisuals()
 
     // Clean up explosions
     for (const e of explosions) {
@@ -2748,6 +2923,7 @@ export function createGameScene(
     for (const h of blackHoles) disposeBlackHole(h)
     disposeEngineTrail(engineTrail)
     disposeWarpStreaks(warpStreaks)
+    disposeSpeedLines(speedLines)
 
     // Clean up new visual systems
     bloom.dispose()
@@ -2915,9 +3091,13 @@ export function createGameScene(
     tickState.asteroidSpawnCounter = 1
     tickState.arbiter = null
     tickState.arbiterEscort = null
+    tickState.runawayEnforcer = null
+    tickState.runawayEnforcerMark = 0
+    tickState.runawayEnforcerTimer = 0
     tickState.arbiterMark = 0
     prevLedgerInt = -1
     prevArbiterKey = ''
+    blackHoleWarningActive = false
     onLedgerChanged?.(0)
     onArbiterChanged?.(null)
 
@@ -2945,6 +3125,7 @@ export function createGameScene(
       disposeEnemyShip(ae)
     }
     tickState.ambushEnemies.length = 0
+    clearFormationShieldVisuals()
 
     // Remove all enemy projectiles
     for (let i = tickState.enemyProjectiles.length - 1; i >= 0; i--) {
@@ -3029,6 +3210,9 @@ export function createGameScene(
     // Drop the Arbiter
     tickState.arbiter = null
     tickState.arbiterEscort = null
+    tickState.runawayEnforcer = null
+    tickState.runawayEnforcerMark = 0
+    tickState.runawayEnforcerTimer = 0
     tickState.arbiterMark = 0
 
     // Remove all enemies
@@ -3037,6 +3221,7 @@ export function createGameScene(
       disposeEnemyShip(ae)
     }
     tickState.ambushEnemies.length = 0
+    clearFormationShieldVisuals()
     if (tickState.enemy) {
       scene.remove(tickState.enemy.mesh)
       disposeEnemyShip(tickState.enemy)
@@ -3121,6 +3306,8 @@ export function createGameScene(
     prevLedgerInt = -1
     prevArbiterKey = ''
     prevTractorActive = false
+    prevBoostActive = false
+    blackHoleWarningActive = false
     onLedgerChanged?.(0)
     onArbiterChanged?.(null)
 
@@ -3279,6 +3466,7 @@ export function createGameScene(
           disposeEnemyShip(ae)
         }
         tickState.ambushEnemies.length = 0
+        clearFormationShieldVisuals()
         if (tickState.enemy) {
           scene.remove(tickState.enemy.mesh)
           disposeEnemyShip(tickState.enemy)
@@ -3286,6 +3474,9 @@ export function createGameScene(
         }
         tickState.arbiter = null
         tickState.arbiterEscort = null
+        tickState.runawayEnforcer = null
+        tickState.runawayEnforcerMark = 0
+        tickState.runawayEnforcerTimer = 0
         tickState.arbiterMark = 0
       },
 

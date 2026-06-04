@@ -38,11 +38,12 @@ export function SplitterTutorialPopup({ visible, onDismiss }: SplitterTutorialPo
 
   return (
     <div
-      className="absolute inset-0 z-50 flex items-center justify-center bg-black/65 p-4"
+      className="absolute inset-0 z-[60] flex items-center justify-center bg-black/65 p-4"
       data-testid="splitter-tutorial-popup"
     >
       <button
         data-menu-item
+        data-menu-default
         data-menu-back
         onClick={onDismiss}
         aria-label="Dismiss"

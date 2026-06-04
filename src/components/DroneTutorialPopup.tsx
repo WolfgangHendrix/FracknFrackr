@@ -42,11 +42,12 @@ export function DroneTutorialPopup({ visible, onDismiss }: DroneTutorialPopupPro
 
   return (
     <div
-      className="absolute inset-0 z-50 flex items-center justify-center bg-black/70"
+      className="absolute inset-0 z-[60] flex items-center justify-center bg-black/70"
       data-testid="drone-tutorial-popup"
     >
       <button
         data-menu-item
+        data-menu-default
         data-menu-back
         onClick={onDismiss}
         aria-label="Dismiss"

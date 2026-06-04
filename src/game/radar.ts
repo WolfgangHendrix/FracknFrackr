@@ -56,6 +56,7 @@ export interface RadarData {
   shipRotation: number
   asteroids: RadarBlip[]
   enemies: RadarBlip[]
+  blackHoles: RadarBlip[]
   drones: DroneBlip[]
   station: RadarBlip | null
   arbiter: RadarBlip | null
@@ -233,10 +234,37 @@ export function updateRadar(radar: Radar, data: RadarData): void {
     drawDiamond(ctx, px, py, 4.5, '#00ff88')
   }
 
+  // --- Black holes — persistent hazard markers, pinned at every tier ---
+  const pulse = 0.55 + 0.45 * Math.sin(performance.now() / 180)
+  for (const h of data.blackHoles) {
+    const { px, py, clamped } = project(h.x, h.y)
+    const r = clamped ? 4.2 : 5.5
+    ctx.strokeStyle = `rgba(255, 82, 48, ${(0.65 + pulse * 0.3).toFixed(3)})`
+    ctx.lineWidth = clamped ? 1.3 : 1.6
+    ctx.beginPath()
+    ctx.arc(px, py, r, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.fillStyle = clamped ? 'rgba(20, 0, 8, 0.9)' : 'rgba(0, 0, 0, 0.95)'
+    ctx.beginPath()
+    ctx.arc(px, py, clamped ? 2 : 2.6, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.strokeStyle = 'rgba(255, 168, 64, 0.75)'
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(px - r - 2, py)
+    ctx.lineTo(px - r + 1, py)
+    ctx.moveTo(px + r - 1, py)
+    ctx.lineTo(px + r + 2, py)
+    ctx.moveTo(px, py - r - 2)
+    ctx.lineTo(px, py - r + 1)
+    ctx.moveTo(px, py + r - 1)
+    ctx.lineTo(px, py + r + 2)
+    ctx.stroke()
+  }
+
   // --- Enemy ships — pulsing red dots ---
   // Tier 0-2: only paint contacts within scan range.
   // Tier 3: also paint out-of-range contacts clamped to the rim (dimmer, smaller).
-  const pulse = 0.55 + 0.45 * Math.sin(performance.now() / 180)
   for (const e of data.enemies) {
     const { px, py, clamped } = project(e.x, e.y)
     if (clamped && data.sensorTier < 3) continue

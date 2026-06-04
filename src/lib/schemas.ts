@@ -48,6 +48,36 @@ export const CargoSchema = z.object({
 })
 export type Cargo = z.infer<typeof CargoSchema>
 
+export const AchievementMetricsSchema = z.object({
+  totalScrapMined: z.number().default(0),
+  totalArbitersDefeated: z.number().default(0),
+  maxArbiterMarkDefeated: z.number().default(0),
+  totalRuns: z.number().default(0),
+  maxLedgerReached: z.number().default(0),
+  totalEnemyKills: z.number().default(0),
+  totalAsteroidsDestroyed: z.number().default(0),
+  totalDroneScrapDelivered: z.number().default(0),
+  totalDronesBuilt: z.number().default(0),
+  totalDroneRebuilds: z.number().default(0),
+  totalPhotosTaken: z.number().default(0),
+  totalSales: z.number().default(0),
+  bestSaleValue: z.number().default(0),
+  arbiterWithdrawals: z.number().default(0),
+  stationDriveThroughs: z.number().default(0),
+  drillNoseAsteroidFinishes: z.number().default(0),
+  soldByMineral: z
+    .object({
+      carbon: z.number().default(0),
+      silicates: z.number().default(0),
+      platinum: z.number().default(0),
+      titanium: z.number().default(0),
+      exotics: z.number().default(0),
+    })
+    .default({}),
+  bestDroneDockBurst: z.number().default(0),
+})
+export type AchievementMetrics = z.infer<typeof AchievementMetricsSchema>
+
 export const GameStateSchema = z.object({
   ship: ShipSchema,
   upgrades: UpgradesSchema,
@@ -59,14 +89,7 @@ export const GameStateSchema = z.object({
   timestamp: z.number(),
   // Achievement/Leaderboard prep
   achievements: z.array(z.string()).default([]),
-  metrics: z
-    .object({
-      totalScrapMined: z.number().default(0),
-      totalArbitersDefeated: z.number().default(0),
-      totalRuns: z.number().default(0),
-      maxLedgerReached: z.number().default(0),
-    })
-    .default({}),
+  metrics: AchievementMetricsSchema.default({}),
 })
 export type GameState = z.infer<typeof GameStateSchema>
 
@@ -124,8 +147,28 @@ export function defaultGameState(): GameState {
     metrics: {
       totalScrapMined: 0,
       totalArbitersDefeated: 0,
+      maxArbiterMarkDefeated: 0,
       totalRuns: 0,
       maxLedgerReached: 0,
+      totalEnemyKills: 0,
+      totalAsteroidsDestroyed: 0,
+      totalDroneScrapDelivered: 0,
+      totalDronesBuilt: 0,
+      totalDroneRebuilds: 0,
+      totalPhotosTaken: 0,
+      totalSales: 0,
+      bestSaleValue: 0,
+      arbiterWithdrawals: 0,
+      stationDriveThroughs: 0,
+      drillNoseAsteroidFinishes: 0,
+      soldByMineral: {
+        carbon: 0,
+        silicates: 0,
+        platinum: 0,
+        titanium: 0,
+        exotics: 0,
+      },
+      bestDroneDockBurst: 0,
     },
   }
 }

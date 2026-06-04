@@ -19,11 +19,16 @@ interface HUDProps {
   /** Active Arbiter boss, or null. Replaces the Ledger readout when present. */
   arbiter: ArbiterHudInfo | null
   isSaving: boolean
+  achievementCount: number
+  achievementTotal: number
   onPause: () => void
   /** When the trade menu (store) is open the game is already effectively
    * paused, and the pause button would otherwise open the pause overlay
    * underneath the store. Hide the button while it's up. */
   tradeMenuOpen?: boolean
+  /** When the run is over (HULL LOST / run summary) the run is finished and the
+   * pause button must not open the pause overlay behind the summary. */
+  runOver?: boolean
 }
 
 /**
@@ -113,8 +118,11 @@ export function HUD({
   ledger,
   arbiter,
   isSaving,
+  achievementCount,
+  achievementTotal,
   onPause,
   tradeMenuOpen = false,
+  runOver = false,
 }: HUDProps) {
   const cargoPercent = cargo.capacity > 0 ? Math.round((cargo.fragments / cargo.capacity) * 100) : 0
   const ledgerInfo = ledgerStatus(ledger)
@@ -140,6 +148,9 @@ export function HUD({
             activeTool={activeTool}
             hasAlternateTool={hasLazer || upgrades.ripple > 0}
           />
+          <div className="text-white/35 font-mono text-[clamp(0.65rem,1.8vw,0.75rem)]">
+            ACH {achievementCount}/{achievementTotal}
+          </div>
         </div>
 
         {/* Right: Upgrades + Pause */}
@@ -165,12 +176,12 @@ export function HUD({
               <div className="text-hud-amber">DRONES {droneCount}/{upgrades.drone}</div>
             )}
             {upgrades.smartBomb > 0 && (
-              <div className="text-red-400 animate-pulse text-[clamp(0.6rem,1.5vw,0.75rem)]">
-                \u2622 CORE ARMED \u2622
+              <div className="text-red-400 animate-pulse">
+                CORE ARMED
               </div>
             )}
           </div>
-          {!tradeMenuOpen && (
+          {!tradeMenuOpen && !runOver && (
             <button
               onClick={onPause}
               className="pointer-events-auto relative z-[60] px-2 py-1.5 sm:px-3 sm:py-2 bg-space-800/80 border border-hud-green/30 rounded text-hud-green text-xs sm:text-sm hover:bg-space-700/80 active:scale-95 transition-all min-w-[44px] min-h-[44px] flex items-center justify-center"
@@ -192,7 +203,7 @@ export function HUD({
             className="font-mono font-bold tracking-[0.18em] text-[clamp(0.6rem,1.7vw,0.85rem)]"
             style={{ color: arbiterColor }}
           >
-            \u2b22 THE ARBITER \u00b7 MARK {romanNumeral(arbiter.mark)} \u2b22
+            THE ARBITER - MARK {romanNumeral(arbiter.mark)}
           </div>
           <div
             className="w-44 sm:w-72 h-2 sm:h-3 rounded-sm overflow-hidden"

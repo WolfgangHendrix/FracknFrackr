@@ -26,28 +26,20 @@ export interface GamepadSnapshot {
 }
 
 export interface GamepadHandlerState {
-  /** RT toggle: true while fire-lock is engaged. */
-  fireLocked: boolean
-  /** Previous-frame RT pressed state for edge detection. */
-  prevRt: boolean
   prevY: boolean
-  /** Last non-deadzone aim direction (gamepad space, +X right / +Y down). */
-  lockedAimX: number
-  lockedAimY: number
   /** Whether the gamepad drove movement last frame (used to clean up cardinal flags on release). */
   droveMovement: boolean
   /** Whether the gamepad drove aim last frame (used to clean up aimState.active on release). */
   droveAim: boolean
+  /** Whether the gamepad drove boost last frame (so we don't stomp keyboard Shift on release). */
+  droveBoost: boolean
 }
 
 export function createGamepadHandlerState(): GamepadHandlerState {
   return {
-    fireLocked: false,
-    prevRt: false,
-    lockedAimX: 0,
-    lockedAimY: 0,
     droveMovement: false,
     droveAim: false,
+    droveBoost: false,
     prevY: false,
   }
 }
@@ -79,8 +71,7 @@ export function readGamepadSnapshot(getPads: () => (Gamepad | null)[]): GamepadS
  * Behavior:
  * - Left stick drives movement (mirrors virtual joystick: cardinal flags + joystickAngle).
  * - Right stick drives aim and fires while past deadzone.
- * - RT press (edge-detected) toggles fire-lock. While locked, fire continues at the
- *   last aim direction; moving the right stick updates that locked direction.
+ * - Triggers (LT / RT) drive the Thruster Vectoring boost.
  * - When the gamepad releases a control it only clears the bits it owned (so keyboard
  *   and mouse inputs are not stomped on).
  *
@@ -98,17 +89,16 @@ export function applyGamepadFrame(
   if (snapshot?.yPressed && !state.prevY) toolToggle = true
   state.prevY = snapshot?.yPressed ?? false
 
-  // RT edge → toggle fire-lock
-  if (snapshot) {
-    if (snapshot.rtPressed && !state.prevRt) {
-      state.fireLocked = !state.fireLocked
-    }
-    state.prevRt = snapshot.rtPressed
-  } else {
-    state.prevRt = false
-    state.fireLocked = false
+  // Triggers (LT / RT) drive the boost. Only touch the shared flag when we
+  // actually own it this frame, otherwise a poll with no gamepad connected
+  // would stomp a keyboard player's Shift back to false every frame.
+  if (snapshot && (snapshot.ltPressed || snapshot.rtPressed)) {
+    inputState.boost = true
+    state.droveBoost = true
+  } else if (state.droveBoost) {
+    inputState.boost = false
+    state.droveBoost = false
   }
-  inputState.boost = !!snapshot && (snapshot.ltPressed || snapshot.rtPressed)
 
   // --- Movement (left stick) ---
   const lx = snapshot?.leftX ?? 0
@@ -138,22 +128,11 @@ export function applyGamepadFrame(
   const rmag = Math.sqrt(rx * rx + ry * ry)
   let aimDirX = 0
   let aimDirY = 0
-  let stickAiming = false
+  let firing = false
   if (snapshot && rmag > STICK_DEADZONE) {
-    stickAiming = true
+    firing = true
     aimDirX = rx / rmag
     aimDirY = ry / rmag
-    state.lockedAimX = aimDirX
-    state.lockedAimY = aimDirY
-  }
-
-  let firing = false
-  if (stickAiming) {
-    firing = true
-  } else if (state.fireLocked && (state.lockedAimX !== 0 || state.lockedAimY !== 0)) {
-    aimDirX = state.lockedAimX
-    aimDirY = state.lockedAimY
-    firing = true
   }
 
   if (firing) {
@@ -177,7 +156,6 @@ export interface GamepadHandler {
   detach: () => void
   /** Poll the connected gamepad and write to inputState/aimState. Returns whether to fire this frame. */
   poll: () => { firing: boolean; toolToggle: boolean }
-  isFireLocked: () => boolean
 }
 
 /**
@@ -198,9 +176,9 @@ export function createGamepadHandler(
       // No event listeners — polling each frame via navigator.getGamepads().
     },
     detach() {
-      state.fireLocked = false
       state.droveMovement = false
       state.droveAim = false
+      state.droveBoost = false
       inputState.boost = false
     },
     poll() {
@@ -217,9 +195,6 @@ export function createGamepadHandler(
         canvas.clientWidth,
         canvas.clientHeight,
       )
-    },
-    isFireLocked() {
-      return state.fireLocked
     },
   }
 }

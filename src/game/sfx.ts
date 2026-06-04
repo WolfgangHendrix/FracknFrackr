@@ -141,6 +141,62 @@ export function playExplosion(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Boost Whoosh — afterburner kick for the Thruster Vectoring dash
+// ---------------------------------------------------------------------------
+
+export function playBoostWhoosh(): void {
+  const ctx = getContext()
+  if (!ctx) return
+
+  const now = ctx.currentTime
+  const vol = getSfxVolume()
+
+  // Bandpass-swept noise = the "whoosh" body. Center frequency sweeps up then
+  // the gain decays, giving a punchy outrush.
+  const bufferSize = ctx.sampleRate * 0.3
+  const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate)
+  const data = buffer.getChannelData(0)
+  for (let i = 0; i < bufferSize; i++) {
+    data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ctx.sampleRate * 0.12))
+  }
+
+  const noise = ctx.createBufferSource()
+  noise.buffer = buffer
+
+  const bp = ctx.createBiquadFilter()
+  bp.type = 'bandpass'
+  bp.Q.setValueAtTime(1.2, now)
+  bp.frequency.setValueAtTime(300, now)
+  bp.frequency.exponentialRampToValueAtTime(2200, now + 0.18)
+
+  const noiseGain = ctx.createGain()
+  noiseGain.gain.setValueAtTime(0.0001, now)
+  noiseGain.gain.exponentialRampToValueAtTime(0.18 * vol, now + 0.03)
+  noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.28)
+
+  noise.connect(bp)
+  bp.connect(noiseGain)
+  noiseGain.connect(ctx.destination)
+  noise.start(now)
+
+  // Rising tonal sweep underneath for a sense of acceleration.
+  const osc = ctx.createOscillator()
+  osc.type = 'sawtooth'
+  osc.frequency.setValueAtTime(140, now)
+  osc.frequency.exponentialRampToValueAtTime(520, now + 0.2)
+
+  const oscGain = ctx.createGain()
+  oscGain.gain.setValueAtTime(0.0001, now)
+  oscGain.gain.exponentialRampToValueAtTime(0.08 * vol, now + 0.03)
+  oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.25)
+
+  osc.connect(oscGain)
+  oscGain.connect(ctx.destination)
+  osc.start(now)
+  osc.stop(now + 0.3)
+}
+
+// ---------------------------------------------------------------------------
 // Player Hit — sharp impact with distortion
 // ---------------------------------------------------------------------------
 

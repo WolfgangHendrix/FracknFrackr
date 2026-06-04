@@ -369,16 +369,20 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
       {/* Scanline overlay — above background, below menu chrome */}
       <div className="menu-scanlines" aria-hidden="true" />
 
-      {/* Title */}
-      <h1 className="menu-title font-display text-4xl md:text-6xl text-hud-green mb-2 tracking-widest text-center relative z-10">
-        FRAK&apos;N
-        <br />
-        FRAK&apos;R
-      </h1>
-      <p className="font-sans text-sm md:text-base tracking-[0.2em] text-hud-amber/70 mb-6 relative z-10">
-        FRAK, SCRAP &amp; UPGRADE
-      </p>
-      {bestEntry && (
+      {/* Credits need the vertical room more than the title lockup does. */}
+      {mode !== 'credits' && (
+        <>
+          <h1 className="menu-title font-display text-4xl md:text-6xl text-hud-green mb-2 tracking-widest text-center relative z-10">
+            FRAK&apos;N
+            <br />
+            FRAK&apos;R
+          </h1>
+          <p className="font-sans text-sm md:text-base tracking-[0.2em] text-hud-amber/70 mb-6 relative z-10">
+            FRAK, SCRAP &amp; UPGRADE
+          </p>
+        </>
+      )}
+      {mode === 'main' && bestEntry && (
         <p className="font-mono text-xs md:text-sm tracking-[0.18em] text-hud-amber/65 mb-8 relative z-10">
           BEST:{' '}
           <span className="text-hud-amber font-bold">
@@ -514,12 +518,16 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
       {mode === 'credits' && (
         <div
           className="flex flex-col items-center relative z-10 w-full max-w-sm md:max-w-md px-4"
-          style={{ maxHeight: 'calc(100dvh - 8rem)' }}
+          style={{ maxHeight: 'calc(100dvh - 3rem)' }}
         >
           {/* Scrollable panel so credits never spill past the BACK button on
               short screens. Subtle backdrop pulls the text off the starfield
               without competing with the menu chrome. */}
           <div className="w-full overflow-y-auto overscroll-contain bg-space-900/55 border border-hud-amber/25 rounded-lg px-5 py-5 flex flex-col gap-5 items-center">
+            <p className="font-sans text-xl sm:text-2xl tracking-[0.24em] text-hud-amber/90 text-center">
+              CREDITS
+            </p>
+            <div className="w-12 h-px bg-white/10" aria-hidden="true" />
             <CreditSection role="Developer" lines={['Santiago Salvador']} />
             <div className="w-12 h-px bg-white/10" aria-hidden="true" />
             <CreditSection
@@ -539,6 +547,8 @@ export function StartScreen({ onNewGame, onLoadGame }: StartScreenProps) {
               role="Voiceovers"
               lines={['RObo-Voice Generator', 'directed by Santiago Salvador']}
             />
+            <div className="w-12 h-px bg-white/10" aria-hidden="true" />
+            <CreditSection role="Playtesters" lines={['Zoe Luna & Shakti Sol']} />
             <p className="font-mono text-[10px] tracking-[0.18em] text-white/35 mt-2">
               v{BUILD_VERSION}
             </p>

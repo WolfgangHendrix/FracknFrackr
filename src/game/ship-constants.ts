@@ -12,6 +12,17 @@ export const SHIP_FRICTION = 0.94
 export const SHIP_TURN_RATE = 9
 
 /**
+ * Thruster Vectoring boost tuning. The boost is a punchy dash: an instant
+ * velocity kick on activation, a higher speed cap so the kick persists, and a
+ * short sustain window before a cooldown lockout. Gated by the
+ * `thrustersUnlocked` upgrade in game-tick.
+ */
+export const BOOST_DURATION = 0.9 // sec of active boost
+export const BOOST_COOLDOWN = 3 // sec lockout after a boost
+export const BOOST_MULTIPLIER = 3 // accel + max-speed multiplier while boosting
+export const BOOST_IMPULSE = 120 // instant velocity kick (units/sec) on activation
+
+/**
  * Ship voxel colors (hex values).
  */
 export const SHIP_COLORS = {

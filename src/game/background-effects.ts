@@ -287,6 +287,7 @@ function buildEnergyRing(radius: number, color: number, opacity: number): THREE.
     blending: THREE.AdditiveBlending,
     side: THREE.DoubleSide,
     depthWrite: false,
+    depthTest: false,
   })
   return new THREE.Mesh(geo, mat)
 }
@@ -309,9 +310,16 @@ export function createBlackHole(x: number, y: number): BlackHole {
 
   // The void — a hard black disc the size of the death radius.
   const coreGeo = new THREE.CircleGeometry(CORE_RADIUS, 48)
-  const coreMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.97 })
+  const coreMat = new THREE.MeshBasicMaterial({
+    color: 0x000000,
+    transparent: true,
+    opacity: 1,
+    depthWrite: false,
+    depthTest: false,
+  })
   const coreMesh = new THREE.Mesh(coreGeo, coreMat)
-  coreMesh.position.z = 1 // just in front of the glow
+  coreMesh.position.z = 14 // in front of the rings so the void never disappears
+  coreMesh.renderOrder = 6
   group.add(coreMesh)
 
   // Purple lensing rim hugging the void.
@@ -325,7 +333,8 @@ export function createBlackHole(x: number, y: number): BlackHole {
     depthWrite: false,
   })
   const rim = new THREE.Mesh(rimGeo, rimMat)
-  rim.position.z = 1
+  rim.position.z = 15
+  rim.renderOrder = 7
   group.add(rim)
 
   // Accretion disk — a fine particle swirl (galaxy-style) for the churning

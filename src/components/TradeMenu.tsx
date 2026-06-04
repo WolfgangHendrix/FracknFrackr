@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import type { Cargo, Upgrades } from '@/lib/schemas'
 import type { TutorialStep } from '@/hooks/useTutorial'
 import { SCRAP_VALUE_BY_MINERAL } from '@/hooks/useGameState'
@@ -21,7 +21,7 @@ const SELL_ROWS = [
 /** Cost to purchase the Lazer mining tool. */
 export const LAZER_COST = 200
 export const AUTO_TOOL_COST = 600
-/** Flat per-tier cost for Mining Drone Bay — each purchase raises the cap +1. */
+/** Base cost for Mining Drone Bay — each purchase raises the cap +1. */
 export const DRONE_BAY_COST = 240
 /** Scrap cost to construct a single mining drone at the station. */
 export const MINING_DRONE_BUILD_COST = 60
@@ -195,6 +195,78 @@ const UPGRADE_CATALOG_SECTIONS = [
   },
 ]
 
+function startingLevelForUpgrade(type: keyof Upgrades): number {
+  return type === 'blaster' || type === 'collector' || type === 'storage' ? 1 : 0
+}
+
+function maxLevelForUpgrade(type: keyof Upgrades): number {
+  if (type === 'missiles') return 8
+  if (type === 'options') return 2
+  if (type === 'ripple') return 1
+  if (type === 'speed') return 5
+  if (
+    type === 'armor' ||
+    type === 'shield' ||
+    type === 'hull' ||
+    type === 'cooling' ||
+    type === 'magnet' ||
+    type === 'bounty' ||
+    type === 'sensor' ||
+    type === 'drillNose'
+  ) {
+    return 3
+  }
+  if (
+    type === 'smartBomb' ||
+    type === 'lazer' ||
+    type === 'autoTool' ||
+    type === 'spread' ||
+    type === 'missileBias' ||
+    type === 'thrusters' ||
+    type === 'droneRepair'
+  ) {
+    return 1
+  }
+  if (type === 'drone') return 4
+  return 5
+}
+
+function isFlatCostUpgrade(type: keyof Upgrades): boolean {
+  return (
+    type === 'smartBomb' ||
+    type === 'lazer' ||
+    type === 'autoTool' ||
+    type === 'ripple' ||
+    type === 'spread' ||
+    type === 'missileBias' ||
+    type === 'thrusters' ||
+    type === 'droneRepair'
+  )
+}
+
+function upgradeCostMultiplier(type: keyof Upgrades, maxLevel: number): number {
+  if (isFlatCostUpgrade(type)) return 1
+  if (type === 'missiles') return 1.22
+  if (type === 'shield' || type === 'armor' || type === 'hull') return 1.25
+  if (maxLevel >= 4) return 1.35
+  return 1.45
+}
+
+function roundScrapCost(value: number): number {
+  return Math.max(1, Math.round(value / 5) * 5)
+}
+
+function costForNextUpgradeTier(
+  type: keyof Upgrades,
+  baseCost: number,
+  currentLevel: number,
+  maxLevel: number,
+): number {
+  if (currentLevel >= maxLevel) return baseCost
+  const purchasesMade = Math.max(0, currentLevel - startingLevelForUpgrade(type))
+  return roundScrapCost(baseCost * upgradeCostMultiplier(type, maxLevel) ** purchasesMade)
+}
+
 interface TradeMenuProps {
   cargo: Cargo
   scrap: number
@@ -226,15 +298,22 @@ export function TradeMenu({
   const isTutorialBuy = tutorialStep === 'trade-buy'
   const isTutorial = isTutorialSell || isTutorialBuy
 
-  // During tutorial, force the active tab based on step
-  const [manualTab, setManualTab] = useState<'sell' | 'buy'>('sell')
-  const activeTab = isTutorialSell ? 'sell' : isTutorialBuy ? 'buy' : manualTab
-
   const totalSellValue = SELL_ROWS.reduce(
     (sum, r) => sum + cargo[r.key] * SCRAP_VALUE_BY_MINERAL[r.key],
     0,
   )
   const hasMaterials = SELL_ROWS.some((r) => cargo[r.key] > 0)
+
+  // During tutorial, force the active tab based on step. Outside tutorial,
+  // open on the most useful panel for controller users: sell when carrying
+  // materials, otherwise buy/build.
+  const [manualTab, setManualTab] = useState<'sell' | 'buy'>(() =>
+    hasMaterials ? 'sell' : 'buy',
+  )
+  useEffect(() => {
+    if (!isTutorial && !hasMaterials) setManualTab('buy')
+  }, [hasMaterials, isTutorial])
+  const activeTab = isTutorialSell ? 'sell' : isTutorialBuy ? 'buy' : manualTab
 
   return (
     <div className="absolute inset-0 flex items-center justify-center z-50 pointer-events-none p-3 sm:p-4">
@@ -366,6 +445,7 @@ function SellPanel({
       </div>
       <button
         data-menu-item
+        {...(hasMaterials ? { 'data-menu-default': true } : {})}
         data-menu-sound="sell"
         onClick={hasMaterials ? onSell : undefined}
         aria-disabled={!hasMaterials || undefined}
@@ -445,6 +525,7 @@ function BuyPanel({
   onBuildDrone: () => void
 }) {
   const canAffordLazer = scrap >= LAZER_COST && !hasLazer
+  let defaultAssigned = false
 
   return (
     <div className="flex flex-col gap-3">
@@ -460,34 +541,13 @@ function BuyPanel({
           </div>
           {section.items.map((item) => {
         const currentLevel = upgrades[item.type]
-        const maxLevel =
-          item.type === 'missiles'
-            ? 8
-            : item.type === 'options'
-              ? 2
-              : item.type === 'ripple'
-                ? 1
-                : item.type === 'speed'
-                  ? 5
-                  : item.type === 'armor' ||
-                      item.type === 'shield' ||
-                      item.type === 'hull' ||
-                      item.type === 'cooling' ||
-                      item.type === 'magnet' ||
-                      item.type === 'bounty' ||
-                      item.type === 'sensor' ||
-                      item.type === 'drillNose'
-                    ? 3
-                    : item.type === 'smartBomb' ||
-                        item.type === 'autoTool' ||
-                        item.type === 'spread' ||
-                        item.type === 'missileBias' ||
-                        item.type === 'thrusters' ||
-                        item.type === 'droneRepair'
-                      ? 1
-                      : item.type === 'drone'
-                        ? 4
-                        : 5
+        const maxLevel = maxLevelForUpgrade(item.type)
+        const currentCost = costForNextUpgradeTier(
+          item.type,
+          item.cost,
+          currentLevel,
+          maxLevel,
+        )
 
         const maxed = currentLevel >= maxLevel
         // Prerequisite gating. Each entry locks an upgrade behind something
@@ -496,9 +556,12 @@ function BuyPanel({
         // play yet. The lock message doubles as a hint about what unlocks it.
         const prereqLock = computePrereqLock(item.type, upgrades, hasLazer)
         const lockedByPrereq = prereqLock !== null
-        const canAfford = scrap >= item.cost && !maxed && !lockedByPrereq
+        const canAfford = scrap >= currentCost && !maxed && !lockedByPrereq
         const isFireRate = item.type === 'blaster'
         const highlight = isTutorial && isFireRate
+
+        const isDefault = canAfford && !defaultAssigned
+        if (isDefault) defaultAssigned = true
 
         return (
           <div
@@ -546,8 +609,9 @@ function BuyPanel({
             </div>
             <button
               data-menu-item
+              {...(isDefault ? { 'data-menu-default': true } : {})}
               data-menu-sound="buy"
-              onClick={canAfford ? () => onBuy(item.type, item.cost) : undefined}
+              onClick={canAfford ? () => onBuy(item.type, currentCost) : undefined}
               aria-disabled={!canAfford || undefined}
               className={`ml-3 px-5 py-3 min-h-[44px] rounded text-sm font-bold tracking-wider transition-all focus:outline-none focus:ring-2 focus:ring-hud-blue ${
                 canAfford
@@ -557,7 +621,7 @@ function BuyPanel({
                   : 'bg-white/5 border border-white/10 text-white/20 cursor-not-allowed'
               }`}
             >
-              {maxed ? 'MAX' : lockedByPrereq ? 'LOCK' : `${item.cost}`}
+              {maxed ? 'MAX' : lockedByPrereq ? 'LOCK' : `${currentCost}`}
             </button>
           </div>
         )
@@ -583,6 +647,9 @@ function BuyPanel({
         </div>
         <button
           data-menu-item
+          {...(canAffordLazer && !defaultAssigned
+            ? ((defaultAssigned = true), { 'data-menu-default': true })
+            : {})}
           data-menu-sound="buy"
           onClick={canAffordLazer ? onBuyLazer : undefined}
           aria-disabled={!canAffordLazer || undefined}
@@ -617,9 +684,12 @@ function BuyPanel({
           {(() => {
             const canBuildDrone =
               droneCount < upgrades.drone && scrap >= MINING_DRONE_BUILD_COST
+            const isDefault = canBuildDrone && !defaultAssigned
+            if (isDefault) defaultAssigned = true
             return (
               <button
                 data-menu-item
+                {...(isDefault ? { 'data-menu-default': true } : {})}
                 data-menu-sound="buy"
                 onClick={canBuildDrone ? onBuildDrone : undefined}
                 aria-disabled={!canBuildDrone || undefined}

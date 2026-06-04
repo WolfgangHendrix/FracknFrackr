@@ -210,6 +210,8 @@ export interface ArbiterState {
   /** Whether this Arbiter projects a tractor beam (escorts don't, to keep the
    *  capture single-source and avoid two beams fighting over the ship). */
   tractorEnabled: boolean
+  /** Persistent enforcers do not withdraw on the normal encounter timeout. */
+  persistent: boolean
   /** Rotating base angle of the bullet-hell firing ring (radians). */
   spiralAngle: number
   /** Count of bullet-hell volleys fired — drives the pattern rotation so the
@@ -223,6 +225,8 @@ export interface ArbiterState {
 export interface ArbiterSpawnOpts {
   /** When false, this Arbiter never fires a tractor beam. Default true. */
   tractorEnabled?: boolean
+  /** When true, this Arbiter keeps hunting until destroyed or explicitly cleared. */
+  persistent?: boolean
 }
 
 /** Spawn a fresh Arbiter of the given Mark at a position. */
@@ -255,6 +259,7 @@ export function createArbiterState(
     bulletHell: mark >= ARBITER_BULLET_HELL_MARK,
     missilesEnabled: mark >= ARBITER_MISSILE_MARK,
     tractorEnabled: opts?.tractorEnabled ?? true,
+    persistent: opts?.persistent ?? false,
     spiralAngle: Math.random() * Math.PI * 2,
     bulletHellVolley: 0,
     missileTimer: MISSILE_FIRST_DELAY,
@@ -315,7 +320,7 @@ export function updateArbiter(arbiter: ArbiterState, player: Ship, dt: number): 
 
   // --- Evade timeout: the player outlasted the Arbiter ---
   arbiter.encounterTimer += dt
-  if (arbiter.encounterTimer >= ARBITER_EVADE_TIME) {
+  if (!arbiter.persistent && arbiter.encounterTimer >= ARBITER_EVADE_TIME) {
     arbiter.mode = 'withdrawing'
     arbiter.tractorActive = false
     return result

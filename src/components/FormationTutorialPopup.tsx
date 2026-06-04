@@ -10,9 +10,9 @@ interface FormationTutorialPopupProps {
 }
 
 /**
- * Shown the first time a wedge formation spawns. Calls out the bearing-based
- * threat geometry so the player understands a tight V on the radar isn't a
- * single ship — it's a coordinated attack that breaks apart once it engages.
+ * Shown the first time a formation spawns. Calls out the bearing-based threat
+ * geometry so the player understands a tight cluster on the radar is a
+ * protected coordinated attack that breaks apart once it engages.
  */
 export function FormationTutorialPopup({ visible, onDismiss }: FormationTutorialPopupProps) {
   useEffect(() => {
@@ -38,11 +38,12 @@ export function FormationTutorialPopup({ visible, onDismiss }: FormationTutorial
 
   return (
     <div
-      className="absolute inset-0 z-50 flex items-center justify-center bg-black/65 p-4"
+      className="absolute inset-0 z-[60] flex items-center justify-center bg-black/65 p-4"
       data-testid="formation-tutorial-popup"
     >
       <button
         data-menu-item
+        data-menu-default
         data-menu-back
         onClick={onDismiss}
         aria-label="Dismiss"
@@ -57,9 +58,9 @@ export function FormationTutorialPopup({ visible, onDismiss }: FormationTutorial
           a V-formation along one bearing toward you.
         </p>
         <ul className="ml-4 list-disc text-sm text-white/70 space-y-1">
-          <li>They stay tight while flying in — easy to hit head-on.</li>
+          <li>The entry forcefield absorbs fire while the group is locked together.</li>
           <li>They break formation once they engage — dogfight from then on.</li>
-          <li>Kill the leader and the wing scatters early.</li>
+          <li>When the shield drops, the ships become normal targets.</li>
         </ul>
         <p className="text-white/60 text-xs sm:text-sm mt-3 leading-relaxed">
           Strafe perpendicular to their approach to break their lead.

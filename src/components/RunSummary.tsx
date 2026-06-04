@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RunStats } from '@/game/ledger-config'
 import { recordScore, wouldMakeBoard } from '@/lib/leaderboard'
 import { submitOnlineScore } from '@/lib/online-leaderboard'
@@ -14,6 +14,18 @@ interface RunSummaryProps {
 }
 
 const INITIALS_STORAGE_KEY = 'fracking-asteroids-last-initials'
+const INITIAL_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+const BUTTON_A = 0
+const DPAD_UP = 12
+const DPAD_DOWN = 13
+const DPAD_LEFT = 14
+const DPAD_RIGHT = 15
+const AXIS_LEFT_X = 0
+const AXIS_LEFT_Y = 1
+const STICK_THRESHOLD = 0.6
+const INITIAL_CHAR_STEP_MS = 180
+const INITIAL_SLOT_STEP_MS = 220
+const INITIAL_SUBMIT_STEP_MS = 350
 
 /** Format seconds as M:SS. */
 function formatTime(seconds: number): string {
@@ -42,7 +54,11 @@ export function RunSummary({ stats, highScore, isNewBest, onContinue }: RunSumma
   const [submitted, setSubmitted] = useState(!qualifies)
   const [rank, setRank] = useState<number | null>(null)
   const [initials, setInitials] = useState('')
+  const [selectedInitialSlot, setSelectedInitialSlot] = useState(0)
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const submittedOnceRef = useRef(!qualifies)
+  const initialsRef = useRef(initials)
+  const selectedInitialSlotRef = useRef(selectedInitialSlot)
   // Online-submit status, fire-and-forget. 'idle' until the player submits;
   // 'sending' while the POST is in flight; 'ok' or 'err' when it resolves.
   // Shown as a small line of microcopy below the rank so the player gets
@@ -92,8 +108,18 @@ export function RunSummary({ stats, highScore, isNewBest, onContinue }: RunSumma
     }
   }, [submitted])
 
-  const handleSubmit = (): void => {
-    const trimmed = (initials || '---').toUpperCase()
+  useEffect(() => {
+    initialsRef.current = initials
+  }, [initials])
+
+  useEffect(() => {
+    selectedInitialSlotRef.current = selectedInitialSlot
+  }, [selectedInitialSlot])
+
+  const handleSubmit = useCallback((overrideInitials?: string): void => {
+    if (submittedOnceRef.current) return
+    submittedOnceRef.current = true
+    const trimmed = ((overrideInitials ?? initials) || '---').toUpperCase()
     if (typeof localStorage !== 'undefined') {
       localStorage.setItem(INITIALS_STORAGE_KEY, trimmed)
     }
@@ -109,7 +135,106 @@ export function RunSummary({ stats, highScore, isNewBest, onContinue }: RunSumma
         setOnlineStatus(res.ok ? 'ok' : 'err')
       })
     }
-  }
+  }, [initials, stats.score])
+
+  const handleSubmitRef = useRef(handleSubmit)
+  useEffect(() => {
+    handleSubmitRef.current = handleSubmit
+  }, [handleSubmit])
+
+  useEffect(() => {
+    if (submitted || !qualifies) return
+    if (typeof window === 'undefined') return
+    if (typeof navigator === 'undefined' || !navigator.getGamepads) return
+
+    const prev = { a: false, up: false, down: false, left: false, right: false }
+    const lastAction = { char: 0, slot: 0, submit: 0 }
+    let raf = 0
+    const currentChars = (): string[] => {
+      const padded = (initialsRef.current || 'AAA')
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, '')
+        .padEnd(3, 'A')
+      return padded.slice(0, 3).split('')
+    }
+    const setCharAtSlot = (delta: 1 | -1): void => {
+      const chars = currentChars()
+      const slot = selectedInitialSlotRef.current
+      const cur = chars[slot]
+      const idx = Math.max(0, INITIAL_CHARS.indexOf(cur))
+      const next = (idx + delta + INITIAL_CHARS.length) % INITIAL_CHARS.length
+      chars[slot] = INITIAL_CHARS[next]
+      const nextInitials = chars.join('')
+      initialsRef.current = nextInitials
+      setInitials(nextInitials)
+    }
+    const moveSelectedSlot = (delta: 1 | -1): void => {
+      const next = (selectedInitialSlotRef.current + delta + 3) % 3
+      selectedInitialSlotRef.current = next
+      setSelectedInitialSlot(next)
+    }
+    const submitControllerInitials = (): void => {
+      handleSubmitRef.current(currentChars().join(''))
+    }
+    const tick = (): void => {
+      raf = requestAnimationFrame(tick)
+      const pad = Array.from(navigator.getGamepads()).find((p) => p && p.connected) ?? null
+      if (!pad) {
+        prev.a = false
+        prev.up = false
+        prev.down = false
+        prev.left = false
+        prev.right = false
+        return
+      }
+
+      const stickX = pad.axes[AXIS_LEFT_X] ?? 0
+      const stickY = pad.axes[AXIS_LEFT_Y] ?? 0
+      const a = pad.buttons[BUTTON_A]?.pressed ?? false
+      const up = (pad.buttons[DPAD_UP]?.pressed ?? false) || stickY < -STICK_THRESHOLD
+      const down = (pad.buttons[DPAD_DOWN]?.pressed ?? false) || stickY > STICK_THRESHOLD
+      const left = (pad.buttons[DPAD_LEFT]?.pressed ?? false) || stickX < -STICK_THRESHOLD
+      const right = (pad.buttons[DPAD_RIGHT]?.pressed ?? false) || stickX > STICK_THRESHOLD
+      const now = performance.now()
+
+      if (up && !prev.up && now - lastAction.char >= INITIAL_CHAR_STEP_MS) {
+        lastAction.char = now
+        setCharAtSlot(1)
+      }
+      if (down && !prev.down && now - lastAction.char >= INITIAL_CHAR_STEP_MS) {
+        lastAction.char = now
+        setCharAtSlot(-1)
+      }
+      if (left && !prev.left && now - lastAction.slot >= INITIAL_SLOT_STEP_MS) {
+        lastAction.slot = now
+        moveSelectedSlot(-1)
+      }
+      if (right && !prev.right && now - lastAction.slot >= INITIAL_SLOT_STEP_MS) {
+        lastAction.slot = now
+        moveSelectedSlot(1)
+      }
+      if (a && !prev.a && now - lastAction.submit >= INITIAL_SUBMIT_STEP_MS) {
+        lastAction.submit = now
+        submitControllerInitials()
+      }
+
+      prev.a = a
+      prev.up = up
+      prev.down = down
+      prev.left = left
+      prev.right = right
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [qualifies, submitted])
+
+  useEffect(() => {
+    if (!submitted) return
+    const id = window.setTimeout(() => {
+      document.querySelector<HTMLElement>('[data-run-summary-continue]')?.focus()
+    }, 0)
+    return () => window.clearTimeout(id)
+  }, [submitted])
 
   return (
     <div
@@ -152,8 +277,27 @@ export function RunSummary({ stats, highScore, isNewBest, onContinue }: RunSumma
               className="w-32 text-center text-3xl font-mono tracking-[0.4em] bg-space-900/70 border-2 border-hud-amber/60 rounded text-hud-amber py-2 focus:outline-none focus:border-hud-amber"
               aria-label="Initials"
             />
+            <div className="flex gap-2" aria-label="Controller initials entry">
+              {((initials || 'AAA').toUpperCase().replace(/[^A-Z0-9]/g, '').padEnd(3, 'A').slice(0, 3).split('')).map(
+                (char, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => setSelectedInitialSlot(idx)}
+                    className={`w-12 h-12 border-2 rounded font-mono text-2xl text-center ${
+                      idx === selectedInitialSlot
+                        ? 'border-hud-amber bg-hud-amber/20 text-hud-amber'
+                        : 'border-white/20 bg-white/5 text-white/70'
+                    }`}
+                    aria-label={`Initial ${idx + 1}: ${char}`}
+                  >
+                    {char}
+                  </button>
+                ),
+              )}
+            </div>
             <button
-              onClick={handleSubmit}
+              onClick={() => handleSubmit()}
               className="pointer-events-auto mt-1 px-6 py-2 bg-hud-amber/20 border border-hud-amber/60 rounded text-hud-amber tracking-[0.2em] hover:bg-hud-amber/30 active:scale-95 transition-all text-sm"
               data-menu-item
             >
@@ -217,6 +361,8 @@ export function RunSummary({ stats, highScore, isNewBest, onContinue }: RunSumma
           disabled={!submitted}
           className="pointer-events-auto mt-1 px-8 py-3 bg-hud-green/15 border border-hud-green/50 rounded text-hud-green tracking-[0.2em] hover:bg-hud-green/25 active:scale-95 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
           data-menu-item
+          data-menu-default={submitted || undefined}
+          data-run-summary-continue
         >
           CONTINUE
         </button>

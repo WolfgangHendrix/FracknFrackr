@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect } from 'react'
 import { defaultGameState } from '@/lib/schemas'
-import type { Cargo, GameState, Upgrades } from '@/lib/schemas'
+import type { AchievementMetrics, Cargo, GameState, Upgrades } from '@/lib/schemas'
 import type { MetalVariant } from '@/game/scene'
 import { PLAYER_MAX_HP } from '@/game/scene'
 
@@ -67,20 +67,8 @@ export interface GameStateHook {
   hydrateFromSave: (state: GameState) => void
   achievements: string[]
   setAchievements: React.Dispatch<React.SetStateAction<string[]>>
-  metrics: {
-    totalScrapMined: number
-    totalArbitersDefeated: number
-    totalRuns: number
-    maxLedgerReached: number
-  }
-  setMetrics: React.Dispatch<
-    React.SetStateAction<{
-      totalScrapMined: number
-      totalArbitersDefeated: number
-      totalRuns: number
-      maxLedgerReached: number
-    }>
-  >
+  metrics: AchievementMetrics
+  setMetrics: React.Dispatch<React.SetStateAction<AchievementMetrics>>
 }
 
 export function useGameState(): GameStateHook {

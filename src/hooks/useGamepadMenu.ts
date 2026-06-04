@@ -38,10 +38,48 @@ interface UseGamepadMenuOptions {
   resetKey: string
 }
 
+function isInertMenuItem(el: HTMLElement): boolean {
+  return (el as HTMLButtonElement).disabled || el.getAttribute('aria-disabled') === 'true'
+}
+
+function isVisibleMenuItem(el: HTMLElement): boolean {
+  const rect = el.getBoundingClientRect()
+  if (rect.width <= 0 || rect.height <= 0) return false
+  const style = window.getComputedStyle(el)
+  return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0'
+}
+
+function pointHitsElement(el: HTMLElement, x: number, y: number): boolean {
+  const top = document.elementFromPoint(x, y)
+  if (!top) return false
+  if (el.contains(top)) return true
+  return top.closest('[data-menu-item]') === el
+}
+
+function isTopmostMenuItem(el: HTMLElement): boolean {
+  if (!isVisibleMenuItem(el)) return false
+  const rect = el.getBoundingClientRect()
+  const x = Math.max(0, Math.min(window.innerWidth - 1, rect.left + rect.width / 2))
+  const y = Math.max(0, Math.min(window.innerHeight - 1, rect.top + rect.height / 2))
+  if (pointHitsElement(el, x, y)) return true
+
+  // Some buttons have decorative focus rings or text layouts that put the
+  // geometric center on a child/empty zone. Sampling inset corners keeps the
+  // filter robust while still rejecting controls covered by a modal backdrop.
+  const insetX = Math.min(rect.width * 0.25, 12)
+  const insetY = Math.min(rect.height * 0.25, 12)
+  return (
+    pointHitsElement(el, rect.left + insetX, rect.top + insetY) ||
+    pointHitsElement(el, rect.right - insetX, rect.top + insetY) ||
+    pointHitsElement(el, rect.left + insetX, rect.bottom - insetY) ||
+    pointHitsElement(el, rect.right - insetX, rect.bottom - insetY)
+  )
+}
+
 function focusableItems(): HTMLElement[] {
   return Array.from(
     document.querySelectorAll<HTMLElement>('[data-menu-item]:not([disabled])'),
-  )
+  ).filter(isTopmostMenuItem)
 }
 
 function moveFocus(delta: number): void {
@@ -58,7 +96,12 @@ function moveFocus(delta: number): void {
 
 function focusFirst(): void {
   const items = focusableItems()
-  if (items.length > 0) items[0].focus()
+  if (items.length === 0) return
+  const preferred = items
+    .slice()
+    .reverse()
+    .find((item) => item.hasAttribute('data-menu-default') && !isInertMenuItem(item))
+  ;(preferred ?? items[0]).focus()
 }
 
 /** True when the focused element is a range-input slider — used to remap
@@ -89,9 +132,12 @@ function nudgeRange(input: HTMLInputElement, direction: 1 | -1): void {
 }
 
 export function useGamepadMenu({ enabled, resetKey }: UseGamepadMenuOptions): void {
+  const suppressUntilRelease = useRef(false)
+
   // Reset DOM focus when the visible menu changes.
   useEffect(() => {
     if (!enabled) return
+    suppressUntilRelease.current = true
     // Defer one tick so the new DOM has mounted before we query for items.
     const id = window.setTimeout(focusFirst, 0)
     return () => window.clearTimeout(id)
@@ -220,6 +266,22 @@ export function useGamepadMenu({ enabled, resetKey }: UseGamepadMenuOptions): vo
       // order of horizontal layouts.
       const leftDown = (pad.buttons[DPAD_LEFT]?.pressed ?? false) || stickX < -STICK_THRESHOLD
       const rightDown = (pad.buttons[DPAD_RIGHT]?.pressed ?? false) || stickX > STICK_THRESHOLD
+      const nextPrev = {
+        a: aDown,
+        b: bDown,
+        up: upDown,
+        down: downDown,
+        left: leftDown,
+        right: rightDown,
+      }
+
+      if (suppressUntilRelease.current) {
+        prev.current = nextPrev
+        if (!aDown && !bDown && !upDown && !downDown && !leftDown && !rightDown) {
+          suppressUntilRelease.current = false
+        }
+        return
+      }
 
       if (upDown && !prev.current.up) moveFocus(-1)
       if (downDown && !prev.current.down) moveFocus(+1)
@@ -260,24 +322,35 @@ export function useGamepadMenu({ enabled, resetKey }: UseGamepadMenuOptions): vo
       // use aria-disabled so they stay in the focus walk (so the player
       // can scroll through and inspect them) but the A press is a no-op,
       // matching how clicking a native-disabled button does nothing.
-      const isInert = (el: HTMLElement): boolean =>
-        (el as HTMLButtonElement).disabled || el.getAttribute('aria-disabled') === 'true'
       if (aDown && !prev.current.a) {
         const el = document.activeElement
-        if (el instanceof HTMLElement && el.matches('[data-menu-item]') && !isInert(el)) {
+        if (
+          el instanceof HTMLElement &&
+          el.matches('[data-menu-item]') &&
+          !isInertMenuItem(el) &&
+          isTopmostMenuItem(el)
+        ) {
           const sound = el.getAttribute('data-menu-sound')
           if (sound !== 'sell' && sound !== 'buy') playMenuSelectDown()
         }
       }
       if (!aDown && prev.current.a) {
         const el = document.activeElement
-        if (el instanceof HTMLElement && el.matches('[data-menu-item]') && !isInert(el)) {
+        if (
+          el instanceof HTMLElement &&
+          el.matches('[data-menu-item]') &&
+          !isInertMenuItem(el) &&
+          isTopmostMenuItem(el)
+        ) {
           ;(el as HTMLButtonElement).click()
         }
       }
 
       if (bDown && !prev.current.b) {
-        const back = document.querySelector<HTMLButtonElement>('[data-menu-back]:not([disabled])')
+        const back = focusableItems()
+          .filter((item): item is HTMLButtonElement => item instanceof HTMLButtonElement)
+          .filter((item) => item.hasAttribute('data-menu-back'))
+          .at(-1)
         if (back) back.click()
       }
 

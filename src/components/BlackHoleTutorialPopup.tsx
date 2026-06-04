@@ -39,11 +39,12 @@ export function BlackHoleTutorialPopup({ visible, onDismiss }: BlackHoleTutorial
 
   return (
     <div
-      className="absolute inset-0 z-50 flex items-center justify-center bg-black/60"
+      className="absolute inset-0 z-[60] flex items-center justify-center bg-black/60"
       data-testid="black-hole-tutorial-popup"
     >
       <button
         data-menu-item
+        data-menu-default
         data-menu-back
         onClick={onDismiss}
         aria-label="Dismiss"

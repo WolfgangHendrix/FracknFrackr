@@ -22,6 +22,7 @@ import { FormationTutorialPopup } from '@/components/FormationTutorialPopup'
 import { SplitterTutorialPopup } from '@/components/SplitterTutorialPopup'
 import { PauseOverlay } from '@/components/PauseOverlay'
 import { PhotoModeOverlay } from '@/components/PhotoModeOverlay'
+import { AchievementToast } from '@/components/AchievementToast'
 import { DebugPanel } from '@/components/DebugPanel'
 import { useGameState } from '@/hooks/useGameState'
 import { useGamePersistence } from '@/hooks/useGamePersistence'
@@ -34,6 +35,10 @@ import type { Upgrades, SaveSlotId } from '@/lib/schemas'
 import { setPauseDampening } from '@/game/volume-control'
 import { playVoice } from '@/lib/voice'
 import type { PauseRunStats } from '@/components/PauseOverlay'
+import { ACHIEVEMENTS, ACHIEVEMENT_COUNT, defaultAchievementRunState, findNewAchievementUnlocks, getAchievement, getAchievementProgress } from '@/lib/achievements'
+import type { AchievementRunState } from '@/lib/achievements'
+import type { EnemyKind } from '@/game/enemy-ship'
+import { PROLOGUE_SHIP } from '@/game/prologue-config'
 
 type Screen = 'title' | 'start' | 'game'
 
@@ -93,11 +98,24 @@ export default function Home() {
     resetForRunStart,
     hydrateFromSave,
     achievements,
+    setAchievements,
     metrics,
+    setMetrics,
   } = useGameState()
   const hasLazer = upgrades.lazer > 0
   const { save, load } = useGamePersistence(activeSlot)
   const tutorial = useTutorial(isNewGame && screen === 'game')
+  // Latest "is the player in the scripted prologue" flag, kept in a ref so the
+  // metric/run-state mutators and the achievement evaluator can cheaply gate on
+  // it without re-creating their callbacks. The prologue is a god-ship showcase
+  // run, so nothing done there should count toward or unlock achievements.
+  const inPrologueRef = useRef(false)
+  inPrologueRef.current = tutorial.step.startsWith('prologue-')
+  const [achievementRun, setAchievementRun] = useState<AchievementRunState>(() =>
+    defaultAchievementRunState(),
+  )
+  const [achievementQueue, setAchievementQueue] = useState<string[]>([])
+  const [liveRunTimeSec, setLiveRunTimeSec] = useState(0)
 
   // --- Auto-save on state changes triggered by game events ---
   const [saveSeq, setSaveSeq] = useState(0)
@@ -108,6 +126,34 @@ export default function Home() {
   const requestSave = useCallback(() => {
     setSaveSeq((n) => n + 1)
   }, [])
+
+  const resetAchievementRun = useCallback((seed?: Partial<AchievementRunState>) => {
+    setAchievementRun({ ...defaultAchievementRunState(), ...seed })
+  }, [])
+
+  const patchMetrics = useCallback(
+    (update: (prev: typeof metrics) => typeof metrics) => {
+      // Don't let prologue actions (scripted kills/mining) feed lifetime metrics.
+      if (inPrologueRef.current) return
+      setMetrics((prev) => update(prev))
+      requestSave()
+    },
+    [setMetrics, requestSave],
+  )
+
+  const patchAchievementRun = useCallback(
+    (update: (prev: AchievementRunState) => AchievementRunState) => {
+      // Prologue actions must not seed run-state that achievements key off.
+      if (inPrologueRef.current) return
+      setAchievementRun((prev) => update(prev))
+    },
+    [],
+  )
+
+  const getCurrentRunTimeSec = useCallback(
+    () => gameCanvasRef.current?.getRunStats()?.runTimeSec ?? liveRunTimeSec,
+    [liveRunTimeSec],
+  )
 
   // Persist the snapshot whenever saveSeq increments (driven by game events).
   // Skip the initial render (saveSeq === 0).
@@ -162,17 +208,23 @@ export default function Home() {
     localStorage.setItem(ACTIVE_SLOT_KEY, slotId)
     setActiveSlot(slotId)
     setIsNewGame(true)
+    setAchievementQueue([])
+    resetAchievementRun()
+    setLiveRunTimeSec(0)
     enterGameplay()
     setScreen('game')
-  }, [])
+  }, [resetAchievementRun])
 
   const handleLoadGame = useCallback((slotId: SaveSlotId) => {
     localStorage.setItem(ACTIVE_SLOT_KEY, slotId)
     setActiveSlot(slotId)
     setIsNewGame(false)
+    setAchievementQueue([])
+    resetAchievementRun()
+    setLiveRunTimeSec(0)
     enterGameplay()
     setScreen('game')
-  }, [])
+  }, [resetAchievementRun])
 
   const handleCollect = useCallback(
     (variant: MetalVariant) => {
@@ -190,9 +242,46 @@ export default function Home() {
     [onScrapCollect, requestSave],
   )
 
+  const handlePlayerDamage = useCallback(
+    (hp: number) => {
+      if (hp < playerHp) {
+        patchAchievementRun((prev) => ({ ...prev, tookHitThisRun: true }))
+      }
+      onPlayerDamage(hp)
+      requestSave()
+    },
+    [onPlayerDamage, patchAchievementRun, playerHp, requestSave],
+  )
+
   // Extract tutorial state early so callbacks can reference them
   const tutorialActive = tutorial.active
   const tutorialStep = tutorial.step
+
+  // During the prologue the ship is a scripted showcase flying the full loadout
+  // in the sim (see prologueTick in game-tick.ts), but the real save's upgrades
+  // are still minimal. Mirror the showcase tiers into the HUD panel so the intro
+  // lists every power the player is actually flying with. Mirrors the grants in
+  // prologueTick + PROLOGUE_SHIP; normal play uses the real save unchanged.
+  const hudUpgrades = useMemo<Upgrades>(
+    () =>
+      tutorialStep.startsWith('prologue-')
+        ? {
+            ...upgrades,
+            blaster: PROLOGUE_SHIP.blasterTier,
+            collector: 5,
+            storage: 5,
+            missiles: PROLOGUE_SHIP.missileTier,
+            options: PROLOGUE_SHIP.optionCount,
+            speed: 5,
+            shield: PROLOGUE_SHIP.shieldCharges,
+            hull: 3,
+            armor: 3,
+            drone: 4,
+            smartBomb: 1,
+          }
+        : upgrades,
+    [tutorialStep, upgrades],
+  )
 
   const handleStationRange = useCallback(
     (inRange: boolean) => {
@@ -245,9 +334,32 @@ export default function Home() {
       if (!hasMaterials && !canAffordAnything) return
     }
 
+    const nowSec = getCurrentRunTimeSec()
+    patchAchievementRun((prev) => ({
+      ...prev,
+      touchAndGoDockOpenedAtSec: nowSec,
+      touchAndGoSold: false,
+      touchAndGoBought: false,
+      dockedWithinThirtySecondsOfFullCargo:
+        prev.dockedWithinThirtySecondsOfFullCargo ||
+        (prev.cargoFilledAtSec !== null && nowSec - prev.cargoFilledAtSec <= 30),
+      driveThroughStreak: 0,
+      lowHpDocked: playerHp <= 1,
+      dockedSinceArbiterSpawn: prev.dockedSinceArbiterSpawn || prev.arbiterSpawnActive,
+    }))
     tutorial.onEnteredStation()
     setTradeMenuOpen(true)
-  }, [tutorial, tradeMenuOpen, tutorialActive, tutorialStep, cargo, scrap])
+  }, [
+    cargo,
+    getCurrentRunTimeSec,
+    patchAchievementRun,
+    playerHp,
+    scrap,
+    tradeMenuOpen,
+    tutorial,
+    tutorialActive,
+    tutorialStep,
+  ])
 
   // Touched the station but hostiles are in range — flash a brief banner
   // so the player understands the dock is locked, then auto-clear it.
@@ -256,53 +368,93 @@ export default function Home() {
   }, [])
 
   const handleSell = useCallback(() => {
-    sellMaterials()
+    const soldCargo = {
+      fragments: cargo.fragments,
+      carbon: cargo.carbon,
+      silicates: cargo.silicates,
+      platinum: cargo.platinum,
+      titanium: cargo.titanium,
+      exotics: cargo.exotics,
+    }
+    const earned = sellMaterials()
+    patchMetrics((prev) => ({
+      ...prev,
+      totalScrapMined: prev.totalScrapMined + earned,
+      totalSales: prev.totalSales + 1,
+      bestSaleValue: Math.max(prev.bestSaleValue, earned),
+      soldByMineral: {
+        carbon: prev.soldByMineral.carbon + soldCargo.carbon,
+        silicates: prev.soldByMineral.silicates + soldCargo.silicates,
+        platinum: prev.soldByMineral.platinum + soldCargo.platinum,
+        titanium: prev.soldByMineral.titanium + soldCargo.titanium,
+        exotics: prev.soldByMineral.exotics + soldCargo.exotics,
+      },
+    }))
+    patchAchievementRun((prev) => ({
+      ...prev,
+      mixedPortfolioSale:
+        prev.mixedPortfolioSale ||
+        (soldCargo.carbon > 0 &&
+          soldCargo.silicates > 0 &&
+          soldCargo.platinum > 0 &&
+          soldCargo.titanium > 0 &&
+          soldCargo.exotics > 0),
+      soldFullCargo: prev.soldFullCargo || soldCargo.fragments >= cargo.capacity,
+      soldTenExotics: prev.soldTenExotics || soldCargo.exotics >= 10,
+      touchAndGoSold: prev.touchAndGoDockOpenedAtSec !== null ? true : prev.touchAndGoSold,
+      cargoFilledAtSec: null,
+    }))
     tutorial.onSoldMaterials()
-    requestSave()
-  }, [sellMaterials, tutorial, requestSave])
+  }, [cargo, patchAchievementRun, patchMetrics, sellMaterials, tutorial])
 
   const handleBuy = useCallback(
     (type: keyof Upgrades, cost: number) => {
       const nextUpgrades: Upgrades = {
         ...upgrades,
         [type]:
-          type === 'shield'
-            ? 3
-            : type === 'smartBomb' ||
-                type === 'lazer' ||
-                type === 'autoTool' ||
-                type === 'ripple' ||
-                type === 'spread' ||
-                type === 'missileBias' ||
-                type === 'thrusters' ||
-                type === 'droneRepair'
-              ? 1
-              : Math.min(
-                  upgrades[type] + 1,
-                  type === 'missiles'
-                    ? 8
-                    : type === 'options'
-                      ? 2
-                      : type === 'armor' ||
-                          type === 'hull' ||
-                          type === 'cooling' ||
-                          type === 'magnet' ||
-                          type === 'bounty' ||
-                          type === 'sensor' ||
-                          type === 'drillNose'
-                        ? 3
-                        : type === 'drone'
-                          ? 4
-                          : 5,
-                ),
+          type === 'smartBomb' ||
+          type === 'lazer' ||
+          type === 'autoTool' ||
+          type === 'ripple' ||
+          type === 'spread' ||
+          type === 'missileBias' ||
+          type === 'thrusters' ||
+          type === 'droneRepair'
+            ? 1
+            : Math.min(
+                upgrades[type] + 1,
+                type === 'missiles'
+                  ? 8
+                  : type === 'options'
+                    ? 2
+                    : type === 'armor' ||
+                        type === 'shield' ||
+                        type === 'hull' ||
+                        type === 'cooling' ||
+                        type === 'magnet' ||
+                        type === 'bounty' ||
+                        type === 'sensor' ||
+                        type === 'drillNose'
+                      ? 3
+                      : type === 'drone'
+                        ? 4
+                        : 5,
+              ),
       }
       buyUpgrade(type, cost, (ok) => {
         if (!ok) return
+        const defensivePurchase = type === 'shield' || type === 'hull' || type === 'armor'
         if (type === 'collector') {
           // upgrades.collector hasn't applied yet (setState scheduled); pass +1
           gameCanvasRef.current?.setCollectorTier(upgrades.collector + 1)
         }
         gameCanvasRef.current?.setCombatUpgrades(nextUpgrades)
+        patchAchievementRun((prev) => ({
+          ...prev,
+          touchAndGoBought: prev.touchAndGoDockOpenedAtSec !== null ? true : prev.touchAndGoBought,
+          lowHpDefensivePurchase:
+            prev.lowHpDefensivePurchase || (prev.lowHpDocked && defensivePurchase),
+        }))
         // First-ever Drone Bay purchase pops a one-time explainer so the
         // player knows the radar is a command surface and that they still
         // need to *build* individual drones at the station.
@@ -319,7 +471,7 @@ export default function Home() {
         requestSave()
       })
     },
-    [buyUpgrade, tutorial, requestSave, upgrades, activeSlot],
+    [activeSlot, buyUpgrade, patchAchievementRun, requestSave, tutorial, upgrades],
   )
 
   // React-side mirror of the scene's drone count so the trade menu can
@@ -333,8 +485,11 @@ export default function Home() {
     const ok = gameCanvasRef.current?.buildMiningDrone() ?? false
     if (!ok) return
     setDroneCount((n) => n + 1)
-    requestSave()
-  }, [droneCount, upgrades.drone, spendScrap, requestSave])
+    patchMetrics((prev) => ({
+      ...prev,
+      totalDronesBuilt: prev.totalDronesBuilt + 1,
+    }))
+  }, [droneCount, patchMetrics, spendScrap, upgrades.drone])
 
   const handleBuyLazer = useCallback(() => {
     if (hasLazer) return
@@ -346,40 +501,155 @@ export default function Home() {
       gameCanvasRef.current?.setCombatUpgrades(next)
       setActiveTool('lazer')
       gameCanvasRef.current?.setMiningTool('lazer')
+      patchAchievementRun((prev) => ({
+        ...prev,
+        touchAndGoBought: prev.touchAndGoDockOpenedAtSec !== null ? true : prev.touchAndGoBought,
+      }))
       requestSave()
     })
-  }, [hasLazer, buyUpgrade, upgrades, requestSave])
+  }, [buyUpgrade, hasLazer, patchAchievementRun, requestSave, upgrades])
 
   const handleCloseTradeMenu = useCallback(() => {
     // Prevent closing during tutorial trade steps — player must complete sell/buy
     if (tutorialActive && (tutorialStep === 'trade-sell' || tutorialStep === 'trade-buy')) return
+    const nowSec = getCurrentRunTimeSec()
+    patchAchievementRun((prev) => ({
+      ...prev,
+      touchAndGoComplete:
+        prev.touchAndGoComplete ||
+        (prev.touchAndGoDockOpenedAtSec !== null &&
+          prev.touchAndGoSold &&
+          prev.touchAndGoBought &&
+          nowSec - prev.touchAndGoDockOpenedAtSec <= 20),
+      touchAndGoDockOpenedAtSec: null,
+      touchAndGoSold: false,
+      touchAndGoBought: false,
+      lowHpDocked: false,
+    }))
     lastTradeCloseAtRef.current = Date.now()
     setTradeMenuOpen(false)
-  }, [tutorialActive, tutorialStep])
+  }, [getCurrentRunTimeSec, patchAchievementRun, tutorialActive, tutorialStep])
 
   const handleStationDriveThrough = useCallback(() => {
+    patchMetrics((prev) => ({
+      ...prev,
+      stationDriveThroughs: prev.stationDriveThroughs + 1,
+    }))
+    patchAchievementRun((prev) => {
+      const nextStreak = prev.driveThroughStreak + 1
+      return {
+        ...prev,
+        driveThroughStreak: nextStreak,
+        bestDriveThroughStreak: Math.max(prev.bestDriveThroughStreak, nextStreak),
+      }
+    })
     tutorial.onDroveThroughStation()
-    requestSave()
-  }, [tutorial, requestSave])
+  }, [patchAchievementRun, patchMetrics, tutorial])
 
   const handleToolChange = useCallback((tool: MiningTool) => {
     setActiveTool(tool)
   }, [])
 
+  const handleEnemyDestroyed = useCallback(
+    (kind?: EnemyKind) => {
+      patchMetrics((prev) => ({
+        ...prev,
+        totalEnemyKills: prev.totalEnemyKills + 1,
+      }))
+      if (kind === 'splitter') {
+        patchAchievementRun((prev) => ({ ...prev, splitterDestroyed: true }))
+      }
+    },
+    [patchAchievementRun, patchMetrics],
+  )
+
+  const handleEnemyDestroyedEvent = useCallback(
+    (kind?: EnemyKind) => {
+      tutorial.onEnemyDestroyed()
+      handleEnemyDestroyed(kind)
+    },
+    [handleEnemyDestroyed, tutorial],
+  )
+
+  const handleAsteroidsDestroyed = useCallback(
+    (count: number) => {
+      patchMetrics((prev) => ({
+        ...prev,
+        totalAsteroidsDestroyed: prev.totalAsteroidsDestroyed + count,
+      }))
+    },
+    [patchMetrics],
+  )
+
+  const handleRallyPointSet = useCallback(() => {
+    patchAchievementRun((prev) => ({ ...prev, rallySetThisRun: true }))
+  }, [patchAchievementRun])
+
+  const handleDroneScrapDelivered = useCallback(
+    (amount: number, dockedCount: number) => {
+      const nowSec = getCurrentRunTimeSec()
+      patchMetrics((prev) => ({
+        ...prev,
+        totalScrapMined: prev.totalScrapMined + amount,
+        totalDroneScrapDelivered: prev.totalDroneScrapDelivered + amount,
+        bestDroneDockBurst: Math.max(prev.bestDroneDockBurst, dockedCount),
+      }))
+      patchAchievementRun((prev) => {
+        const nextEvents = [...prev.droneDockEventsSec, ...Array.from({ length: dockedCount }, () => nowSec)].filter(
+          (stamp) => nowSec - stamp <= 10,
+        )
+        return {
+          ...prev,
+          droneScrapThisRun: prev.droneScrapThisRun + amount,
+          droneDockEventsSec: nextEvents,
+          bestDroneDockBurst: Math.max(prev.bestDroneDockBurst, nextEvents.length),
+        }
+      })
+    },
+    [getCurrentRunTimeSec, patchAchievementRun, patchMetrics],
+  )
+
+  const handleDroneRebuilt = useCallback(() => {
+    patchMetrics((prev) => ({
+      ...prev,
+      totalDroneRebuilds: prev.totalDroneRebuilds + 1,
+    }))
+  }, [patchMetrics])
+
+  const handleDrillNoseAsteroidFinished = useCallback(
+    (count: number) => {
+      patchMetrics((prev) => ({
+        ...prev,
+        drillNoseAsteroidFinishes: prev.drillNoseAsteroidFinishes + count,
+      }))
+    },
+    [patchMetrics],
+  )
+
   const handleShieldChanged = useCallback(
     (charges: number) => {
+      patchAchievementRun((prev) => ({
+        ...prev,
+        tookHitThisRun: true,
+        shieldAbsorbedThisRun: true,
+      }))
       setUpgradeLevel('shield', charges)
       requestSave()
     },
-    [setUpgradeLevel, requestSave],
+    [patchAchievementRun, requestSave, setUpgradeLevel],
   )
 
   const handleArmorChanged = useCallback(
     (charges: number) => {
+      patchAchievementRun((prev) => ({
+        ...prev,
+        tookHitThisRun: true,
+        armorAbsorbedThisRun: true,
+      }))
       setUpgradeLevel('armor', charges)
       requestSave()
     },
-    [setUpgradeLevel, requestSave],
+    [patchAchievementRun, requestSave, setUpgradeLevel],
   )
 
   // A hull module was torn off (or restocked at the station). Mirror the new
@@ -388,16 +658,26 @@ export default function Home() {
   // with the charge count.
   const handleHullChanged = useCallback(
     (charges: number) => {
+      patchAchievementRun((prev) => ({
+        ...prev,
+        tookHitThisRun: true,
+        hullAbsorbedThisRun: true,
+      }))
       setUpgradeLevel('hull', charges)
       requestSave()
     },
-    [setUpgradeLevel, requestSave],
+    [patchAchievementRun, requestSave, setUpgradeLevel],
   )
 
   const handleSmartBomb = useCallback(() => {
+    patchAchievementRun((prev) => ({
+      ...prev,
+      tookHitThisRun: true,
+      smartBombRecoveredAtSec: getCurrentRunTimeSec(),
+    }))
     setUpgradeLevel('smartBomb', 0)
     requestSave()
-  }, [setUpgradeLevel, requestSave])
+  }, [getCurrentRunTimeSec, patchAchievementRun, requestSave, setUpgradeLevel])
 
   const handleArbiterEvent = useCallback((event: ArbiterEvent) => {
     const text =
@@ -407,17 +687,51 @@ export default function Home() {
           ? arbiterDefeatLine(event.mark)
           : arbiterWithdrawLine(event.mark)
     setArbiterBanner({ text, key: Date.now() })
-  }, [])
+    if (event.type === 'arrives') {
+      patchAchievementRun((prev) => ({
+        ...prev,
+        arbiterSpawnActive: true,
+        dockedSinceArbiterSpawn: false,
+      }))
+      return
+    }
+    if (event.type === 'defeated') {
+      patchMetrics((prev) => ({
+        ...prev,
+        totalArbitersDefeated: prev.totalArbitersDefeated + 1,
+        maxArbiterMarkDefeated: Math.max(prev.maxArbiterMarkDefeated, event.mark),
+      }))
+      patchAchievementRun((prev) => ({
+        ...prev,
+        arbiterSpawnActive: false,
+        arbiterDefeatedWithoutDocking:
+          prev.arbiterDefeatedWithoutDocking || !prev.dockedSinceArbiterSpawn,
+        arbiterDefeatedWithActiveDrone:
+          prev.arbiterDefeatedWithActiveDrone || droneCount > 0,
+      }))
+      return
+    }
+    patchMetrics((prev) => ({
+      ...prev,
+      arbiterWithdrawals: prev.arbiterWithdrawals + 1,
+    }))
+    patchAchievementRun((prev) => ({ ...prev, arbiterSpawnActive: false }))
+  }, [droneCount, patchAchievementRun, patchMetrics])
 
   const handleRunEnded = useCallback(
     (stats: RunStats) => {
       setRunStats(stats)
+      setLiveRunTimeSec(stats.runTime)
       setIsNewBest(stats.score > highScore)
       setHighScore((best) => Math.max(best, stats.score))
       setRunOver(true)
-      requestSave()
+      patchMetrics((prev) => ({
+        ...prev,
+        totalRuns: prev.totalRuns + 1,
+        maxLedgerReached: Math.max(prev.maxLedgerReached, Math.round(stats.peakLedger)),
+      }))
     },
-    [highScore, requestSave],
+    [highScore, patchMetrics],
   )
 
   const handleContinue = useCallback(() => {
@@ -425,8 +739,10 @@ export default function Home() {
     resetRunCargo()
     setRunStats(null)
     setRunOver(false)
+    setLiveRunTimeSec(0)
+    resetAchievementRun({ continuedAfterDeath: true })
     requestSave()
-  }, [resetRunCargo, requestSave])
+  }, [requestSave, resetAchievementRun, resetRunCargo])
 
   // Pause-menu Restart Run: reuse the death-respawn path. Same effect as
   // dying and continuing — full ship reset at the station — but invoked
@@ -436,9 +752,11 @@ export default function Home() {
     resetRunCargo()
     setRunStats(null)
     setRunOver(false)
+    setLiveRunTimeSec(0)
+    resetAchievementRun()
     if (paused) togglePause()
     requestSave()
-  }, [resetRunCargo, paused, togglePause, requestSave])
+  }, [paused, requestSave, resetAchievementRun, resetRunCargo, togglePause])
 
   // Pause-menu Quit to Title: drop back to the title screen. The scene
   // unmounts naturally when `screen` changes; persistence already flushed
@@ -498,20 +816,41 @@ export default function Home() {
     if (paused) togglePause()
   }, [paused, togglePause])
   const handleScreenshot = useCallback(async (): Promise<Blob | null> => {
-    return (await gameCanvasRef.current?.takeScreenshot()) ?? null
-  }, [])
+    const blob = (await gameCanvasRef.current?.takeScreenshot()) ?? null
+    if (!blob) return null
+    patchMetrics((prev) => ({
+      ...prev,
+      totalPhotosTaken: prev.totalPhotosTaken + 1,
+    }))
+    const arbiterVisible =
+      arbiterHud !== null ||
+      tutorialStep === 'prologue-arbiter' ||
+      tutorialStep === 'prologue-dialogue' ||
+      tutorialStep === 'prologue-strip'
+    if (arbiterVisible) {
+      patchAchievementRun((prev) => ({ ...prev, photoWithArbiterTaken: true }))
+    }
+    return blob
+  }, [arbiterHud, patchAchievementRun, patchMetrics, tutorialStep])
 
   // First-time black-hole warning. Scene fires onBlackHoleNearby once per
   // session when the player closes inside the warn radius; we gate against
   // a per-slot localStorage flag so it only ever shows on the first run
   // where the player actually approaches the singularity.
   const handleBlackHoleNearby = useCallback(() => {
+    patchAchievementRun((prev) => ({ ...prev, blackHoleWarned: true }))
     if (!activeSlot) return
     if (typeof localStorage === 'undefined') return
     const key = `fracking-asteroids-black-hole-tutorial-${activeSlot}`
     if (localStorage.getItem(key)) return
     setBlackHolePopupVisible(true)
-  }, [activeSlot])
+  }, [activeSlot, patchAchievementRun])
+
+  const handleBlackHoleEscaped = useCallback(() => {
+    patchAchievementRun((prev) =>
+      prev.blackHoleWarned ? { ...prev, blackHoleEscapedThisRun: true, blackHoleWarned: false } : prev,
+    )
+  }, [patchAchievementRun])
 
   const handleDismissBlackHolePopup = useCallback(() => {
     setBlackHolePopupVisible(false)
@@ -686,6 +1025,38 @@ export default function Home() {
   }, [])
 
   const inPrologue = tutorialStep.startsWith('prologue-')
+  const previousTutorialStepRef = useRef(tutorialStep)
+
+  useEffect(() => {
+    const previous = previousTutorialStepRef.current
+    previousTutorialStepRef.current = tutorialStep
+    if (previous !== 'done' && tutorialStep === 'done') {
+      resetAchievementRun()
+      setLiveRunTimeSec(0)
+    }
+  }, [resetAchievementRun, tutorialStep])
+
+  useEffect(() => {
+    if (screen !== 'game') return
+    const sync = (): void => {
+      const snap = gameCanvasRef.current?.getRunStats()
+      if (!snap) return
+      setLiveRunTimeSec(snap.runTimeSec)
+    }
+    sync()
+    const id = window.setInterval(sync, 250)
+    return () => window.clearInterval(id)
+  }, [screen])
+
+  useEffect(() => {
+    if (tutorialStep !== 'done') return
+    if (cargo.fragments < cargo.capacity) return
+    setAchievementRun((prev) =>
+      prev.cargoFilledAtSec === null
+        ? { ...prev, cargoFilledAtSec: getCurrentRunTimeSec() }
+        : prev,
+    )
+  }, [cargo.capacity, cargo.fragments, getCurrentRunTimeSec, tutorialStep])
 
 
   // Tutorial catch-up: auto-advance trade steps when their conditions are already met.
@@ -743,17 +1114,38 @@ export default function Home() {
     ? 'paused'
     : runOver
       ? 'run-over'
-      : tradeMenuOpen
-        ? 'trade'
-        : tutorial.active
-          ? `tut:${tutorial.step}`
-          : ''
+      : dronePopupVisible
+        ? 'popup:drone'
+        : blackHolePopupVisible
+          ? 'popup:black-hole'
+          : defensePopupVisible
+            ? 'popup:defense'
+            : formationPopupVisible
+              ? 'popup:formation'
+              : splitterPopupVisible
+                ? 'popup:splitter'
+                : tradeMenuOpen
+                  ? 'trade'
+                  : tutorial.active
+                    ? `tut:${tutorial.step}`
+                    : ''
   useGamepadMenu({
     enabled: screen === 'game',
     resetKey: inGameOverlayKey,
   })
   // Start button (Standard Gamepad button 9) toggles pause during gameplay.
-  useGamepadButton(9, togglePause, screen === 'game')
+  const gamepadPauseEnabled =
+    screen === 'game' &&
+    (paused ||
+      (!tradeMenuOpen &&
+        !dronePopupVisible &&
+        !blackHolePopupVisible &&
+        !defensePopupVisible &&
+        !formationPopupVisible &&
+        !splitterPopupVisible &&
+        !runOver &&
+        !photoMode))
+  useGamepadButton(9, togglePause, gamepadPauseEnabled)
 
   // ESC toggles pause during gameplay. Skipped while the trade menu or run
   // summary owns the screen so it doesn't double-fire with their own close
@@ -776,6 +1168,77 @@ export default function Home() {
   // them here would lock them just outside the trigger ring. Step now
   // advances naturally when handleStationContact fires onEnteredStation.
   const shopTutorialFreeze = false
+  const currentRunTimeSec = runOver && runStats ? runStats.runTime : liveRunTimeSec
+  const achievementContext = useMemo(
+    () => ({
+      achievements,
+      metrics,
+      cargo,
+      upgrades,
+      hasLazer,
+      ledger,
+      droneCount,
+      tutorialStep,
+      runTimeSec: currentRunTimeSec,
+      run: achievementRun,
+    }),
+    [
+      achievementRun,
+      achievements,
+      cargo,
+      currentRunTimeSec,
+      droneCount,
+      hasLazer,
+      ledger,
+      metrics,
+      tutorialStep,
+      upgrades,
+    ],
+  )
+  const achievementItems = useMemo(
+    () =>
+      ACHIEVEMENTS.map((achievement) => ({
+        achievement,
+        unlocked: achievements.includes(achievement.id),
+        progress: getAchievementProgress(achievement.id, achievementContext),
+      })),
+    [achievementContext, achievements],
+  )
+  const currentToastAchievement = useMemo(
+    () => (achievementQueue.length > 0 ? getAchievement(achievementQueue[0]) ?? null : null),
+    [achievementQueue],
+  )
+
+  useEffect(() => {
+    // No achievements unlock during the prologue showcase. 'done' (and every
+    // real-play step) isn't a prologue step, so the completion achievement and
+    // all normal unlocks still fire once onboarding ends.
+    if (inPrologueRef.current) return
+    const unlocked = findNewAchievementUnlocks(achievementContext)
+    if (unlocked.length === 0) return
+
+    setAchievements((prev) => {
+      const known = new Set(prev)
+      const next = [...prev]
+      for (const achievement of unlocked) {
+        if (known.has(achievement.id)) continue
+        known.add(achievement.id)
+        next.push(achievement.id)
+      }
+      return next
+    })
+    setAchievementQueue((prev) => {
+      const known = new Set(prev)
+      const next = [...prev]
+      for (const achievement of unlocked) {
+        if (known.has(achievement.id)) continue
+        known.add(achievement.id)
+        next.push(achievement.id)
+      }
+      return next
+    })
+    requestSave()
+  }, [achievementContext, requestSave, setAchievements])
 
   if (screen === 'title' || screen === 'start') {
     return (
@@ -796,6 +1259,7 @@ export default function Home() {
         paused={
           paused ||
           tradeMenuOpen ||
+          dronePopupVisible ||
           blackHolePopupVisible ||
           defensePopupVisible ||
           formationPopupVisible ||
@@ -808,18 +1272,20 @@ export default function Home() {
         onCollect={handleCollect}
         onShipMoved={tutorial.onShipMoved}
         onAsteroidHit={tutorial.onAsteroidHit}
+        onAsteroidsDestroyed={handleAsteroidsDestroyed}
         onMetalSpawned={tutorial.onMetalSpawned}
         onMetalCollected={tutorial.onMetalCollected}
-        onPlayerDamage={onPlayerDamage}
+        onPlayerDamage={handlePlayerDamage}
         onScrapCollect={handleScrapCollect}
         onEnemyNearby={tutorial.onEnemyNearby}
-        onEnemyDestroyed={tutorial.onEnemyDestroyed}
+        onEnemyDestroyed={handleEnemyDestroyedEvent}
         onScrapCollected={tutorial.onScrapCollected}
         onNearStation={tutorial.onNearStation}
         onStationRange={handleStationRange}
         onStationContact={handleStationContact}
         onStationContactBlocked={handleStationContactBlocked}
         onStationDriveThrough={handleStationDriveThrough}
+        onRallyPointSet={handleRallyPointSet}
         onToolChange={handleToolChange}
         onLedgerChanged={setLedger}
         onArbiterChanged={setArbiterHud}
@@ -827,10 +1293,14 @@ export default function Home() {
         onRunEnded={handleRunEnded}
         onShieldChanged={handleShieldChanged}
         onMiningDroneCountChanged={setDroneCount}
+        onDroneScrapDelivered={handleDroneScrapDelivered}
+        onDroneRebuilt={handleDroneRebuilt}
         onArmorChanged={handleArmorChanged}
         onHullChanged={handleHullChanged}
         onSmartBomb={handleSmartBomb}
         onBlackHoleNearby={handleBlackHoleNearby}
+        onBlackHoleEscaped={handleBlackHoleEscaped}
+        onDrillNoseAsteroidFinished={handleDrillNoseAsteroidFinished}
         onFirstDefensiveHit={defensePopup.onFire}
         onFirstFormation={formationPopup.onFire}
         onFirstSplitter={splitterPopup.onFire}
@@ -843,7 +1313,7 @@ export default function Home() {
         <HUD
           scrap={scrap}
           cargo={cargo}
-          upgrades={upgrades}
+          upgrades={hudUpgrades}
           paused={paused}
           activeTool={activeTool}
           hasLazer={hasLazer}
@@ -851,10 +1321,17 @@ export default function Home() {
           ledger={ledger}
           arbiter={arbiterHud}
           isSaving={isSaving}
+          achievementCount={achievements.length}
+          achievementTotal={ACHIEVEMENT_COUNT}
           onPause={togglePause}
           tradeMenuOpen={tradeMenuOpen}
+          runOver={runOver}
         />
       )}
+      <AchievementToast
+        achievement={currentToastAchievement}
+        onDone={() => setAchievementQueue((prev) => prev.slice(1))}
+      />
       {!inPrologue && <ArbiterBanner banner={arbiterBanner} />}
       {tutorial.active && inPrologue && (
         <PrologueOverlay
@@ -927,6 +1404,7 @@ export default function Home() {
         onQuitToTitle={handlePauseQuit}
         onEnterPhotoMode={handleEnterPhotoMode}
         runStats={pauseRunStats}
+        achievementItems={achievementItems}
       />
       <PhotoModeOverlay
         visible={photoMode}

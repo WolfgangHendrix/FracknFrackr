@@ -47,8 +47,16 @@ function circlesOverlap(
 /**
  * Resolve ship-asteroid collision by pushing the ship out of the asteroid.
  * Mutates the ship position and zeroes velocity toward the asteroid.
+ *
+ * When `plowThrough` is set (a boosting maxed Drill Nose driving into the rock)
+ * the contact is still reported so the drill damage lands, but the ship is
+ * neither pushed out nor slowed — the dash blasts straight through.
  */
-export function resolveShipAsteroidCollision(ship: Ship, asteroid: Asteroid): boolean {
+export function resolveShipAsteroidCollision(
+  ship: Ship,
+  asteroid: Asteroid,
+  plowThrough = false,
+): boolean {
   const dx = ship.x - asteroid.x
   const dy = ship.y - asteroid.y
   const distSq = dx * dx + dy * dy
@@ -56,6 +64,8 @@ export function resolveShipAsteroidCollision(ship: Ship, asteroid: Asteroid): bo
   const minDist = SHIP_COLLISION_RADIUS + asteroidRadius
 
   if (distSq >= minDist * minDist) return false
+
+  if (plowThrough) return true
 
   const dist = Math.sqrt(distSq)
 

@@ -14,6 +14,7 @@ import type { MiningTool } from '@/game/types'
 import type { ArbiterHudInfo } from '@/game/arbiter-comms'
 import type { RunStats } from '@/game/ledger-config'
 import type { Upgrades } from '@/lib/schemas'
+import type { EnemyKind } from '@/game/enemy-ship'
 
 /** Arbiter encounter lifecycle event surfaced to React for comms banners. */
 export type ArbiterEvent = { type: 'arrives' | 'defeated' | 'withdrawn'; mark: number }
@@ -43,18 +44,20 @@ interface GameCanvasProps {
   onCollect?: (variant: MetalVariant) => void
   onShipMoved?: () => void
   onAsteroidHit?: () => void
+  onAsteroidsDestroyed?: (count: number) => void
   onMetalSpawned?: () => void
   onMetalCollected?: () => void
   onPlayerDamage?: (hp: number) => void
   onScrapCollect?: (amount: number) => void
   onEnemyNearby?: () => void
-  onEnemyDestroyed?: () => void
+  onEnemyDestroyed?: (kind?: EnemyKind) => void
   onScrapCollected?: () => void
   onNearStation?: () => void
   onStationRange?: (inRange: boolean) => void
   onStationContact?: () => void
   onStationContactBlocked?: () => void
   onStationDriveThrough?: () => void
+  onRallyPointSet?: () => void
   onToolChange?: (tool: MiningTool) => void
   onLedgerChanged?: (ledger: number) => void
   onArbiterChanged?: (info: ArbiterHudInfo | null) => void
@@ -62,10 +65,14 @@ interface GameCanvasProps {
   onRunEnded?: (stats: RunStats) => void
   onShieldChanged?: (charges: number) => void
   onMiningDroneCountChanged?: (count: number) => void
+  onDroneScrapDelivered?: (amount: number, dockedCount: number) => void
+  onDroneRebuilt?: () => void
   onArmorChanged?: (charges: number) => void
   onHullChanged?: (charges: number) => void
   onSmartBomb?: () => void
   onBlackHoleNearby?: () => void
+  onBlackHoleEscaped?: () => void
+  onDrillNoseAsteroidFinished?: (count: number) => void
   onFirstDefensiveHit?: () => void
   onFirstFormation?: () => void
   onFirstSplitter?: () => void
@@ -84,6 +91,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
     onCollect,
     onShipMoved,
     onAsteroidHit,
+    onAsteroidsDestroyed,
     onMetalSpawned,
     onMetalCollected,
     onPlayerDamage,
@@ -96,6 +104,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
     onStationContact,
     onStationContactBlocked,
     onStationDriveThrough,
+    onRallyPointSet,
     onToolChange,
     onLedgerChanged,
     onArbiterChanged,
@@ -103,10 +112,14 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
     onRunEnded,
     onShieldChanged,
     onMiningDroneCountChanged,
+    onDroneScrapDelivered,
+    onDroneRebuilt,
     onArmorChanged,
     onHullChanged,
     onSmartBomb,
     onBlackHoleNearby,
+    onBlackHoleEscaped,
+    onDrillNoseAsteroidFinished,
     onFirstDefensiveHit,
     onFirstFormation,
     onFirstSplitter,
@@ -128,6 +141,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
   const onCollectRef = useRef(onCollect)
   const onShipMovedRef = useRef(onShipMoved)
   const onAsteroidHitRef = useRef(onAsteroidHit)
+  const onAsteroidsDestroyedRef = useRef(onAsteroidsDestroyed)
   const onMetalSpawnedRef = useRef(onMetalSpawned)
   const onMetalCollectedRef = useRef(onMetalCollected)
   const onPlayerDamageRef = useRef(onPlayerDamage)
@@ -140,6 +154,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
   const onStationContactRef = useRef(onStationContact)
   const onStationContactBlockedRef = useRef(onStationContactBlocked)
   const onStationDriveThroughRef = useRef(onStationDriveThrough)
+  const onRallyPointSetRef = useRef(onRallyPointSet)
   const onToolChangeRef = useRef(onToolChange)
   const onLedgerChangedRef = useRef(onLedgerChanged)
   const onArbiterChangedRef = useRef(onArbiterChanged)
@@ -147,10 +162,14 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
   const onRunEndedRef = useRef(onRunEnded)
   const onShieldChangedRef = useRef(onShieldChanged)
   const onMiningDroneCountChangedRef = useRef(onMiningDroneCountChanged)
+  const onDroneScrapDeliveredRef = useRef(onDroneScrapDelivered)
+  const onDroneRebuiltRef = useRef(onDroneRebuilt)
   const onArmorChangedRef = useRef(onArmorChanged)
   const onHullChangedRef = useRef(onHullChanged)
   const onSmartBombRef = useRef(onSmartBomb)
   const onBlackHoleNearbyRef = useRef(onBlackHoleNearby)
+  const onBlackHoleEscapedRef = useRef(onBlackHoleEscaped)
+  const onDrillNoseAsteroidFinishedRef = useRef(onDrillNoseAsteroidFinished)
   const onFirstDefensiveHitRef = useRef(onFirstDefensiveHit)
   const onFirstFormationRef = useRef(onFirstFormation)
   const onFirstSplitterRef = useRef(onFirstSplitter)
@@ -217,6 +236,10 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
   }, [onAsteroidHit])
 
   useEffect(() => {
+    onAsteroidsDestroyedRef.current = onAsteroidsDestroyed
+  }, [onAsteroidsDestroyed])
+
+  useEffect(() => {
     onMetalSpawnedRef.current = onMetalSpawned
   }, [onMetalSpawned])
 
@@ -265,6 +288,10 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
   }, [onStationDriveThrough])
 
   useEffect(() => {
+    onRallyPointSetRef.current = onRallyPointSet
+  }, [onRallyPointSet])
+
+  useEffect(() => {
     onToolChangeRef.current = onToolChange
   }, [onToolChange])
 
@@ -293,6 +320,14 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
   }, [onMiningDroneCountChanged])
 
   useEffect(() => {
+    onDroneScrapDeliveredRef.current = onDroneScrapDelivered
+  }, [onDroneScrapDelivered])
+
+  useEffect(() => {
+    onDroneRebuiltRef.current = onDroneRebuilt
+  }, [onDroneRebuilt])
+
+  useEffect(() => {
     onArmorChangedRef.current = onArmorChanged
   }, [onArmorChanged])
 
@@ -307,6 +342,14 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
   useEffect(() => {
     onBlackHoleNearbyRef.current = onBlackHoleNearby
   }, [onBlackHoleNearby])
+
+  useEffect(() => {
+    onBlackHoleEscapedRef.current = onBlackHoleEscaped
+  }, [onBlackHoleEscaped])
+
+  useEffect(() => {
+    onDrillNoseAsteroidFinishedRef.current = onDrillNoseAsteroidFinished
+  }, [onDrillNoseAsteroidFinished])
 
   useEffect(() => {
     onFirstDefensiveHitRef.current = onFirstDefensiveHit
@@ -355,18 +398,20 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
           onCollect: (variant) => onCollectRef.current?.(variant),
           onShipMoved: () => onShipMovedRef.current?.(),
           onAsteroidHit: () => onAsteroidHitRef.current?.(),
+          onAsteroidsDestroyed: (count: number) => onAsteroidsDestroyedRef.current?.(count),
           onMetalSpawned: () => onMetalSpawnedRef.current?.(),
           onMetalCollected: () => onMetalCollectedRef.current?.(),
           onPlayerDamage: (hp) => onPlayerDamageRef.current?.(hp),
           onScrapCollect: (amount) => onScrapCollectRef.current?.(amount),
           onEnemyNearby: () => onEnemyNearbyRef.current?.(),
-          onEnemyDestroyed: () => onEnemyDestroyedRef.current?.(),
+          onEnemyDestroyed: (kind?: EnemyKind) => onEnemyDestroyedRef.current?.(kind),
           onScrapCollected: () => onScrapCollectedRef.current?.(),
           onNearStation: () => onNearStationRef.current?.(),
           onStationRange: (inRange: boolean) => onStationRangeRef.current?.(inRange),
           onStationContact: () => onStationContactRef.current?.(),
           onStationContactBlocked: () => onStationContactBlockedRef.current?.(),
           onStationDriveThrough: () => onStationDriveThroughRef.current?.(),
+          onRallyPointSet: () => onRallyPointSetRef.current?.(),
           onToolChange: (tool: MiningTool) => onToolChangeRef.current?.(tool),
           onLedgerChanged: (ledger: number) => onLedgerChangedRef.current?.(ledger),
           onArbiterChanged: (info: ArbiterHudInfo | null) => onArbiterChangedRef.current?.(info),
@@ -375,10 +420,16 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
           onShieldChanged: (charges: number) => onShieldChangedRef.current?.(charges),
           onMiningDroneCountChanged: (count: number) =>
             onMiningDroneCountChangedRef.current?.(count),
+          onDroneScrapDelivered: (amount: number, dockedCount: number) =>
+            onDroneScrapDeliveredRef.current?.(amount, dockedCount),
+          onDroneRebuilt: () => onDroneRebuiltRef.current?.(),
           onArmorChanged: (charges: number) => onArmorChangedRef.current?.(charges),
           onHullChanged: (charges: number) => onHullChangedRef.current?.(charges),
           onSmartBomb: () => onSmartBombRef.current?.(),
           onBlackHoleNearby: () => onBlackHoleNearbyRef.current?.(),
+          onBlackHoleEscaped: () => onBlackHoleEscapedRef.current?.(),
+          onDrillNoseAsteroidFinished: (count: number) =>
+            onDrillNoseAsteroidFinishedRef.current?.(count),
           onFirstDefensiveHit: () => onFirstDefensiveHitRef.current?.(),
           onFirstFormation: () => onFirstFormationRef.current?.(),
           onFirstSplitter: () => onFirstSplitterRef.current?.(),
