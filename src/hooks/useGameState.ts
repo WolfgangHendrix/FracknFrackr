@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect } from 'react'
 import { defaultGameState } from '@/lib/schemas'
-import type { AchievementMetrics, Cargo, GameState, ProfileSave, Upgrades } from '@/lib/schemas'
+import type { AchievementMetrics, Cargo, GameState, Upgrades } from '@/lib/schemas'
 import type { MetalVariant } from '@/game/scene'
 import { PLAYER_MAX_HP } from '@/game/scene'
 
@@ -63,10 +63,8 @@ export interface GameStateHook {
   setUpgradeLevel: (type: keyof Upgrades, value: number) => void
   spendScrap: (amount: number) => boolean
   resetRunCargo: () => void
-  resetArcadeRun: () => void
   resetForRunStart: () => void
   hydrateFromSave: (state: GameState) => void
-  hydrateFromProfile: (profile: ProfileSave) => void
   achievements: string[]
   setAchievements: React.Dispatch<React.SetStateAction<string[]>>
   metrics: AchievementMetrics
@@ -189,14 +187,6 @@ export function useGameState(): GameStateHook {
     })
   }, [])
 
-  const resetArcadeRun = useCallback(() => {
-    const fresh = defaultGameState()
-    setCargo(fresh.cargo)
-    setScrap(0)
-    setPlayerHp(PLAYER_MAX_HP)
-    setUpgrades(fresh.upgrades)
-  }, [])
-
   /** Deduct scrap if affordable. Returns true on success. */
   const spendScrap = useCallback((amount: number): boolean => {
     let success = false
@@ -217,11 +207,6 @@ export function useGameState(): GameStateHook {
     setPlayerHp(s.hp)
     setAchievements(s.achievements)
     setMetrics(s.metrics)
-  }, [])
-
-  const hydrateFromProfile = useCallback((profile: ProfileSave): void => {
-    setAchievements(profile.achievements)
-    setMetrics(profile.metrics)
   }, [])
 
   const setUpgradeLevel = useCallback((type: keyof Upgrades, value: number): void => {
@@ -246,10 +231,8 @@ export function useGameState(): GameStateHook {
     setUpgradeLevel,
     spendScrap,
     resetRunCargo,
-    resetArcadeRun,
     resetForRunStart,
     hydrateFromSave,
-    hydrateFromProfile,
     achievements,
     setAchievements,
     metrics,

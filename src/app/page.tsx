@@ -31,7 +31,7 @@ import { playMenuLoop, enterGameplay } from '@/lib/menu-music'
 import { useGamepadMenu } from '@/hooks/useGamepadMenu'
 import { useGamepadButton } from '@/hooks/useGamepadButton'
 import type { MiningTool, MetalVariant } from '@/game/types'
-import type { ProfileId, ProfileSave, Upgrades } from '@/lib/schemas'
+import type { Upgrades, SaveSlotId } from '@/lib/schemas'
 import { setPauseDampening } from '@/game/volume-control'
 import { playVoice } from '@/lib/voice'
 import type { PauseRunStats } from '@/components/PauseOverlay'
@@ -42,6 +42,7 @@ import { PROLOGUE_SHIP } from '@/game/prologue-config'
 
 type Screen = 'title' | 'start' | 'game'
 
+const ACTIVE_SLOT_KEY = 'fracking-asteroids-active-slot'
 /** Cheapest upgrade in the catalog (Fire Rate Boost). Auto-dock skips the
  *  modal when the player has no materials AND less scrap than this — there
  *  literally isn't anything to buy or sell, so a paused screen of dim rows
@@ -56,10 +57,8 @@ const FRACKER_REBOOTING = './audio/vo_fracker04.wav'
 
 export default function Home() {
   const [screen, setScreen] = useState<Screen>('title')
-  const [activeProfileId, setActiveProfileId] = useState<ProfileId | null>(null)
-  const [activeProfile, setActiveProfile] = useState<ProfileSave | null>(null)
-  const [isTutorialRun, setIsTutorialRun] = useState(false)
-  const [runKey, setRunKey] = useState(0)
+  const [activeSlot, setActiveSlot] = useState<SaveSlotId | null>(null)
+  const [isNewGame, setIsNewGame] = useState(false)
   const [tradeMenuOpen, setTradeMenuOpen] = useState(false)
   const [activeTool, setActiveTool] = useState<MiningTool>('blaster')
   const [dronePopupVisible, setDronePopupVisible] = useState(false)
@@ -95,18 +94,17 @@ export default function Home() {
     buyUpgrade,
     setUpgradeLevel,
     spendScrap,
-    resetArcadeRun,
+    resetRunCargo,
     resetForRunStart,
     hydrateFromSave,
-    hydrateFromProfile,
     achievements,
     setAchievements,
     metrics,
     setMetrics,
   } = useGameState()
   const hasLazer = upgrades.lazer > 0
-  const { save, load } = useGamePersistence(activeProfileId)
-  const tutorial = useTutorial(isTutorialRun && screen === 'game')
+  const { save, load } = useGamePersistence(activeSlot)
+  const tutorial = useTutorial(isNewGame && screen === 'game')
   // Latest "is the player in the scripted prologue" flag, kept in a ref so the
   // metric/run-state mutators and the achievement evaluator can cheaply gate on
   // it without re-creating their callbacks. The prologue is a god-ship showcase
@@ -165,65 +163,68 @@ export default function Home() {
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
 
     void save({
+      ship: { x: 0, y: 0, rotation: 0, velocityX: 0, velocityY: 0 },
+      upgrades,
+      cargo: { ...cargo, scrap },
+      hp: playerHp,
       highScore,
+      timestamp: Date.now(),
       achievements,
       metrics,
-    }).then((profile) => {
-      if (profile) setActiveProfile(profile)
+    }).then(() => {
       saveTimeoutRef.current = setTimeout(() => {
         setIsSaving(false)
       }, 2000)
     })
   }, [saveSeq]) // eslint-disable-line react-hooks/exhaustive-deps -- save reads latest state at trigger time
 
-  // Hydrate the selected profile's long-term progress. Runtime ship state is
-  // deliberately excluded so every arcade run starts from a clean baseline.
+  // Hydrate the slot's saved state when a game begins. Pushes upgrades and
+  // collector tier into the scene so toggleable tools (lazer/ripple) stay
+  // unlocked across reloads — without this, `lazerUnlocked` in the scene
+  // resets to false and Q cycles only blaster.
   useEffect(() => {
-    if (!activeProfileId) return
-    void load().then((profile) => {
-      if (!profile) return
-      setActiveProfile(profile)
-      setHighScore(profile.highScore)
-      hydrateFromProfile(profile)
+    if (!activeSlot) return
+    void load().then((s) => {
+      if (!s) return
+      setHighScore(s.highScore)
+      if (isNewGame) return
+      hydrateFromSave(s)
+      // Defer to next tick so the scene's imperative handle is mounted.
+      const id = window.setTimeout(() => {
+        gameCanvasRef.current?.setCombatUpgrades(s.upgrades)
+        gameCanvasRef.current?.setCollectorTier(s.upgrades.collector)
+        if (s.upgrades.lazer > 0) setActiveTool('lazer')
+      }, 0)
+      return () => window.clearTimeout(id)
     })
-  }, [activeProfileId, hydrateFromProfile, load])
+  }, [activeSlot, load, isNewGame, hydrateFromSave])
 
   const handleTitleBegin = useCallback(() => {
     playMenuLoop()
     setScreen('start')
   }, [])
 
-  const handleProfileSelected = useCallback(
-    (profile: ProfileSave) => {
-      setActiveProfileId(profile.profileId)
-      setActiveProfile(profile)
-      setHighScore(profile.highScore)
-      hydrateFromProfile(profile)
-    },
-    [hydrateFromProfile],
-  )
-
-  const handleStartRun = useCallback(() => {
-    if (!activeProfile) return
-    resetArcadeRun()
-    setIsTutorialRun(activeProfile.metrics.totalRuns === 0 && achievements.length === 0)
+  const handleNewGame = useCallback((slotId: SaveSlotId) => {
+    localStorage.setItem(ACTIVE_SLOT_KEY, slotId)
+    setActiveSlot(slotId)
+    setIsNewGame(true)
     setAchievementQueue([])
     resetAchievementRun()
     setLiveRunTimeSec(0)
-    setRunStats(null)
-    setRunOver(false)
-    setIsNewBest(false)
-    setActiveTool('blaster')
-    setDroneCount(0)
-    setLedger(0)
-    setArbiterHud(null)
-    setArbiterBanner(null)
-    setTradeMenuOpen(false)
-    setPhotoMode(false)
-    setRunKey((n) => n + 1)
     enterGameplay()
     setScreen('game')
-  }, [activeProfile, achievements.length, resetAchievementRun, resetArcadeRun])
+  }, [resetAchievementRun])
+
+  const handleLoadGame = useCallback((slotId: SaveSlotId) => {
+    localStorage.setItem(ACTIVE_SLOT_KEY, slotId)
+    setActiveSlot(slotId)
+    setIsNewGame(false)
+    setAchievementQueue([])
+    resetAchievementRun()
+    setLiveRunTimeSec(0)
+    enterGameplay()
+    setScreen('game')
+  }, [resetAchievementRun])
 
   const handleCollect = useCallback(
     (variant: MetalVariant) => {
@@ -457,8 +458,8 @@ export default function Home() {
         // First-ever Drone Bay purchase pops a one-time explainer so the
         // player knows the radar is a command surface and that they still
         // need to *build* individual drones at the station.
-        if (type === 'drone' && upgrades.drone === 0 && activeProfileId) {
-          const key = `fracking-asteroids-drone-tutorial-${activeProfileId}`
+        if (type === 'drone' && upgrades.drone === 0 && activeSlot) {
+          const key = `fracking-asteroids-drone-tutorial-${activeSlot}`
           if (typeof localStorage !== 'undefined' && !localStorage.getItem(key)) {
             localStorage.setItem(key, '1')
             setDronePopupVisible(true)
@@ -470,7 +471,7 @@ export default function Home() {
         requestSave()
       })
     },
-    [activeProfileId, buyUpgrade, patchAchievementRun, requestSave, tutorial, upgrades],
+    [activeSlot, buyUpgrade, patchAchievementRun, requestSave, tutorial, upgrades],
   )
 
   // React-side mirror of the scene's drone count so the trade menu can
@@ -734,48 +735,32 @@ export default function Home() {
   )
 
   const handleContinue = useCallback(() => {
-    resetArcadeRun()
+    gameCanvasRef.current?.respawnAfterDeath()
+    resetRunCargo()
     setRunStats(null)
     setRunOver(false)
     setLiveRunTimeSec(0)
-    setIsTutorialRun(false)
-    setIsNewBest(false)
-    setActiveTool('blaster')
-    setDroneCount(0)
-    setLedger(0)
-    setArbiterHud(null)
-    setArbiterBanner(null)
-    setTradeMenuOpen(false)
-    setPhotoMode(false)
-    setRunKey((n) => n + 1)
-    resetAchievementRun()
+    resetAchievementRun({ continuedAfterDeath: true })
     requestSave()
-  }, [requestSave, resetAchievementRun, resetArcadeRun])
+  }, [requestSave, resetAchievementRun, resetRunCargo])
 
-  // Pause-menu Restart Run: abandon the current attempt and remount the scene
-  // from default arcade state. Profile stats stay, ship power does not.
+  // Pause-menu Restart Run: reuse the death-respawn path. Same effect as
+  // dying and continuing — full ship reset at the station — but invoked
+  // voluntarily from the pause menu, so the run-summary screen is skipped.
   const handlePauseRestart = useCallback(() => {
-    resetArcadeRun()
+    gameCanvasRef.current?.respawnAfterDeath()
+    resetRunCargo()
     setRunStats(null)
     setRunOver(false)
     setLiveRunTimeSec(0)
-    setIsTutorialRun(false)
-    setIsNewBest(false)
-    setActiveTool('blaster')
-    setDroneCount(0)
-    setLedger(0)
-    setArbiterHud(null)
-    setArbiterBanner(null)
-    setTradeMenuOpen(false)
-    setPhotoMode(false)
-    setRunKey((n) => n + 1)
     resetAchievementRun()
     if (paused) togglePause()
     requestSave()
-  }, [paused, requestSave, resetAchievementRun, resetArcadeRun, togglePause])
+  }, [paused, requestSave, resetAchievementRun, resetRunCargo, togglePause])
 
   // Pause-menu Quit to Title: drop back to the title screen. The scene
-  // unmounts naturally when `screen` changes; only profile progress persists.
+  // unmounts naturally when `screen` changes; persistence already flushed
+  // any in-progress upgrades.
   const handlePauseQuit = useCallback(() => {
     if (paused) togglePause()
     setScreen('title')
@@ -854,12 +839,12 @@ export default function Home() {
   // where the player actually approaches the singularity.
   const handleBlackHoleNearby = useCallback(() => {
     patchAchievementRun((prev) => ({ ...prev, blackHoleWarned: true }))
-    if (!activeProfileId) return
+    if (!activeSlot) return
     if (typeof localStorage === 'undefined') return
-    const key = `fracking-asteroids-black-hole-tutorial-${activeProfileId}`
+    const key = `fracking-asteroids-black-hole-tutorial-${activeSlot}`
     if (localStorage.getItem(key)) return
     setBlackHolePopupVisible(true)
-  }, [activeProfileId, patchAchievementRun])
+  }, [activeSlot, patchAchievementRun])
 
   const handleBlackHoleEscaped = useCallback(() => {
     patchAchievementRun((prev) =>
@@ -869,14 +854,14 @@ export default function Home() {
 
   const handleDismissBlackHolePopup = useCallback(() => {
     setBlackHolePopupVisible(false)
-    if (!activeProfileId) return
+    if (!activeSlot) return
     try {
-      localStorage.setItem(`fracking-asteroids-black-hole-tutorial-${activeProfileId}`, '1')
+      localStorage.setItem(`fracking-asteroids-black-hole-tutorial-${activeSlot}`, '1')
     } catch {
       // localStorage may be disabled; the per-session scene latch still
       // prevents repeat triggers within this run.
     }
-  }, [activeProfileId])
+  }, [activeSlot])
 
   // First-encounter tutorial popup helpers — same gate-on-localStorage pattern
   // as the black-hole and drone popups so each only ever shows once per slot.
@@ -891,16 +876,16 @@ export default function Home() {
   } {
     return {
       onFire: (): void => {
-        if (!activeProfileId || typeof localStorage === 'undefined') return
-        const key = `fracking-asteroids-${storageSuffix}-${activeProfileId}`
+        if (!activeSlot || typeof localStorage === 'undefined') return
+        const key = `fracking-asteroids-${storageSuffix}-${activeSlot}`
         if (localStorage.getItem(key)) return
         setVisible(true)
       },
       onDismiss: (): void => {
         setVisible(false)
-        if (!activeProfileId) return
+        if (!activeSlot) return
         try {
-          localStorage.setItem(`fracking-asteroids-${storageSuffix}-${activeProfileId}`, '1')
+          localStorage.setItem(`fracking-asteroids-${storageSuffix}-${activeSlot}`, '1')
         } catch {
           // localStorage disabled — fall back to per-session latching only.
         }
@@ -909,20 +894,20 @@ export default function Home() {
   }
   const defensePopup = useMemo(
     () => makeFirstEncounter('defense-tutorial', setDefensePopupVisible),
-    // makeFirstEncounter closes over `activeProfileId`; recreate when the profile
+    // makeFirstEncounter closes over `activeSlot`; recreate when the slot
     // changes so per-slot persistence stays correct.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeProfileId],
+    [activeSlot],
   )
   const formationPopup = useMemo(
     () => makeFirstEncounter('formation-tutorial', setFormationPopupVisible),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeProfileId],
+    [activeSlot],
   )
   const splitterPopup = useMemo(
     () => makeFirstEncounter('splitter-tutorial', setSplitterPopupVisible),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeProfileId],
+    [activeSlot],
   )
 
   // Self-clear the "sector hot, dock locked" banner ~1.6s after it fires.
@@ -1223,18 +1208,6 @@ export default function Home() {
     () => (achievementQueue.length > 0 ? getAchievement(achievementQueue[0]) ?? null : null),
     [achievementQueue],
   )
-  const currentProfileForMenu = useMemo<ProfileSave | null>(
-    () =>
-      activeProfile
-        ? {
-            ...activeProfile,
-            highScore,
-            achievements,
-            metrics,
-          }
-        : null,
-    [activeProfile, achievements, highScore, metrics],
-  )
 
   useEffect(() => {
     // No achievements unlock during the prologue showcase. 'done' (and every
@@ -1273,12 +1246,7 @@ export default function Home() {
         {screen === 'title' ? (
           <TitleScreen onBegin={handleTitleBegin} />
         ) : (
-          <StartScreen
-            activeProfile={currentProfileForMenu}
-            achievementItems={achievementItems}
-            onProfileSelected={handleProfileSelected}
-            onStartRun={handleStartRun}
-          />
+          <StartScreen onNewGame={handleNewGame} onLoadGame={handleLoadGame} />
         )}
       </main>
     )
@@ -1287,7 +1255,6 @@ export default function Home() {
   return (
     <main className="relative w-screen h-dvh overflow-hidden bg-space-900">
       <GameCanvas
-        key={runKey}
         ref={gameCanvasRef}
         paused={
           paused ||
