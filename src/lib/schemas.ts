@@ -95,12 +95,36 @@ export type GameState = z.infer<typeof GameStateSchema>
 
 export const SAVE_SLOT_IDS = ['save-1', 'save-2', 'save-3'] as const
 export type SaveSlotId = (typeof SAVE_SLOT_IDS)[number]
+export type ProfileId = SaveSlotId
 
 export const SaveSlotSummarySchema = z.object({
   slotId: z.enum(SAVE_SLOT_IDS),
   timestamp: z.number(),
 })
 export type SaveSlotSummary = z.infer<typeof SaveSlotSummarySchema>
+
+export const ProfileSchema = z.object({
+  profileId: z.enum(SAVE_SLOT_IDS),
+  name: z.string().min(1).max(18),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  highScore: z.number().min(0).default(0),
+  achievements: z.array(z.string()).default([]),
+  metrics: AchievementMetricsSchema.default({}),
+})
+export type ProfileSave = z.infer<typeof ProfileSchema>
+
+export function defaultProfile(profileId: ProfileId, now = Date.now()): ProfileSave {
+  return {
+    profileId,
+    name: `PROFILE ${SAVE_SLOT_IDS.indexOf(profileId) + 1}`,
+    createdAt: now,
+    updatedAt: now,
+    highScore: 0,
+    achievements: [],
+    metrics: defaultGameState().metrics,
+  }
+}
 
 export function defaultGameState(): GameState {
   return {
