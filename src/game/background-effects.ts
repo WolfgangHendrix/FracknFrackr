@@ -229,6 +229,7 @@ export interface BlackHole {
   spawnTime: number | null
   x: number
   y: number
+  scale: number
 }
 
 /** Seconds the spawn fade-in takes to reach full opacity. */
@@ -292,9 +293,10 @@ function buildEnergyRing(radius: number, color: number, opacity: number): THREE.
   return new THREE.Mesh(geo, mat)
 }
 
-export function createBlackHole(x: number, y: number): BlackHole {
+export function createBlackHole(x: number, y: number, scale = 1): BlackHole {
   const group = new THREE.Group()
   group.position.set(x, y, -10)
+  group.scale.setScalar(scale)
 
   // Faint gravity-well glow — a big, dim red disc that gives the whole thing
   // a sense of dread bleeding outward.
@@ -378,7 +380,7 @@ export function createBlackHole(x: number, y: number): BlackHole {
     }
   })
 
-  return { group, swirl, energyRings, dangerRing, coreMesh, spawnTime: null, x, y }
+  return { group, swirl, energyRings, dangerRing, coreMesh, spawnTime: null, x, y, scale }
 }
 
 export function updateBlackHole(hole: BlackHole, time: number, camX: number, camY: number): void {

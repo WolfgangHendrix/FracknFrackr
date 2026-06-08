@@ -112,6 +112,19 @@ export const ARBITER_DEFEAT_LEDGER_FACTOR = 0.35
 /** The Ledger drops by this flat amount when an Arbiter is merely evaded. */
 export const ARBITER_EVADE_LEDGER_RELIEF = 90
 
+/**
+ * Later Marks grant less Ledger relief on defeat, so expert players cannot
+ * keep resetting the run to a stable low-threat loop forever.
+ */
+export function arbiterDefeatLedgerFactor(mark: number): number {
+  return Math.min(0.75, ARBITER_DEFEAT_LEDGER_FACTOR + Math.max(0, mark - 1) * 0.05)
+}
+
+/** Later Marks also give less relief when merely outlasted. */
+export function arbiterEvadeLedgerRelief(mark: number): number {
+  return Math.max(20, ARBITER_EVADE_LEDGER_RELIEF - Math.max(0, mark - 1) * 8)
+}
+
 // ---------------------------------------------------------------------------
 // Auto-balance — player-power-driven difficulty
 // ---------------------------------------------------------------------------

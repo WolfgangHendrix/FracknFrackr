@@ -97,8 +97,8 @@ import {
   ASTEROID_REPLENISH_BATCH,
   ASTEROID_REPLENISH_INTERVAL,
   arbiterThreshold,
-  ARBITER_DEFEAT_LEDGER_FACTOR,
-  ARBITER_EVADE_LEDGER_RELIEF,
+  arbiterDefeatLedgerFactor,
+  arbiterEvadeLedgerRelief,
   computePowerIndex,
   threatBonus,
 } from './ledger-config'
@@ -347,6 +347,8 @@ export interface TickState {
   marksDefeated: number
   /** Seconds elapsed in endless play this run. */
   runTime: number
+  /** Late-run collapse pressure; rises after high threat and never decreases this run. */
+  sectorCollapse: number
   /** Latch so the run-ended event fires exactly once. */
   endlessDeathFired: boolean
 
@@ -385,8 +387,8 @@ export interface TickInput {
   tutorialStep: TutorialStep
   /** Camera-visible world-space rectangle, for gating fire to on-screen targets. */
   viewBounds: { centerX: number; centerY: number; halfW: number; halfH: number }
-  /** Active black-hole hazard positions (one per visible black hole). */
-  blackHoles: { x: number; y: number }[]
+  /** Active black-hole hazards (one per visible black hole). */
+  blackHoles: BlackHoleBody[]
 }
 
 import type { MetalVariant } from './types'
@@ -650,6 +652,7 @@ export function createTickState(config?: TickStateConfig): TickState {
     peakLedger: 0,
     marksDefeated: 0,
     runTime: 0,
+    sectorCollapse: 0,
     endlessDeathFired: false,
 
     prologueFieldSpawned: false,
@@ -1266,23 +1269,26 @@ function detonateSmartBomb(state: TickState, result: TickResult): void {
 }
 
 type PositionBody = { x: number; y: number }
+type BlackHoleBody = PositionBody & { scale?: number }
 type VelocityBody = PositionBody & { velocityX: number; velocityY: number }
 type VBody = PositionBody & { vx: number; vy: number }
 
 function blackHolePullFactor(
   body: PositionBody,
-  hole: PositionBody,
+  hole: BlackHoleBody,
 ): { nx: number; ny: number; factor: number } | null {
+  const scale = Math.max(0.5, hole.scale ?? 1)
+  const pullRadius = BLACK_HOLE_PULL_RADIUS * scale
   const dx = hole.x - body.x
   const dy = hole.y - body.y
   const distSq = dx * dx + dy * dy
   if (distSq <= 0.0001) return { nx: 1, ny: 0, factor: 1 }
-  if (distSq > BLACK_HOLE_PULL_RADIUS * BLACK_HOLE_PULL_RADIUS) return null
+  if (distSq > pullRadius * pullRadius) return null
   const dist = Math.sqrt(distSq)
   // Quadratic falloff: gentle out near the rim (so a thrusting ship can still
   // claw away), ramping hard only as you close on the core. This is what gives
   // a real escape window outside the point-of-no-return ring.
-  const proximity = 1 - dist / BLACK_HOLE_PULL_RADIUS
+  const proximity = 1 - dist / pullRadius
   return {
     nx: dx / dist,
     ny: dy / dist,
@@ -1292,41 +1298,45 @@ function blackHolePullFactor(
 
 function applyBlackHolePullToBody(
   body: VelocityBody,
-  hole: PositionBody,
+  hole: BlackHoleBody,
   dt: number,
   multiplier = 1,
 ): void {
   const pull = blackHolePullFactor(body, hole)
   if (!pull) return
-  const accel = BLACK_HOLE_PULL_ACCEL * pull.factor * multiplier
+  const scale = Math.max(0.5, hole.scale ?? 1)
+  const accel = BLACK_HOLE_PULL_ACCEL * scale * pull.factor * multiplier
   body.velocityX += pull.nx * accel * dt
   body.velocityY += pull.ny * accel * dt
 }
 
-function applyBlackHolePullToAsteroid(asteroid: Asteroid, hole: PositionBody, dt: number): void {
+function applyBlackHolePullToAsteroid(asteroid: Asteroid, hole: BlackHoleBody, dt: number): void {
   applyBlackHolePullToBody(asteroid, hole, dt)
 }
 
-function applyBlackHolePullToVBody(body: VBody, hole: PositionBody, dt: number): void {
+function applyBlackHolePullToVBody(body: VBody, hole: BlackHoleBody, dt: number): void {
   const pull = blackHolePullFactor(body, hole)
   if (!pull) return
-  const accel = BLACK_HOLE_PULL_ACCEL * pull.factor
+  const scale = Math.max(0.5, hole.scale ?? 1)
+  const accel = BLACK_HOLE_PULL_ACCEL * scale * pull.factor
   body.vx += pull.nx * accel * dt
   body.vy += pull.ny * accel * dt
 }
 
 function applyBlackHolePullToVelocityBody(
   body: VelocityBody,
-  hole: PositionBody,
+  hole: BlackHoleBody,
   dt: number,
 ): void {
   applyBlackHolePullToBody(body, hole, dt)
 }
 
-function isInsideBlackHole(body: PositionBody, hole: PositionBody): boolean {
+function isInsideBlackHole(body: PositionBody, hole: BlackHoleBody): boolean {
+  const scale = Math.max(0.5, hole.scale ?? 1)
+  const radius = BLACK_HOLE_EVENT_HORIZON_RADIUS * scale
   const dx = body.x - hole.x
   const dy = body.y - hole.y
-  return dx * dx + dy * dy <= BLACK_HOLE_EVENT_HORIZON_RADIUS * BLACK_HOLE_EVENT_HORIZON_RADIUS
+  return dx * dx + dy * dy <= radius * radius
 }
 
 function applyBlackHoleConsumption(state: TickState, input: TickInput, result: TickResult): void {
@@ -1699,8 +1709,8 @@ export function tick(state: TickState, input: TickInput): TickResult {
   // so the engine exhaust stays consistent with movement. Aim only steers the
   // turret, which scene.ts rotates independently of the hull.
 
-  // Thruster Vectoring: a *tap* of the boost key triggers a 0.4s burst with
-  // a 3s cooldown. The raw boost input from input.inputState is treated as
+  // Thruster Vectoring: a *tap* of the boost key triggers a short burst with
+  // a cooldown. The raw boost input from input.inputState is treated as
   // the trigger; updateShip reads from boostActiveTimer instead so a hold
   // doesn't drain the cooldown faster than the cadence allows.
   state.boostActiveTimer = Math.max(0, state.boostActiveTimer - dt)
@@ -2873,6 +2883,7 @@ function updateEndlessMode(
   state.ledger += result.metalCollected.length * LEDGER_PER_METAL
   state.peakLedger = Math.max(state.peakLedger, state.ledger)
   state.runTime += dt
+  updateSectorCollapse(state, dt)
 
   // --- Cull destroyed rocks and ones the player has long since left behind ---
   const viewDiag = Math.hypot(input.viewBounds.halfW, input.viewBounds.halfH)
@@ -2926,7 +2937,7 @@ function updateEndlessMode(
   if (
     !state.arbiter &&
     !state.arbiterEscort &&
-    state.ledger >= arbiterThreshold(state.arbiterMark + 1) &&
+    combatThreat(state) >= arbiterThreshold(state.arbiterMark + 1) &&
     !state.debugDisableEnemySpawns
   ) {
     // The Ledger crossed the next threshold — summon the next Arbiter Mark.
@@ -2978,7 +2989,7 @@ function updateEndlessMode(
     state.patrolTimer -= dt
     if (state.patrolTimer <= 0) {
       const threat = combatThreat(state)
-      state.patrolTimer = patrolInterval(threat)
+      state.patrolTimer = patrolIntervalWithCollapse(state, threat)
       const rollFormation = threat >= 220 && Math.random() < 0.28
       if (rollFormation) {
         // Phalanx (hornet dive-bomber wave) emerges as a higher-threat beat;
@@ -2989,7 +3000,7 @@ function updateEndlessMode(
           spawnWedgeFormation(state, result, viewDiag)
         }
       } else {
-        spawnPatrol(state, result, patrolSize(threat), viewDiag)
+        spawnPatrol(state, result, patrolSizeWithCollapse(state, threat), viewDiag)
       }
     }
   }
@@ -3171,10 +3182,9 @@ function processArbiterCombat(
     }
     state.marksDefeated++
     if (isPrimary) {
-      // Encounter-level rewards: hard Ledger relief, full hull, defeat banner.
-      state.ledger = Math.max(0, state.ledger * ARBITER_DEFEAT_LEDGER_FACTOR)
-      state.playerHp = effectivePlayerMaxHp()
-      result.playerDamaged = true
+      // Encounter-level rewards: diminishing Ledger relief and defeat banner.
+      // No repair here; hull recovery must come from station/consumable play.
+      state.ledger = Math.max(0, state.ledger * arbiterDefeatLedgerFactor(arb.mark))
       result.arbiterDefeated = { x: arb.x, y: arb.y, mark: arb.mark }
     } else {
       result.arbiterEscortDefeated = { x: arb.x, y: arb.y, mark: arb.mark }
@@ -3194,7 +3204,7 @@ function processArbiterCombat(
     // Only the primary's withdrawal grants Ledger relief + a comms banner; the
     // escort just peels off (its mesh is removed when the slot goes null).
     if (isPrimary) {
-      state.ledger = Math.max(0, state.ledger - ARBITER_EVADE_LEDGER_RELIEF)
+      state.ledger = Math.max(0, state.ledger - arbiterEvadeLedgerRelief(arb.mark))
       result.arbiterWithdrawn = { mark: arb.mark }
     }
     return null
@@ -3209,8 +3219,8 @@ function processArbiterCombat(
  * the raw Ledger and the HUD threat meter; this only steers spawn pressure, so
  * a strong loadout faces denser, harder, more varied waves at the same Ledger.
  */
-function combatThreat(state: TickState): number {
-  const power = computePowerIndex({
+function loadoutPowerIndex(state: TickState): number {
+  return computePowerIndex({
     blasterTier: state.blasterTier,
     collectorTier: state.collectorTier,
     speedTier: state.speedTier,
@@ -3230,7 +3240,44 @@ function combatThreat(state: TickState): number {
     missileBiasUnlocked: state.missileBiasUnlocked,
     smartBomb: state.smartBombCount > 0,
   })
-  return state.ledger + threatBonus(power, state.marksDefeated, state.peakLedger)
+}
+
+function baseCombatThreat(state: TickState): number {
+  return state.ledger + threatBonus(loadoutPowerIndex(state), state.marksDefeated, state.peakLedger)
+}
+
+function combatThreat(state: TickState): number {
+  return baseCombatThreat(state) + state.sectorCollapse * 8
+}
+
+function updateSectorCollapse(state: TickState, dt: number): void {
+  const baseThreat = baseCombatThreat(state)
+  const lateRun =
+    state.arbiterMark >= ARBITER_BULLET_HELL_MARK ||
+    state.marksDefeated >= 4 ||
+    state.peakLedger >= 1500 ||
+    state.runTime >= 900
+  if (!lateRun && baseThreat < 1500) return
+
+  const markPressure = Math.max(0, state.arbiterMark - (ARBITER_BULLET_HELL_MARK - 1)) * 0.18
+  const threatPressure = Math.max(0, baseThreat - 1500) / 1400
+  const timePressure = Math.max(0, state.runTime - 900) / 1800
+  state.sectorCollapse = Math.min(
+    180,
+    state.sectorCollapse + dt * (0.35 + markPressure + threatPressure + timePressure),
+  )
+}
+
+function patrolIntervalWithCollapse(state: TickState, threat: number): number {
+  return Math.max(3.5, patrolInterval(threat) - state.sectorCollapse / 32)
+}
+
+function patrolSizeWithCollapse(state: TickState, threat: number): number {
+  return Math.min(8, patrolSize(threat) + Math.floor(state.sectorCollapse / 45))
+}
+
+function maxPatrolEnemies(state: TickState): number {
+  return Math.min(18, MAX_PATROL_ENEMIES + Math.floor(state.sectorCollapse / 30))
 }
 
 /**
@@ -3265,7 +3312,7 @@ function spawnPatrol(
   viewDiag: number,
 ): void {
   const aliveEnemies = state.ambushEnemies.reduce((n, e) => n + (e.alive ? 1 : 0), 0)
-  const count = Math.min(requested, MAX_PATROL_ENEMIES - aliveEnemies)
+  const count = Math.min(requested, maxPatrolEnemies(state) - aliveEnemies)
   if (count <= 0) return
   const threat = combatThreat(state)
   const damage = patrolEnemyDamage(threat)
@@ -3326,7 +3373,7 @@ const WEDGE_SLOTS: readonly { x: number; y: number }[] = [
  */
 function spawnWedgeFormation(state: TickState, result: TickResult, viewDiag: number): void {
   const aliveEnemies = state.ambushEnemies.reduce((n, e) => n + (e.alive ? 1 : 0), 0)
-  const budget = MAX_PATROL_ENEMIES - aliveEnemies
+  const budget = maxPatrolEnemies(state) - aliveEnemies
   if (budget <= 0) return
   const count = Math.min(WEDGE_SLOTS.length, budget)
   const damage = patrolEnemyDamage(combatThreat(state))
@@ -3385,7 +3432,7 @@ const PHALANX_SPACING = 13
  */
 function spawnPhalanxFormation(state: TickState, result: TickResult, viewDiag: number): void {
   const aliveEnemies = state.ambushEnemies.reduce((n, e) => n + (e.alive ? 1 : 0), 0)
-  const budget = MAX_PATROL_ENEMIES - aliveEnemies
+  const budget = maxPatrolEnemies(state) - aliveEnemies
   if (budget <= 0) return
   const count = Math.min(PHALANX_SIZE, budget)
   const damage = patrolEnemyDamage(combatThreat(state))
@@ -3466,7 +3513,7 @@ function spawnSplitterChildren(
   parent: EnemyShip,
 ): void {
   const aliveEnemies = state.ambushEnemies.reduce((n, e) => n + (e.alive ? 1 : 0), 0)
-  const budget = MAX_PATROL_ENEMIES - aliveEnemies
+  const budget = maxPatrolEnemies(state) - aliveEnemies
   if (budget <= 0) return
   const count = Math.min(SPLITTER_CHILD_COUNT, budget)
   for (let i = 0; i < count; i++) {

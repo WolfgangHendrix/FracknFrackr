@@ -131,7 +131,7 @@ const UPGRADE_CATALOG_SECTIONS = [
         type: 'thrusters' as const,
         label: 'Thruster Vectoring',
         cost: 240,
-        description: 'Tap Shift / B to boost — 2× velocity, 3s cooldown',
+        description: 'Tap Shift / B to boost — short burst, 5s cooldown',
       },
     ],
   },

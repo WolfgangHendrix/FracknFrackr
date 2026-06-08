@@ -17,10 +17,10 @@ export const SHIP_TURN_RATE = 9
  * short sustain window before a cooldown lockout. Gated by the
  * `thrustersUnlocked` upgrade in game-tick.
  */
-export const BOOST_DURATION = 0.9 // sec of active boost
-export const BOOST_COOLDOWN = 3 // sec lockout after a boost
-export const BOOST_MULTIPLIER = 3 // accel + max-speed multiplier while boosting
-export const BOOST_IMPULSE = 120 // instant velocity kick (units/sec) on activation
+export const BOOST_DURATION = 0.55 // sec of active boost
+export const BOOST_COOLDOWN = 5 // sec lockout after a boost
+export const BOOST_MULTIPLIER = 2.2 // accel + max-speed multiplier while boosting
+export const BOOST_IMPULSE = 75 // instant velocity kick (units/sec) on activation
 
 /**
  * Ship voxel colors (hex values).

@@ -216,9 +216,14 @@ const BLACK_HOLE_WARN_RADIUS = 230
 // Station is at (30, 200). Rings are defined in background-parallax space.
 // Angles spread evenly so black holes surround every direction of escape.
 // Each ring activates when the player first reaches that distance from station.
-const BLACK_HOLE_SPAWN_RINGS: { threshold: number; positions: { x: number; y: number }[] }[] = [
+const BLACK_HOLE_SPAWN_RINGS: {
+  threshold: number
+  scale: number
+  positions: { x: number; y: number }[]
+}[] = [
   {
     threshold: 280,
+    scale: 1,
     positions: [
       { x: 330, y: 200 },   // right
       { x: -120, y: 460 },  // upper-left
@@ -227,6 +232,7 @@ const BLACK_HOLE_SPAWN_RINGS: { threshold: number; positions: { x: number; y: nu
   },
   {
     threshold: 480,
+    scale: 1.25,
     positions: [
       { x: 280, y: 633 },   // upper-right
       { x: -470, y: 200 },  // left
@@ -235,11 +241,22 @@ const BLACK_HOLE_SPAWN_RINGS: { threshold: number; positions: { x: number; y: nu
   },
   {
     threshold: 680,
+    scale: 1.55,
     positions: [
       { x: 636, y: 550 },   // far upper-right
       { x: -576, y: 550 },  // far upper-left
       { x: -576, y: -150 }, // far lower-left
       { x: 636, y: -150 },  // far lower-right
+    ],
+  },
+  {
+    threshold: 920,
+    scale: 1.9,
+    positions: [
+      { x: 930, y: 200 },
+      { x: 30, y: 1100 },
+      { x: -900, y: 200 },
+      { x: 30, y: -700 },
     ],
   },
 ]
@@ -1552,6 +1569,7 @@ export function createGameScene(
       blackHoles: blackHoles.map((h) => ({
         x: h.x + camera.position.x * 0.1,
         y: h.y + camera.position.y * 0.1,
+        scale: h.scale,
       })),
     }
 
@@ -2431,8 +2449,9 @@ export function createGameScene(
           blackHoleNextRing < BLACK_HOLE_SPAWN_RINGS.length &&
           blackHoleMaxDistFromStation >= BLACK_HOLE_SPAWN_RINGS[blackHoleNextRing].threshold
         ) {
-          for (const pos of BLACK_HOLE_SPAWN_RINGS[blackHoleNextRing].positions) {
-            const newHole = createBlackHole(pos.x, pos.y)
+          const ring = BLACK_HOLE_SPAWN_RINGS[blackHoleNextRing]
+          for (const pos of ring.positions) {
+            const newHole = createBlackHole(pos.x, pos.y, ring.scale)
             scene.add(newHole.group)
             blackHoles.push(newHole)
           }
@@ -2699,7 +2718,8 @@ export function createGameScene(
           const hx = h.x + camera.position.x * 0.1
           const hy = h.y + camera.position.y * 0.1
           const dist = Math.sqrt((hx - ship.x) ** 2 + (hy - ship.y) ** 2)
-          if (dist < closestHoleDist) closestHoleDist = dist
+          const scaledDist = dist / Math.max(0.5, h.scale)
+          if (scaledDist < closestHoleDist) closestHoleDist = scaledDist
         }
         if (closestHoleDist <= BLACK_HOLE_ALERT_RADIUS) {
           startArbiterSiren()
@@ -3095,6 +3115,11 @@ export function createGameScene(
     tickState.runawayEnforcerMark = 0
     tickState.runawayEnforcerTimer = 0
     tickState.arbiterMark = 0
+    tickState.peakLedger = 0
+    tickState.marksDefeated = 0
+    tickState.runTime = 0
+    tickState.sectorCollapse = 0
+    tickState.endlessDeathFired = false
     prevLedgerInt = -1
     prevArbiterKey = ''
     blackHoleWarningActive = false
@@ -3299,6 +3324,7 @@ export function createGameScene(
     tickState.peakLedger = 0
     tickState.marksDefeated = 0
     tickState.runTime = 0
+    tickState.sectorCollapse = 0
     tickState.endlessDeathFired = false
     tickState.nearStationFired = false
     tickState.wasInStationRange = false
