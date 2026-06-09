@@ -401,6 +401,11 @@ export function updateBlackHole(hole: BlackHole, time: number, camX: number, cam
       }
     })
   }
+  // The void core is always fully opaque once the fade completes so nothing can
+  // accidentally leave it at 0 (e.g. a future traverse that sets opacity = 0
+  // without restoring it).
+  const coreMat = hole.coreMesh.material as THREE.MeshBasicMaterial
+  coreMat.opacity = fade
 
   // Slowly rotate the particle accretion swirl for a churning galaxy feel.
   hole.swirl.rotation.z = time * 0.08

@@ -11,8 +11,8 @@
  */
 
 import type { Ship } from '@/lib/schemas'
-import type { Asteroid, MiningTool, Projectile } from './types'
-import { WEAPON_AFFINITY } from './types'
+import type { Asteroid, AsteroidType, MiningTool, Projectile } from './types'
+import { WEAPON_AFFINITY, DRILL_AFFINITY } from './types'
 import type { MiningDrone } from './mining-drone'
 import {
   updateMiningDrones,
@@ -136,10 +136,14 @@ const ENEMY_NEARBY_DISTANCE = 60
 const PRECISION_DAMAGE_MULT = 1.5
 /** Max Drill Nose tier — the boost ✕ drill "plow through" engages here. */
 const DRILL_NOSE_MAX_TIER = 3
-/** Flat per-tier drill damage added per contact frame while boosting. At max
- *  tier (3) this is 105 — above any asteroid's HP — so boosting shatters rocks
- *  on contact and the dash plows through the field. */
+/** Flat per-tier drill damage added per contact frame while boosting,
+ *  multiplied by DRILL_AFFINITY[type]. With affinity applied, v-type resists
+ *  (~10 per tier) while comets shatter (~52 per tier). */
 const DRILL_BOOST_FLAT_DMG = 35
+/** Bounce reduction per drill tier during active ramming (0 = full bounce, 1 = no bounce).
+ *  Tier 1 noticeably reduces bounce; tier 3 is effectively zero — ship stays pressed
+ *  against the asteroid surface while thrust is applied. */
+const DRILL_STICK_FACTOR = [0, 0.45, 0.75, 0.96] as const
 const STATION_NEAR_DISTANCE = 80
 const STATION_ENTER_DISTANCE = 60
 const STATION_REPAIR_DISTANCE = 30
@@ -431,6 +435,10 @@ export interface TickResult {
   droneRebuilt: boolean
   /** True while the ship is actively drilling an asteroid with the nose drill. */
   drillNoseActive: boolean
+  /** The type of asteroid currently being drilled (null when not drilling). */
+  drillNoseAsteroidType: AsteroidType | null
+  /** ID of the asteroid currently being drilled (for visual jitter on its mesh). */
+  drillNoseAsteroidId: string | null
   /** Asteroids finished specifically by Drill Nose contact this tick. */
   drillNoseAsteroidFinishes: number
   // Enemy lifecycle
@@ -501,6 +509,8 @@ export interface TickResult {
   newAsteroids: Asteroid[]
   /** Asteroids destroyed by the player this tick (not culls or black-hole consumption). */
   asteroidsDestroyed: number
+  /** Ids + positions of asteroids that were destroyed this tick (hp reached 0). */
+  destroyedAsteroidIds: { id: string; x: number; y: number; type: AsteroidType }[]
   /** Ids of asteroids removed this tick (destroyed or culled far off-screen). */
   expiredAsteroidIds: string[]
   /** Set the tick an Arbiter encounter begins. */
@@ -702,6 +712,8 @@ function emptyResult(): TickResult {
     scrapStolenByEnemies: 0,
     droneRebuilt: false,
     drillNoseActive: false,
+    drillNoseAsteroidType: null,
+    drillNoseAsteroidId: null,
     drillNoseAsteroidFinishes: 0,
     enemySpawned: null,
     enemyDestroyed: null,
@@ -743,6 +755,7 @@ function emptyResult(): TickResult {
     ledger: 0,
     newAsteroids: [],
     asteroidsDestroyed: 0,
+    destroyedAsteroidIds: [],
     expiredAsteroidIds: [],
     arbiterSpawned: null,
     arbiterDefeated: null,
@@ -1240,7 +1253,11 @@ function detonateSmartBomb(state: TickState, result: TickResult): void {
     const dy = e.y - state.ship.y
     const d2 = dx * dx + dy * dy
     if (d2 < BOMB_RADIUS * BOMB_RADIUS) {
-      e.hp -= BOMB_DAMAGE
+      if (e.carrierShieldHp > 0) {
+        e.carrierShieldHp = Math.max(0, e.carrierShieldHp - BOMB_DAMAGE)
+      } else {
+        e.hp -= BOMB_DAMAGE
+      }
       result.enemyDamaged.push({
         enemy: e,
         damage: BOMB_DAMAGE,
@@ -1700,6 +1717,9 @@ export function tick(state: TickState, input: TickInput): TickResult {
   // --- Endless mode: active once the tutorial is complete. Snapshot which
   // asteroids are alive now so updateEndlessMode() can count kills this tick. ---
   const endlessActive = input.tutorialStep === 'done'
+  // Black holes pull after the prologue — even during the tutorial steps the
+  // physics should feel real; only the scripted prologue suppresses them.
+  const blackHolesActive = !input.tutorialStep.startsWith('prologue-')
   const asteroidsAliveBefore: Set<string> | null = endlessActive
     ? new Set(state.asteroids.filter((a) => a.hp > 0).map((a) => a.id))
     : null
@@ -1760,7 +1780,7 @@ export function tick(state: TickState, input: TickInput): TickResult {
     : { ...input.inputState, boost: state.boostActiveTimer > 0 }
   const speedMultiplier = 1 + state.speedTier * 0.1
   updateShip(state.ship, effectiveInput, dt, speedMultiplier)
-  if (endlessActive && input.blackHoles.length > 0) {
+  if (blackHolesActive && input.blackHoles.length > 0) {
     for (const hole of input.blackHoles) {
       applyBlackHolePullToBody(state.ship, hole, dt, BLACK_HOLE_PLAYER_PULL_MULT)
     }
@@ -1825,7 +1845,7 @@ export function tick(state: TickState, input: TickInput): TickResult {
 
   // --- Asteroid drift ---
   for (const a of state.asteroids) {
-    if (endlessActive && input.blackHoles.length > 0 && a.hp > 0) {
+    if (blackHolesActive && input.blackHoles.length > 0 && a.hp > 0) {
       for (const hole of input.blackHoles) {
         applyBlackHolePullToAsteroid(a, hole, dt)
       }
@@ -1861,10 +1881,11 @@ export function tick(state: TickState, input: TickInput): TickResult {
     }
   }
 
-  // --- Ship-asteroid collision ---
-  // The Drill Nose upgrade gates the ramming damage. Tier 1-3 scales the
-  // damage; tier 0 is contact-only (still bounces the ship off, no harm to
-  // the rock).
+  // --- Ship-asteroid collision (Drill Nose) ---
+  // The Drill Nose upgrade gates ramming damage. Damage is scaled by
+  // DRILL_AFFINITY[type] so soft rocks (comet, c-type) crack easily while
+  // hard rocks (v-type, m-type) resist — the player must wear them down
+  // or switch to a blaster/lazer with better WEAPON_AFFINITY.
   //
   // To detect "the player is actively ramming this rock" we sample the
   // velocity *before* resolveShipAsteroidCollision applies its bounce — by
@@ -1873,12 +1894,14 @@ export function tick(state: TickState, input: TickInput): TickResult {
   // then evaluate cosine(angle) between velocity and direction-to-asteroid
   // against a generous 0.3 threshold (~73° cone) so the player doesn't have
   // to aim laser-straight at the asteroid center to trigger the drill.
+  //
   // Boost ✕ Drill Nose synergy: ramming while boosting drives the drill far
   // harder. The bonus is a flat per-contact hit (not dt-scaled) so even the
-  // single-frame contact of a high-speed dash lands a real blow, and at max
-  // drill tier it exceeds any asteroid's HP — the ship shatters rocks on touch.
-  // For a rock you're driving into, we also skip the collision bounce (plow)
-  // so the dash keeps its momentum and blasts straight through the field.
+  // single-frame contact of a high-speed dash lands a real blow.
+  //
+  // Plow-through (no collision bounce) only at max tier + boost. This lets
+  // the dash blast straight through softer rocks while harder rocks still
+  // halt momentum — the player feels the difference.
   const boosting = state.boostActiveTimer > 0
   for (const a of state.asteroids) {
     if (a.hp <= 0) continue
@@ -1895,20 +1918,36 @@ export function tick(state: TickState, input: TickInput): TickResult {
       ramming = cos > 0.3
     }
 
-    // Plow only the rocks you're actually driving into, and only at max tier
-    // where the hit is always lethal — otherwise the ship would clip through a
-    // surviving rock. Rocks grazed from the side still bounce normally.
-    const plow = boosting && ramming && state.drillNoseTier >= DRILL_NOSE_MAX_TIER
-    if (!resolveShipAsteroidCollision(state.ship, a, plow)) continue
+    // Compute this frame's drill damage up front so the plow decision can
+    // depend on it. Soft rocks (comet, c-type) crack easily; hard rocks
+    // (v-type, m-type) resist via DRILL_AFFINITY.
+    const affinity = DRILL_AFFINITY[a.type]
+    let drillDamage = 8 * state.drillNoseTier * dt * affinity
+    if (boosting) drillDamage += DRILL_BOOST_FLAT_DMG * state.drillNoseTier * affinity
+
+    // Plow (skip the bounce) only when this frame's hit is lethal — otherwise
+    // the ship would clip straight through a surviving rock. Soft rocks die on
+    // contact and let the dash blast through; hard rocks survive and halt the
+    // ship, so the player feels the difference.
+    const plow =
+      boosting &&
+      ramming &&
+      state.drillNoseTier >= DRILL_NOSE_MAX_TIER &&
+      a.hp - drillDamage <= 0
+    const stickFactor =
+      ramming && state.drillNoseTier > 0
+        ? DRILL_STICK_FACTOR[state.drillNoseTier]
+        : 0
+    if (!resolveShipAsteroidCollision(state.ship, a, plow, stickFactor)) continue
     if (state.drillNoseTier <= 0) continue
     if (!ramming) continue
 
-    let drillDamage = 8 * state.drillNoseTier * dt
-    if (boosting) drillDamage += DRILL_BOOST_FLAT_DMG * state.drillNoseTier
     const prevHp = a.hp
     a.hp = Math.max(0, a.hp - drillDamage)
     result.asteroidHit = true
     result.drillNoseActive = true
+    result.drillNoseAsteroidType = a.type
+    result.drillNoseAsteroidId = a.id
     if (prevHp > 0 && a.hp <= 0) {
       result.drillNoseAsteroidFinishes += 1
     }
@@ -2344,7 +2383,7 @@ export function tick(state: TickState, input: TickInput): TickResult {
   }
 
   // --- Projectile update ---
-  if (endlessActive && input.blackHoles.length > 0) {
+  if (blackHolesActive && input.blackHoles.length > 0) {
     for (let i = state.projectiles.length - 1; i >= 0; i--) {
       const p = state.projectiles[i]
       let consumed = false
@@ -2474,7 +2513,7 @@ export function tick(state: TickState, input: TickInput): TickResult {
 
   // --- Enemy projectile update ---
   for (let i = state.enemyProjectiles.length - 1; i >= 0; i--) {
-    if (endlessActive && input.blackHoles.length > 0) {
+    if (blackHolesActive && input.blackHoles.length > 0) {
       let consumed = false
       for (const hole of input.blackHoles) {
         applyBlackHolePullToVBody(state.enemyProjectiles[i], hole, dt)
@@ -2763,7 +2802,7 @@ export function tick(state: TickState, input: TickInput): TickResult {
         state.enemyProjectiles.push(proj)
         result.newEnemyProjectiles.push(proj)
       }
-      if (endlessActive && input.blackHoles.length > 0) {
+      if (blackHolesActive && input.blackHoles.length > 0) {
         let consumed = false
         for (const hole of input.blackHoles) {
           applyBlackHolePullToVBody(ae, hole, dt)
@@ -2841,7 +2880,7 @@ export function tick(state: TickState, input: TickInput): TickResult {
   if (endlessActive && asteroidsAliveBefore) {
     updateEndlessMode(state, input, result, asteroidsAliveBefore)
   }
-  if (endlessActive && input.blackHoles.length > 0) {
+  if (blackHolesActive && input.blackHoles.length > 0) {
     applyBlackHoleConsumption(state, input, result)
   }
   result.ledger = state.ledger
@@ -2892,7 +2931,12 @@ function updateEndlessMode(
     const a = state.asteroids[i]
     const dx = a.x - state.ship.x
     const dy = a.y - state.ship.y
-    if (a.hp <= 0 || dx * dx + dy * dy > cullRadiusSq) {
+    const destroyed = a.hp <= 0
+    const culled = dx * dx + dy * dy > cullRadiusSq
+    if (destroyed || culled) {
+      if (destroyed) {
+        result.destroyedAsteroidIds.push({ id: a.id, x: a.x, y: a.y, type: a.type })
+      }
       result.expiredAsteroidIds.push(a.id)
       state.asteroids.splice(i, 1)
       state.asteroidHitCounts.delete(a.id)

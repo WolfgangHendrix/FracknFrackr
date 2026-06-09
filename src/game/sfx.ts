@@ -3,6 +3,7 @@
  */
 
 import { getSfxVolume } from './volume-control'
+import type { AsteroidType } from './types'
 
 let audioCtx: AudioContext | null = null
 
@@ -727,6 +728,29 @@ export function playSellChime(): void {
   }
 }
 
+/** Short descending buzz when the player clicks something they can't afford. */
+export function playCannotBuy(): void {
+  const ctx = getContext()
+  if (!ctx) return
+  const now = ctx.currentTime
+  const vol = getSfxVolume()
+
+  const osc = ctx.createOscillator()
+  osc.type = 'sawtooth'
+  osc.frequency.setValueAtTime(220, now)
+  osc.frequency.exponentialRampToValueAtTime(110, now + 0.12)
+
+  const gain = ctx.createGain()
+  gain.gain.setValueAtTime(0.0001, now)
+  gain.gain.exponentialRampToValueAtTime(0.07 * vol, now + 0.01)
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.14)
+
+  osc.connect(gain)
+  gain.connect(ctx.destination)
+  osc.start(now)
+  osc.stop(now + 0.15)
+}
+
 /** Cash-register "ka-ching" when an upgrade is purchased. */
 export function playBuyRegister(): void {
   const ctx = getContext()
@@ -779,6 +803,129 @@ export function playBuyRegister(): void {
 // ---------------------------------------------------------------------------
 // Cleanup
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Asteroid shatter — per-type sound when an asteroid is destroyed
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-type asteroid shatter/destruction sound.
+ * Soft types (comet, c-type) get a low crumble; hard types (m-type, v-type)
+ * get a sharp metallic crack; d-type gets a wet organic split.
+ */
+export function playAsteroidShatter(type: AsteroidType): void {
+  const ctx = getContext()
+  if (!ctx) return
+  const now = ctx.currentTime
+  const vol = getSfxVolume()
+
+  // Choose frequency and character based on type
+  let baseFreq: number
+  let filterType: BiquadFilterType
+  let filterFreq: number
+  let duration: number
+
+  switch (type) {
+    case 'v-type':
+      baseFreq = 180
+      filterType = 'bandpass'
+      filterFreq = 2200
+      duration = 0.4
+      break
+    case 'm-type':
+      baseFreq = 140
+      filterType = 'bandpass'
+      filterFreq = 1600
+      duration = 0.35
+      break
+    case 'd-type':
+      baseFreq = 80
+      filterType = 'lowpass'
+      filterFreq = 600
+      duration = 0.3
+      break
+    case 'comet':
+      baseFreq = 40
+      filterType = 'lowpass'
+      filterFreq = 300
+      duration = 0.25
+      break
+    default: // c-type, s-type
+      baseFreq = 60
+      filterType = 'lowpass'
+      filterFreq = 500
+      duration = 0.28
+  }
+
+  // Noise burst with bandpass for the crack/crumble character
+  const bufferSize = Math.floor(ctx.sampleRate * duration)
+  const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate)
+  const data = buffer.getChannelData(0)
+  const decay = type === 'v-type' || type === 'm-type' ? 0.06 : 0.04
+  for (let i = 0; i < bufferSize; i++) {
+    data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ctx.sampleRate * decay))
+  }
+  const noise = ctx.createBufferSource()
+  noise.buffer = buffer
+
+  const filter = ctx.createBiquadFilter()
+  filter.type = filterType
+  filter.frequency.setValueAtTime(filterFreq, now)
+  filter.Q.setValueAtTime(1.5, now)
+
+  const noiseGain = ctx.createGain()
+  noiseGain.gain.setValueAtTime(0.12 * vol, now)
+  noiseGain.gain.exponentialRampToValueAtTime(0.001, now + duration)
+
+  noise.connect(filter)
+  filter.connect(noiseGain)
+  noiseGain.connect(ctx.destination)
+  noise.start(now)
+
+  // Low tone for weight — metallic types get a pitched ring
+  if (type === 'v-type' || type === 'm-type') {
+    const osc = ctx.createOscillator()
+    osc.type = 'sine'
+    osc.frequency.setValueAtTime(baseFreq, now)
+    osc.frequency.exponentialRampToValueAtTime(baseFreq * 0.3, now + duration * 0.8)
+
+    const oscGain = ctx.createGain()
+    oscGain.gain.setValueAtTime(0, now)
+    oscGain.gain.linearRampToValueAtTime(0.06 * vol, now + 0.02)
+    oscGain.gain.exponentialRampToValueAtTime(0.001, now + duration)
+
+    osc.connect(oscGain)
+    oscGain.connect(ctx.destination)
+    osc.start(now)
+    osc.stop(now + duration + 0.01)
+  }
+}
+
+/**
+ * Tune the drill loop's bandpass filter to match the asteroid type being
+ * drilled. Softer rocks (comet) get a low grind; harder rocks (v-type)
+ * get a high-pitched screech.
+ */
+export function setDrillSoundType(type: AsteroidType): void {
+  if (!drillSound || !audioCtx) return
+  const now = audioCtx.currentTime
+  let freq: number
+  let q: number
+  switch (type) {
+    case 'v-type':
+      freq = 1200; q = 3.5; break
+    case 'm-type':
+      freq = 900; q = 3; break
+    case 'd-type':
+      freq = 700; q = 2.5; break
+    case 'comet':
+      freq = 350; q = 1.5; break
+    default: // c-type, s-type
+      freq = 500; q = 2
+  }
+  drillSound.filter.frequency.setTargetAtTime(freq, now, 0.08)
+  drillSound.filter.Q.setTargetAtTime(q, now, 0.08)
+}
 
 export function disposeSfx(): void {
   stopEngineSound()

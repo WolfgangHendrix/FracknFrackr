@@ -1,8 +1,8 @@
 'use client'
 
 import { useState, useCallback, useEffect } from 'react'
-import { defaultGameState } from '@/lib/schemas'
-import type { AchievementMetrics, Cargo, GameState, Upgrades } from '@/lib/schemas'
+import { defaultProfile, defaultUpgrades, defaultCargo } from '@/lib/schemas'
+import type { AchievementMetrics, Cargo, Profile, Upgrades } from '@/lib/schemas'
 import type { MetalVariant } from '@/game/scene'
 import { PLAYER_MAX_HP } from '@/game/scene'
 
@@ -64,7 +64,8 @@ export interface GameStateHook {
   spendScrap: (amount: number) => boolean
   resetRunCargo: () => void
   resetForRunStart: () => void
-  hydrateFromSave: (state: GameState) => void
+  resetRunState: () => void
+  hydrateFromProfile: (profile: Profile) => void
   achievements: string[]
   setAchievements: React.Dispatch<React.SetStateAction<string[]>>
   metrics: AchievementMetrics
@@ -73,12 +74,12 @@ export interface GameStateHook {
 
 export function useGameState(): GameStateHook {
   const [paused, setPaused] = useState(false)
-  const [cargo, setCargo] = useState(() => defaultGameState().cargo)
+  const [cargo, setCargo] = useState<Cargo>(defaultCargo)
   const [scrap, setScrap] = useState(0)
   const [playerHp, setPlayerHp] = useState(PLAYER_MAX_HP)
-  const [upgrades, setUpgrades] = useState(() => defaultGameState().upgrades)
+  const [upgrades, setUpgrades] = useState<Upgrades>(defaultUpgrades)
   const [achievements, setAchievements] = useState<string[]>([])
-  const [metrics, setMetrics] = useState(() => defaultGameState().metrics)
+  const [metrics, setMetrics] = useState(() => defaultProfile().metrics)
 
   // Keep cargo capacity in sync with the storage upgrade tier (50 per tier).
   // Runs on mount (covers saves loaded with storage > 1) and on every purchase.
@@ -126,22 +127,28 @@ export function useGameState(): GameStateHook {
 
   /**
    * Buy an upgrade. Calls onPurchased(true) if successful, onPurchased(false) if not.
-   * Uses callback to avoid synchronous-return-from-setState issues.
+   *
+   * setUpgrades MUST NOT be called inside the setScrap functional updater — React
+   * Strict Mode double-invokes updaters to catch impure functions, which would fire
+   * setUpgrades twice and incorrectly double-increment the tier. Instead we use a
+   * local flag to capture the affordability result from the updater and apply the
+   * upgrade in a separate setTimeout, matching how onPurchased is already scheduled.
    */
   const buyUpgrade = useCallback(
     (type: keyof Upgrades, cost: number, onPurchased?: (ok: boolean) => void): void => {
+      let canBuy = false
       setScrap((prevScrap) => {
-        if (prevScrap < cost) {
-          // Can't afford — schedule callback outside setState
-          setTimeout(() => onPurchased?.(false), 0)
-          return prevScrap
+        if (prevScrap < cost) return prevScrap
+        canBuy = true
+        return prevScrap - cost
+      })
+      setTimeout(() => {
+        if (!canBuy) {
+          onPurchased?.(false)
+          return
         }
-        // Can afford — also bump the upgrade level.
         // One-shot UNLOCKS (binary unlocks like lazer, ripple, autoTool, etc.)
-        // max out on purchase. Consumable defenses (shield, armor, hull) and
-        // tiered upgrades all increment by 1 per purchase — including shield,
-        // which used to max out but is now a per-charge buy under the
-        // "go back and re-buy what you lose" defensive economy.
+        // max out on purchase. Tiered upgrades increment by 1 per purchase.
         setUpgrades((prev) => ({
           ...prev,
           [type]:
@@ -156,9 +163,8 @@ export function useGameState(): GameStateHook {
               ? UPGRADE_MAX[type]
               : Math.min(prev[type] + 1, UPGRADE_MAX[type]),
         }))
-        setTimeout(() => onPurchased?.(true), 0)
-        return prevScrap - cost
-      })
+        onPurchased?.(true)
+      }, 0)
     },
     [],
   )
@@ -172,6 +178,16 @@ export function useGameState(): GameStateHook {
       )
       return { ...prev, ...cleared, fragments: 0 }
     })
+  }, [])
+
+  /** Full reset of all in-run state — called when the player hits PLAY from the
+   * main menu so each arcade run starts from tier-1 defaults regardless of
+   * what the previous session left behind. */
+  const resetRunState = useCallback(() => {
+    setUpgrades(defaultUpgrades())
+    setCargo(defaultCargo())
+    setScrap(0)
+    setPlayerHp(PLAYER_MAX_HP)
   }, [])
 
   /** Wipe scrap AND cargo — used when the prologue ends so the player can't
@@ -200,13 +216,9 @@ export function useGameState(): GameStateHook {
     return success
   }, [])
 
-  const hydrateFromSave = useCallback((s: GameState): void => {
-    setCargo(s.cargo)
-    setScrap(s.cargo.scrap)
-    setUpgrades(s.upgrades)
-    setPlayerHp(s.hp)
-    setAchievements(s.achievements)
-    setMetrics(s.metrics)
+  const hydrateFromProfile = useCallback((p: Profile): void => {
+    setAchievements(p.achievements)
+    setMetrics(p.metrics)
   }, [])
 
   const setUpgradeLevel = useCallback((type: keyof Upgrades, value: number): void => {
@@ -232,7 +244,8 @@ export function useGameState(): GameStateHook {
     spendScrap,
     resetRunCargo,
     resetForRunStart,
-    hydrateFromSave,
+    resetRunState,
+    hydrateFromProfile,
     achievements,
     setAchievements,
     metrics,

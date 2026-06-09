@@ -22,3 +22,18 @@ export function wipeAllGameData(): number {
   for (const key of doomed) localStorage.removeItem(key)
   return doomed.length
 }
+
+/**
+ * True if any player-owned data exists to erase. Lets the menu disable the
+ * "Erase All Data" action once there's nothing left — so the player isn't
+ * offered a destructive button that would do nothing. Mirrors the prefix
+ * scan in wipeAllGameData() without mutating anything.
+ */
+export function hasAnyGameData(): boolean {
+  if (typeof localStorage === 'undefined') return false
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i)
+    if (key && key.startsWith(KEY_PREFIX)) return true
+  }
+  return false
+}

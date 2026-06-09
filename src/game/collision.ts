@@ -3,7 +3,7 @@
  */
 import type { Ship } from '@/lib/schemas'
 import type { Asteroid, Projectile, MiningTool } from './types'
-import { WEAPON_AFFINITY } from './types'
+import { WEAPON_AFFINITY, ASTEROID_MASS } from './types'
 import { PROJECTILE_RADIUS, LAZER_DAMAGE_MULTIPLIER } from './blaster-constants'
 import {
   SHIP_COLLISION_RADIUS,
@@ -20,8 +20,10 @@ const BEAM_IMPULSE_PER_DAMAGE = 30
 /** Apply a small velocity nudge to an asteroid in the given direction. */
 function nudgeAsteroid(a: Asteroid, dirX: number, dirY: number, impulse: number): void {
   // Bigger asteroids resist more. size 0 = moon (heaviest), size 3 = small.
+  // Type mass modifier further differentiates: a v-type moon barely budges.
   const sizeFactor = 1 / (1 + (3 - a.size))
-  const k = impulse * sizeFactor
+  const mass = ASTEROID_MASS[a.type]
+  const k = (impulse * sizeFactor) / mass
   a.velocityX += dirX * k
   a.velocityY += dirY * k
 }
@@ -56,6 +58,7 @@ export function resolveShipAsteroidCollision(
   ship: Ship,
   asteroid: Asteroid,
   plowThrough = false,
+  stickFactor = 0,
 ): boolean {
   const dx = ship.x - asteroid.x
   const dy = ship.y - asteroid.y
@@ -89,12 +92,15 @@ export function resolveShipAsteroidCollision(
   // Cancel velocity component toward the asteroid
   const velDot = ship.velocityX * nx + ship.velocityY * ny
   if (velDot < 0) {
-    const asteroidMassFactor = Math.max(1, 5 - asteroid.size)
+    // Effective mass combines size (moons resist, chips fly) with the
+    // per-type modifier — matches nudgeAsteroid and asteroidMass().
+    const mass = Math.max(1, 5 - asteroid.size) * ASTEROID_MASS[asteroid.type]
     const impact = -velDot
-    ship.velocityX += impact * nx * 0.35
-    ship.velocityY += impact * ny * 0.35
-    asteroid.velocityX -= nx * impact * (0.28 / asteroidMassFactor)
-    asteroid.velocityY -= ny * impact * (0.28 / asteroidMassFactor)
+    const bounce = 0.35 * (1 - stickFactor)
+    ship.velocityX += impact * nx * bounce
+    ship.velocityY += impact * ny * bounce
+    asteroid.velocityX -= nx * impact * (0.28 / mass)
+    asteroid.velocityY -= ny * impact * (0.28 / mass)
   }
 
   return true
@@ -150,10 +156,10 @@ export function resolveEnemyAsteroidCollision(
 /** Bounciness of asteroid-asteroid collisions (0 = inelastic, 1 = elastic). */
 const ASTEROID_RESTITUTION = 0.4
 
-/** Collision mass of an asteroid — scales with area (radius squared). */
+/** Collision mass of an asteroid — scales with area (radius squared) × type mass modifier. */
 function asteroidMass(a: Asteroid): number {
   const r = ASTEROID_SIZE_RADIUS[a.size] ?? ASTEROID_COLLISION_RADIUS
-  return r * r
+  return r * r * ASTEROID_MASS[a.type]
 }
 
 /**

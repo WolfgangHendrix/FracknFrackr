@@ -41,6 +41,7 @@ import {
 } from './asteroid-health-meter'
 import {
   breakChunks,
+  shatterAsteroid,
   updateDebrisChunk,
   disposeDebrisChunk,
   HITS_PER_BREAK,
@@ -89,6 +90,8 @@ import {
   updateEngineSound,
   suspendEngineSound,
   setDrillSoundIntensity,
+  setDrillSoundType,
+  playAsteroidShatter,
   suspendDrillSound,
   startArbiterSiren,
   updateArbiterSiren,
@@ -129,6 +132,7 @@ import {
   createShipwreckDebris,
   updateShipwreckDebris,
   disposeShipwreckDebris,
+  CARRIER_SHIELD_HP,
 } from './enemy-ship'
 import type { EnemyShip, ShipwreckDebris } from './enemy-ship'
 import { patrolEnemyDamage } from './ledger-config'
@@ -209,9 +213,8 @@ function disposeFormationShieldVisual(visual: FormationShieldVisual): void {
 const CAMERA_HEIGHT = 150
 const STAR_COUNT = 400
 const BLACK_HOLE_ALERT_RADIUS = 200
-// Slightly outside the pull radius so the warning fires before any
-// gravity is felt.
-const BLACK_HOLE_WARN_RADIUS = 230
+// Must reach the outer danger ring (radius 48) to earn the edge achievement.
+const BLACK_HOLE_WARN_RADIUS = 58
 
 // Station is at (30, 200). Rings are defined in background-parallax space.
 // Angles spread evenly so black holes surround every direction of escape.
@@ -903,18 +906,15 @@ export function createGameScene(
   // Station proximity flags are now in tickState
 
   // --- Game State (shared with game-tick.ts) ---
-  // Start with prologue asteroid field; resetShipToStation replaces it with the real field
+  // Start with prologue asteroid field; resetShipToStation replaces it with the real field.
+  // Use default (tier-1) ship values here — the prologue tick (prologueTick → 'prologue-start')
+  // overrides these with PROLOGUE_SHIP values when the intro sequence runs. Initialising with
+  // prologue values would give returning players (no prologue) a fully-maxed ship until their
+  // first store visit syncs the scene via setCombatUpgrades.
   const prologueAsteroids = spawnPrologueField(0, 0, PROLOGUE_ASTEROID_COUNT, PROLOGUE_MOON_COUNT)
   const tickState: TickState = createTickState({
     asteroids: prologueAsteroids,
     stationPosition: { x: GAS_STATION_X, y: GAS_STATION_Y },
-    blasterTier: 5,
-    miningTool: 'lazer',
-    fireRateBonus: 1.1 ** 4,
-    missileTier: PROLOGUE_SHIP.missileTier,
-    rippleUnlocked: true,
-    optionCount: PROLOGUE_SHIP.optionCount,
-    shieldCharges: PROLOGUE_SHIP.shieldCharges,
   })
 
   // Create 3D models for prologue asteroids
@@ -1331,6 +1331,57 @@ export function createGameScene(
     enemy.mesh.position.y += (Math.random() - 0.5) * power * falloff
   }
 
+  function createCarrierShieldMesh(radius: number): THREE.Mesh {
+    const geo = new THREE.TorusGeometry(radius + 12, 3.5, 8, 48)
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0x22aaff,
+      transparent: true,
+      opacity: 0.55,
+      depthWrite: false,
+    })
+    return new THREE.Mesh(geo, mat)
+  }
+
+  function updateCarrierShield(enemy: EnemyShip, dt: number): void {
+    if (enemy.kind !== 'carrier') return
+    const shieldMesh = enemy.mesh.userData.carrierShieldMesh as THREE.Mesh | undefined
+    if (!shieldMesh) return
+
+    const nowS = performance.now() / 1000
+    const frac = CARRIER_SHIELD_HP > 0 ? enemy.carrierShieldHp / CARRIER_SHIELD_HP : 0
+    const depleted = enemy.carrierShieldHp <= 0
+    const prevDepleted = Boolean(enemy.mesh.userData.carrierShieldDepleted)
+
+    // Detect the moment the shield breaks → trigger a bright cyan flash
+    if (depleted && !prevDepleted) {
+      enemy.mesh.userData.shieldBreakUntil = nowS + 0.35
+    }
+    enemy.mesh.userData.carrierShieldDepleted = depleted
+
+    if (depleted) {
+      shieldMesh.visible = false
+      const breakUntil = Number(enemy.mesh.userData.shieldBreakUntil ?? 0)
+      if (breakUntil > nowS) {
+        const t = (breakUntil - nowS) / 0.35
+        enemy.mesh.traverse((obj) => {
+          if (!(obj instanceof THREE.Mesh)) return
+          const mat = obj.material
+          if (mat instanceof THREE.MeshStandardMaterial) {
+            mat.emissive.setHex(0x44ccff)
+            mat.emissiveIntensity = Math.max(mat.emissiveIntensity, t * 3.0)
+          }
+        })
+      }
+      return
+    }
+
+    shieldMesh.visible = true
+    const mat = shieldMesh.material as THREE.MeshBasicMaterial
+    const pulse = 0.35 + 0.2 * Math.sin(performance.now() * 0.004)
+    mat.opacity = frac * pulse
+    shieldMesh.rotation.z += dt * 0.6
+  }
+
   function syncFormationShieldVisuals(dt: number): void {
     const groups = new Map<string, EnemyShip[]>()
     for (const enemy of tickState.ambushEnemies) {
@@ -1695,9 +1746,15 @@ export function createGameScene(
         triggerEnemyDamageFeedback(hit.enemy, hit.x, hit.y, hit.damage)
       }
 
+      // Rocks destroyed this tick get a dedicated shatter (sound + burst) in the
+      // destruction loop below. Suppress the generic per-hit explosion on that
+      // same frame so the kill reads as one shatter, not a doubled-up boom.
+      const destroyedThisTick = new Set(result.destroyedAsteroidIds.map((d) => d.id))
+
       // Beam hit VFX (explosions on hit asteroids)
       for (const hit of result.beamHits) {
         if (hit.deflected) continue
+        if (destroyedThisTick.has(hit.asteroidId)) continue
         // Only show explosion VFX periodically (not every frame)
         const hitCount = tickState.asteroidHitCounts.get(hit.asteroidId) ?? 0
         if (hitCount > 0 && hitCount % HITS_PER_BREAK === 0) {
@@ -1722,11 +1779,19 @@ export function createGameScene(
         }
       }
 
-      // Sync asteroid model positions
+      // Sync asteroid model positions; add tactile jitter to the drilled rock
+      const drillJitterAmp = result.drillNoseActive
+        ? [0, 0.7, 1.3, 2.0][tickState.drillNoseTier] ?? 0
+        : 0
       for (const a of asteroids) {
         const entry = asteroidModels.get(a.id)
         if (entry) {
-          entry.model.position.set(a.x, a.y, 0)
+          const jitter = drillJitterAmp > 0 && a.id === result.drillNoseAsteroidId
+          entry.model.position.set(
+            a.x + (jitter ? (Math.random() - 0.5) * 2 * drillJitterAmp : 0),
+            a.y + (jitter ? (Math.random() - 0.5) * 2 * drillJitterAmp : 0),
+            0,
+          )
         }
       }
 
@@ -1749,6 +1814,8 @@ export function createGameScene(
       for (const hit of result.asteroidHits) {
         removeProjectileModel(hit.projectileId)
         if (hit.deflected) continue
+        // Killing blow — let the shatter loop own the destruction FX.
+        if (destroyedThisTick.has(hit.asteroidId)) continue
 
         const explosion = createExplosion(hit.x, hit.y)
         scene.add(explosion.group)
@@ -1781,6 +1848,31 @@ export function createGameScene(
         scene.add(model)
         const hm = attachAsteroidHealthMeter(model, a.size)
         asteroidModels.set(a.id, { model, healthMeter: hm })
+      }
+
+      // Asteroid destruction VFX + sound — only for actually destroyed rocks,
+      // not culled ones. Play shatter before the model is disposed so we
+      // can still reference its position.
+      for (const dest of result.destroyedAsteroidIds) {
+        const { x, y } = dest
+        playAsteroidShatter(dest.type)
+        const explosion = createExplosion(x, y)
+        scene.add(explosion.group)
+        explosions.push(explosion)
+        dynamicLights.flashExplosion(x, y)
+        explosionGlowParticles.emit(x, y, 12, {
+          lifetime: 0.5, speed: 35, size: 2.2,
+          colors: [0xffaa00, 0xff6600, 0xffdd44, 0xffffff], spread: Math.PI * 2,
+        })
+        // Type-specific shatter: eject the model's voxels as flying debris.
+        // Runs before the disposal loop below tears the (now-cored) model down.
+        const entry = asteroidModels.get(dest.id)
+        if (entry) {
+          for (const chunk of shatterAsteroid(entry.model, dest.type)) {
+            scene.add(chunk.mesh)
+            debrisChunks.push(chunk)
+          }
+        }
       }
 
       // Endless mode: dispose destroyed/culled asteroid models
@@ -1854,6 +1946,12 @@ export function createGameScene(
         )
         result.enemySpawned.mesh.add(enemyHealthMeter)
         result.enemySpawned.mesh.userData.healthMeter = enemyHealthMeter
+
+        if (result.enemySpawned.kind === 'carrier') {
+          const shieldMesh = createCarrierShieldMesh(result.enemySpawned.collisionRadius)
+          result.enemySpawned.mesh.add(shieldMesh)
+          result.enemySpawned.mesh.userData.carrierShieldMesh = shieldMesh
+        }
       }
 
       // Enemy projectiles — add meshes
@@ -2271,6 +2369,7 @@ export function createGameScene(
       // --- Update enemy health meter ---
       if (tickState.enemy && tickState.enemy.alive) {
         applyEnemyDamageFeedback(tickState.enemy, dt)
+        updateCarrierShield(tickState.enemy, dt)
         const ehm = tickState.enemy.mesh.userData.healthMeter as THREE.Group | undefined
         if (ehm) {
           updateHealthMeter(ehm, tickState.enemy.hp, tickState.enemy.maxHp)
@@ -2281,6 +2380,7 @@ export function createGameScene(
       for (const ae of tickState.ambushEnemies) {
         if (!ae.alive) continue
         applyEnemyDamageFeedback(ae, dt)
+        updateCarrierShield(ae, dt)
         const ahm = ae.mesh.userData.healthMeter as THREE.Group | undefined
         if (ahm) updateHealthMeter(ahm, ae.hp, ae.maxHp)
 
@@ -2514,8 +2614,21 @@ export function createGameScene(
         drillNoseGroup.rotation.y += drillNoseSpinIntensity * 24 * dt
       }
       // Drill SFX rides the same tween — silent when not engaged, swells
-      // as the bit comes up to speed.
+      // as the bit comes up to speed. Tune the pitch to the asteroid type.
       setDrillSoundIntensity(drillNoseSpinIntensity)
+      if (result.drillNoseActive && result.drillNoseAsteroidType) {
+        setDrillSoundType(result.drillNoseAsteroidType)
+        // Sustained screen shake while grinding into rock
+        addTrauma(screenShake, 0.35 * dt)
+        // Sparks from the ship nose
+        const noseAngle = ship.rotation - Math.PI / 2
+        const noseX = ship.x + Math.cos(noseAngle) * 7
+        const noseY = ship.y + Math.sin(noseAngle) * 7
+        explosionGlowParticles.emit(noseX, noseY, 1, {
+          lifetime: 0.15, speed: 18, size: 0.8,
+          colors: [0xffcc44, 0xff8800, 0xffffff], spread: 1,
+        })
+      }
 
       // Mining drones — remove meshes for destroyed drones, then sync the
       // remaining drone positions and status-light colors. Meshes are

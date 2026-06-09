@@ -78,6 +78,8 @@ export const SCAVENGER_ESCAPE_DISTANCE = 380
 
 // --- Carrier: slow, tanky, launches drone swarms ---
 export const CARRIER_MAX_HP = 70
+/** Shield pool that must be depleted before the carrier's hull takes damage. */
+export const CARRIER_SHIELD_HP = 30
 const CARRIER_SPEED = 10
 const CARRIER_RANGE = 135
 /** Seconds between drone launches. */
@@ -258,6 +260,8 @@ export interface EnemyShip {
   targetLootX: number
   targetLootY: number
   // --- Carrier state ---
+  /** Shield pool that absorbs all damage before the hull can be hit. 0 = shield down. */
+  carrierShieldHp: number
   /** Countdown to the next drone launch. */
   droneTimer: number
   /** True while a carrier-launched drone is leaving its bay for a staging point. */
@@ -780,6 +784,7 @@ export function createEnemyShip(
     targetLootId: null,
     targetLootX: 0,
     targetLootY: 0,
+    carrierShieldHp: kind === 'carrier' ? CARRIER_SHIELD_HP : 0,
     droneTimer: CARRIER_DRONE_INTERVAL * (0.4 + Math.random() * 0.5),
     launching: false,
     launchTargetX: x,
@@ -1671,9 +1676,13 @@ export function checkProjectileEnemyCollisions(
     if (closestDistSq < minDist * minDist) {
       hitProjectileIds.push(p.id)
       if (!enemy.formationShieldActive) {
-        enemy.hp = Math.max(0, enemy.hp - p.damage)
-        if (enemy.hp <= 0) {
-          enemy.alive = false
+        if (enemy.carrierShieldHp > 0) {
+          enemy.carrierShieldHp = Math.max(0, enemy.carrierShieldHp - p.damage)
+        } else {
+          enemy.hp = Math.max(0, enemy.hp - p.damage)
+          if (enemy.hp <= 0) {
+            enemy.alive = false
+          }
         }
       }
     } else {
@@ -1746,6 +1755,10 @@ export function checkBeamEnemyCollisions(
   }
 
   const effective = damage * LAZER_DAMAGE_MULTIPLIER
+  if (enemy.carrierShieldHp > 0) {
+    enemy.carrierShieldHp = Math.max(0, enemy.carrierShieldHp - effective)
+    return { hit: true, t, killed: false }
+  }
   enemy.hp = Math.max(0, enemy.hp - effective)
   const killed = enemy.hp <= 0
   if (killed) enemy.alive = false

@@ -1,16 +1,17 @@
 import type { Asteroid, AsteroidType } from './types'
 
 /** Number of asteroids to spawn after tutorial. */
-const ASTEROID_COUNT = 40
+const ASTEROID_COUNT = 55
 
-/** Minimum distance from station center to spawn asteroids. */
-const MIN_STATION_DISTANCE = 80
+/** Minimum distance from station center to spawn asteroids (clears the dock area). */
+const MIN_STATION_DISTANCE = 65
 
-/** Maximum spawn distance from station center. */
-const MAX_SPAWN_DISTANCE = 350
+/** Maximum spawn distance from station center.
+ *  Kept just inside the tier-0 radar range (540) so the full field is visible. */
+const MAX_SPAWN_DISTANCE = 510
 
 /** V-type (basaltic) asteroids spawn closer to the station so players discover them early. */
-const V_TYPE_MAX_DISTANCE = 180
+const V_TYPE_MAX_DISTANCE = 300
 
 /** Minimum spacing between asteroids. */
 const MIN_ASTEROID_SPACING = 20
@@ -23,12 +24,12 @@ const MIN_ASTEROID_SPACING = 20
  * non-spectral icy outlier alongside the five classes.
  */
 const HP_TABLE: Record<AsteroidType, Record<number, number>> = {
-  'c-type': { 0: 40, 1: 15, 2: 8, 3: 4 },
-  's-type': { 0: 30, 1: 12, 2: 7, 3: 4 },
-  'm-type': { 0: 60, 1: 25, 2: 14, 3: 8 },
-  'v-type': { 0: 80, 1: 30, 2: 18, 3: 10 },
-  'd-type': { 0: 50, 1: 22, 2: 13, 3: 7 },
-  comet: { 0: 45, 1: 18, 2: 10, 3: 5 },
+  'c-type': { 0: 55, 1: 20, 2: 10, 3: 5 },
+  's-type': { 0: 45, 1: 18, 2: 9, 3: 5 },
+  'm-type': { 0: 110, 1: 45, 2: 22, 3: 12 },
+  'v-type': { 0: 160, 1: 60, 2: 30, 3: 16 },
+  'd-type': { 0: 80, 1: 32, 2: 18, 3: 9 },
+  comet: { 0: 35, 1: 14, 2: 8, 3: 4 },
 }
 
 /**
@@ -96,9 +97,13 @@ export function spawnAsteroidField(stationX: number, stationY: number, seed?: nu
     // V-type (basaltic) asteroids spawn closer to the station
     const maxDist = type === 'v-type' ? V_TYPE_MAX_DISTANCE : MAX_SPAWN_DISTANCE
 
-    // Random position in a ring around the station
+    // Area-uniform scatter: picking distance linearly produces a donut because
+    // annular area grows with r. Using sqrt gives equal probability per unit
+    // of area, so rocks are visually scattered across the full disk.
     const angle = rand() * Math.PI * 2
-    const distance = MIN_STATION_DISTANCE + rand() * (maxDist - MIN_STATION_DISTANCE)
+    const minR = MIN_STATION_DISTANCE
+    const maxR = maxDist
+    const distance = Math.sqrt(minR * minR + rand() * (maxR * maxR - minR * minR))
     const x = stationX + Math.cos(angle) * distance
     const y = stationY + Math.sin(angle) * distance
 
@@ -219,10 +224,10 @@ export function spawnPrologueField(
     return (s - 1) / 2147483646
   }
 
-  // Spawn moon-size asteroids first in a ring around center
+  // Spawn moon-size asteroids first spread around center
   for (let i = 0; i < moonCount; i++) {
     const angle = (i / moonCount) * Math.PI * 2 + rand() * 0.5
-    const distance = 60 + rand() * 40
+    const distance = 80 + rand() * 120
     const x = cx + Math.cos(angle) * distance
     const y = cy + Math.sin(angle) * distance
 
@@ -246,9 +251,12 @@ export function spawnPrologueField(
     positions.push({ x, y })
   }
 
-  // Spawn remaining asteroids in a tighter ring
+  // Spawn remaining asteroids spread across the play area using area-uniform
+  // distribution so rocks fill the radar instead of clustering at the center.
   let attempts = 0
   const maxAttempts = count * 20
+  const PROLOGUE_MIN_R = 50
+  const PROLOGUE_MAX_R = 400
   while (asteroids.length < count + moonCount && attempts < maxAttempts) {
     attempts++
 
@@ -256,7 +264,10 @@ export function spawnPrologueField(
     const type = TYPE_WEIGHTS[typeIdx].type
 
     const angle = rand() * Math.PI * 2
-    const distance = 30 + rand() * 90
+    const distance = Math.sqrt(
+      PROLOGUE_MIN_R * PROLOGUE_MIN_R +
+        rand() * (PROLOGUE_MAX_R * PROLOGUE_MAX_R - PROLOGUE_MIN_R * PROLOGUE_MIN_R),
+    )
     const x = cx + Math.cos(angle) * distance
     const y = cy + Math.sin(angle) * distance
 

@@ -82,13 +82,16 @@ export function LeaderboardMenu({ onBack }: LeaderboardMenuProps) {
   const showError = tab === 'global' && !!onlineError && !loading
 
   return (
-    <div className="flex flex-col gap-3 items-center relative z-10 w-full max-w-md px-4">
-      <p className="font-sans text-sm text-hud-amber/70 uppercase tracking-[0.22em]">
+    <div
+      className="flex flex-col items-center relative z-10 w-full max-w-md px-4"
+      style={{ maxHeight: 'calc(100dvh - 5rem)', overflow: 'hidden' }}
+    >
+      <p className="flex-shrink-0 font-sans text-sm text-hud-amber/70 uppercase tracking-[0.22em] mb-3">
         Leaderboards
       </p>
 
       {onlineAvailable && (
-        <div className="flex w-full max-w-xs border border-white/15 rounded overflow-hidden">
+        <div className="flex-shrink-0 flex w-full max-w-xs border border-white/15 rounded overflow-hidden mb-3">
           <button
             data-menu-item
             type="button"
@@ -133,14 +136,14 @@ export function LeaderboardMenu({ onBack }: LeaderboardMenuProps) {
             : 'No local runs scored yet. Survive a wave to claim a spot.'}
         </p>
       ) : (
-        <div className="w-full bg-space-900/60 border border-hud-amber/30 rounded font-mono text-sm">
-          <div className="grid grid-cols-[2rem_3rem_1fr_5rem] gap-2 px-3 py-2 text-white/40 text-xs uppercase tracking-wider border-b border-white/10">
+        <div className="w-full min-h-0 flex-1 flex flex-col bg-space-900/60 border border-hud-amber/30 rounded font-mono text-sm overflow-hidden mb-3">
+          <div className="flex-shrink-0 grid grid-cols-[2rem_3rem_1fr_5rem] gap-2 px-3 py-2 text-white/40 text-xs uppercase tracking-wider border-b border-white/10">
             <span>#</span>
             <span>Name</span>
             <span className="text-right">Score</span>
             <span className="text-right">Date</span>
           </div>
-          <ol className="divide-y divide-white/5">
+          <ol className="divide-y divide-white/5 overflow-y-auto overscroll-contain">
             {entries.map((e, i) => (
               <li
                 key={`${e.timestamp}-${i}`}
@@ -164,7 +167,7 @@ export function LeaderboardMenu({ onBack }: LeaderboardMenuProps) {
         data-menu-item
         data-menu-back
         onClick={onBack}
-        className="mt-2 px-6 py-3 min-h-[44px] text-white/40 font-sans text-base hover:text-white/70 focus:text-white focus:outline-none focus:ring-2 focus:ring-white/40 rounded transition-colors"
+        className="flex-shrink-0 mt-auto px-6 py-3 min-h-[44px] text-white/40 font-sans text-base hover:text-white/70 focus:text-white focus:outline-none focus:ring-2 focus:ring-white/40 rounded transition-colors"
       >
         BACK
       </button>

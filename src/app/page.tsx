@@ -12,6 +12,7 @@ import { arbiterArrivalLine, arbiterDefeatLine, arbiterWithdrawLine } from '@/ga
 import type { RunStats } from '@/game/ledger-config'
 import { TitleScreen } from '@/components/TitleScreen'
 import { StartScreen } from '@/components/StartScreen'
+import { ProfileSelectScreen } from '@/components/ProfileSelectScreen'
 import { TutorialOverlay } from '@/components/TutorialOverlay'
 import { PrologueOverlay } from '@/components/PrologueOverlay'
 import { TradeMenu, LAZER_COST, MINING_DRONE_BUILD_COST } from '@/components/TradeMenu'
@@ -25,13 +26,14 @@ import { PhotoModeOverlay } from '@/components/PhotoModeOverlay'
 import { AchievementToast } from '@/components/AchievementToast'
 import { DebugPanel } from '@/components/DebugPanel'
 import { useGameState } from '@/hooks/useGameState'
-import { useGamePersistence } from '@/hooks/useGamePersistence'
+import { useGamePersistence, setActiveProfile, clearActiveProfile } from '@/hooks/useGamePersistence'
 import { useTutorial } from '@/hooks/useTutorial'
 import { playMenuLoop, enterGameplay } from '@/lib/menu-music'
 import { useGamepadMenu } from '@/hooks/useGamepadMenu'
 import { useGamepadButton } from '@/hooks/useGamepadButton'
 import type { MiningTool, MetalVariant } from '@/game/types'
-import type { Upgrades, SaveSlotId } from '@/lib/schemas'
+import { defaultProfile } from '@/lib/schemas'
+import type { Upgrades, ProfileId } from '@/lib/schemas'
 import { setPauseDampening } from '@/game/volume-control'
 import { playVoice } from '@/lib/voice'
 import type { PauseRunStats } from '@/components/PauseOverlay'
@@ -39,10 +41,9 @@ import { ACHIEVEMENTS, ACHIEVEMENT_COUNT, defaultAchievementRunState, findNewAch
 import type { AchievementRunState } from '@/lib/achievements'
 import type { EnemyKind } from '@/game/enemy-ship'
 import { PROLOGUE_SHIP } from '@/game/prologue-config'
+import { playBuyRegister, playCannotBuy } from '@/game/sfx'
 
-type Screen = 'title' | 'start' | 'game'
-
-const ACTIVE_SLOT_KEY = 'fracking-asteroids-active-slot'
+type Screen = 'title' | 'profile-select' | 'start' | 'game'
 /** Cheapest upgrade in the catalog (Fire Rate Boost). Auto-dock skips the
  *  modal when the player has no materials AND less scrap than this — there
  *  literally isn't anything to buy or sell, so a paused screen of dim rows
@@ -57,8 +58,9 @@ const FRACKER_REBOOTING = './audio/vo_fracker04.wav'
 
 export default function Home() {
   const [screen, setScreen] = useState<Screen>('title')
-  const [activeSlot, setActiveSlot] = useState<SaveSlotId | null>(null)
+  const [activeProfile, setActiveProfileState] = useState<ProfileId | null>(null)
   const [isNewGame, setIsNewGame] = useState(false)
+  const [prologueSeen, setPrologueSeen] = useState(false)
   const [tradeMenuOpen, setTradeMenuOpen] = useState(false)
   const [activeTool, setActiveTool] = useState<MiningTool>('blaster')
   const [dronePopupVisible, setDronePopupVisible] = useState(false)
@@ -96,14 +98,15 @@ export default function Home() {
     spendScrap,
     resetRunCargo,
     resetForRunStart,
-    hydrateFromSave,
+    resetRunState,
+    hydrateFromProfile,
     achievements,
     setAchievements,
     metrics,
     setMetrics,
   } = useGameState()
   const hasLazer = upgrades.lazer > 0
-  const { save, load } = useGamePersistence(activeSlot)
+  const { save, load, erase } = useGamePersistence(activeProfile)
   const tutorial = useTutorial(isNewGame && screen === 'game')
   // Latest "is the player in the scripted prologue" flag, kept in a ref so the
   // metric/run-state mutators and the achievement evaluator can cheaply gate on
@@ -163,14 +166,11 @@ export default function Home() {
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
 
     void save({
-      ship: { x: 0, y: 0, rotation: 0, velocityX: 0, velocityY: 0 },
-      upgrades,
-      cargo: { ...cargo, scrap },
-      hp: playerHp,
       highScore,
       timestamp: Date.now(),
       achievements,
       metrics,
+      prologueSeen,
     }).then(() => {
       saveTimeoutRef.current = setTimeout(() => {
         setIsSaving(false)
@@ -178,53 +178,64 @@ export default function Home() {
     })
   }, [saveSeq]) // eslint-disable-line react-hooks/exhaustive-deps -- save reads latest state at trigger time
 
-  // Hydrate the slot's saved state when a game begins. Pushes upgrades and
-  // collector tier into the scene so toggleable tools (lazer/ripple) stay
-  // unlocked across reloads — without this, `lazerUnlocked` in the scene
-  // resets to false and Q cycles only blaster.
+  // Load profile records when a profile is selected.
   useEffect(() => {
-    if (!activeSlot) return
-    void load().then((s) => {
-      if (!s) return
-      setHighScore(s.highScore)
-      if (isNewGame) return
-      hydrateFromSave(s)
-      // Defer to next tick so the scene's imperative handle is mounted.
-      const id = window.setTimeout(() => {
-        gameCanvasRef.current?.setCombatUpgrades(s.upgrades)
-        gameCanvasRef.current?.setCollectorTier(s.upgrades.collector)
-        if (s.upgrades.lazer > 0) setActiveTool('lazer')
-      }, 0)
-      return () => window.clearTimeout(id)
+    if (!activeProfile) return
+    void load().then((p) => {
+      if (!p) return
+      setHighScore(p.highScore)
+      hydrateFromProfile(p)
     })
-  }, [activeSlot, load, isNewGame, hydrateFromSave])
+  }, [activeProfile, load, hydrateFromProfile])
 
   const handleTitleBegin = useCallback(() => {
     playMenuLoop()
+    setScreen('profile-select')
+  }, [])
+
+  const handleProfileSelect = useCallback((profileId: ProfileId) => {
+    setActiveProfile(profileId)
+    setActiveProfileState(profileId)
+    // Determine prologue state immediately from saved profile.
+    // useGamePersistence.load() requires the hook to have the ID, so we read
+    // directly from localStorage here (before the hook re-renders with the new ID).
+    try {
+      const raw = typeof localStorage !== 'undefined'
+        ? localStorage.getItem(`fracking-asteroids-profile:${profileId}`)
+        : null
+      const parsed: unknown = raw ? JSON.parse(raw) : null
+      const seen = parsed && typeof parsed === 'object' && 'prologueSeen' in parsed
+        ? !!(parsed as Record<string, unknown>).prologueSeen
+        : false
+      setPrologueSeen(seen)
+      setIsNewGame(!seen)
+    } catch {
+      setPrologueSeen(false)
+      setIsNewGame(true)
+    }
     setScreen('start')
   }, [])
 
-  const handleNewGame = useCallback((slotId: SaveSlotId) => {
-    localStorage.setItem(ACTIVE_SLOT_KEY, slotId)
-    setActiveSlot(slotId)
-    setIsNewGame(true)
+  const handlePlay = useCallback(() => {
+    resetRunState()
     setAchievementQueue([])
     resetAchievementRun()
     setLiveRunTimeSec(0)
     enterGameplay()
     setScreen('game')
-  }, [resetAchievementRun])
+  }, [resetAchievementRun, resetRunState])
 
-  const handleLoadGame = useCallback((slotId: SaveSlotId) => {
-    localStorage.setItem(ACTIVE_SLOT_KEY, slotId)
-    setActiveSlot(slotId)
+  const handleEraseProfile = useCallback(() => {
+    erase()
+    clearActiveProfile()
+    setActiveProfileState(null)
+    setAchievements([])
+    setMetrics(defaultProfile().metrics)
+    setHighScore(0)
+    setPrologueSeen(false)
     setIsNewGame(false)
-    setAchievementQueue([])
-    resetAchievementRun()
-    setLiveRunTimeSec(0)
-    enterGameplay()
-    setScreen('game')
-  }, [resetAchievementRun])
+    setScreen('profile-select')
+  }, [erase, setAchievements, setMetrics])
 
   const handleCollect = useCallback(
     (variant: MetalVariant) => {
@@ -442,7 +453,11 @@ export default function Home() {
               ),
       }
       buyUpgrade(type, cost, (ok) => {
-        if (!ok) return
+        if (!ok) {
+          playCannotBuy()
+          return
+        }
+        playBuyRegister()
         const defensivePurchase = type === 'shield' || type === 'hull' || type === 'armor'
         if (type === 'collector') {
           // upgrades.collector hasn't applied yet (setState scheduled); pass +1
@@ -458,8 +473,8 @@ export default function Home() {
         // First-ever Drone Bay purchase pops a one-time explainer so the
         // player knows the radar is a command surface and that they still
         // need to *build* individual drones at the station.
-        if (type === 'drone' && upgrades.drone === 0 && activeSlot) {
-          const key = `fracking-asteroids-drone-tutorial-${activeSlot}`
+        if (type === 'drone' && upgrades.drone === 0 && activeProfile) {
+          const key = `fracking-asteroids-drone-tutorial-${activeProfile}`
           if (typeof localStorage !== 'undefined' && !localStorage.getItem(key)) {
             localStorage.setItem(key, '1')
             setDronePopupVisible(true)
@@ -471,7 +486,7 @@ export default function Home() {
         requestSave()
       })
     },
-    [activeSlot, buyUpgrade, patchAchievementRun, requestSave, tutorial, upgrades],
+    [activeProfile, buyUpgrade, patchAchievementRun, requestSave, tutorial, upgrades],
   )
 
   // React-side mirror of the scene's drone count so the trade menu can
@@ -484,6 +499,7 @@ export default function Home() {
     if (!spendScrap(MINING_DRONE_BUILD_COST)) return
     const ok = gameCanvasRef.current?.buildMiningDrone() ?? false
     if (!ok) return
+    playBuyRegister()
     setDroneCount((n) => n + 1)
     patchMetrics((prev) => ({
       ...prev,
@@ -494,7 +510,11 @@ export default function Home() {
   const handleBuyLazer = useCallback(() => {
     if (hasLazer) return
     buyUpgrade('lazer', LAZER_COST, (ok) => {
-      if (!ok) return
+      if (!ok) {
+        playCannotBuy()
+        return
+      }
+      playBuyRegister()
       // Push the upgrade change into the scene before swapping tools, so the
       // scene's lazerUnlocked flag is true by the time setMiningTool runs.
       const next = { ...upgrades, lazer: 1 }
@@ -763,7 +783,7 @@ export default function Home() {
   // any in-progress upgrades.
   const handlePauseQuit = useCallback(() => {
     if (paused) togglePause()
-    setScreen('title')
+    setScreen('start')
     playMenuLoop()
   }, [paused, togglePause])
 
@@ -839,12 +859,12 @@ export default function Home() {
   // where the player actually approaches the singularity.
   const handleBlackHoleNearby = useCallback(() => {
     patchAchievementRun((prev) => ({ ...prev, blackHoleWarned: true }))
-    if (!activeSlot) return
+    if (!activeProfile) return
     if (typeof localStorage === 'undefined') return
-    const key = `fracking-asteroids-black-hole-tutorial-${activeSlot}`
+    const key = `fracking-asteroids-black-hole-tutorial-${activeProfile}`
     if (localStorage.getItem(key)) return
     setBlackHolePopupVisible(true)
-  }, [activeSlot, patchAchievementRun])
+  }, [activeProfile, patchAchievementRun])
 
   const handleBlackHoleEscaped = useCallback(() => {
     patchAchievementRun((prev) =>
@@ -854,14 +874,14 @@ export default function Home() {
 
   const handleDismissBlackHolePopup = useCallback(() => {
     setBlackHolePopupVisible(false)
-    if (!activeSlot) return
+    if (!activeProfile) return
     try {
-      localStorage.setItem(`fracking-asteroids-black-hole-tutorial-${activeSlot}`, '1')
+      localStorage.setItem(`fracking-asteroids-black-hole-tutorial-${activeProfile}`, '1')
     } catch {
       // localStorage may be disabled; the per-session scene latch still
       // prevents repeat triggers within this run.
     }
-  }, [activeSlot])
+  }, [activeProfile])
 
   // First-encounter tutorial popup helpers — same gate-on-localStorage pattern
   // as the black-hole and drone popups so each only ever shows once per slot.
@@ -876,16 +896,16 @@ export default function Home() {
   } {
     return {
       onFire: (): void => {
-        if (!activeSlot || typeof localStorage === 'undefined') return
-        const key = `fracking-asteroids-${storageSuffix}-${activeSlot}`
+        if (!activeProfile || typeof localStorage === 'undefined') return
+        const key = `fracking-asteroids-${storageSuffix}-${activeProfile}`
         if (localStorage.getItem(key)) return
         setVisible(true)
       },
       onDismiss: (): void => {
         setVisible(false)
-        if (!activeSlot) return
+        if (!activeProfile) return
         try {
-          localStorage.setItem(`fracking-asteroids-${storageSuffix}-${activeSlot}`, '1')
+          localStorage.setItem(`fracking-asteroids-${storageSuffix}-${activeProfile}`, '1')
         } catch {
           // localStorage disabled — fall back to per-session latching only.
         }
@@ -894,20 +914,20 @@ export default function Home() {
   }
   const defensePopup = useMemo(
     () => makeFirstEncounter('defense-tutorial', setDefensePopupVisible),
-    // makeFirstEncounter closes over `activeSlot`; recreate when the slot
+    // makeFirstEncounter closes over `activeProfile`; recreate when the slot
     // changes so per-slot persistence stays correct.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeSlot],
+    [activeProfile],
   )
   const formationPopup = useMemo(
     () => makeFirstEncounter('formation-tutorial', setFormationPopupVisible),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeSlot],
+    [activeProfile],
   )
   const splitterPopup = useMemo(
     () => makeFirstEncounter('splitter-tutorial', setSplitterPopupVisible),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeSlot],
+    [activeProfile],
   )
 
   // Self-clear the "sector hot, dock locked" banner ~1.6s after it fires.
@@ -936,6 +956,7 @@ export default function Home() {
       // Drop any scrap/cargo from the maxed prologue ship so the real run
       // starts from zero (see prologue-fade respawn for the same reasoning).
       resetForRunStart()
+      setPrologueSeen(true)
       requestSave()
     }
   }, [tutorial, upgrades, resetForRunStart, requestSave])
@@ -980,6 +1001,7 @@ export default function Home() {
                     // its haul into the real run would let players buy the
                     // lazer immediately and skip the early-game economy.
                     resetForRunStart()
+                    setPrologueSeen(true)
                     prologueRespawnRef.current()
                     requestSave()
                   }, 1500),
@@ -1240,13 +1262,22 @@ export default function Home() {
     requestSave()
   }, [achievementContext, requestSave, setAchievements])
 
-  if (screen === 'title' || screen === 'start') {
+  if (screen === 'title' || screen === 'profile-select' || screen === 'start') {
     return (
       <main className="relative w-screen h-dvh overflow-hidden bg-space-900">
-        {screen === 'title' ? (
-          <TitleScreen onBegin={handleTitleBegin} />
-        ) : (
-          <StartScreen onNewGame={handleNewGame} onLoadGame={handleLoadGame} />
+        {screen === 'title' && <TitleScreen onBegin={handleTitleBegin} />}
+        {screen === 'profile-select' && (
+          <ProfileSelectScreen onSelectProfile={handleProfileSelect} />
+        )}
+        {screen === 'start' && (
+          <StartScreen
+            onPlay={handlePlay}
+            onEraseProfile={handleEraseProfile}
+            onBackToProfiles={() => setScreen('profile-select')}
+            profileMetrics={metrics}
+            profileHighScore={highScore}
+            achievementItems={achievementItems}
+          />
         )}
       </main>
     )
@@ -1423,7 +1454,7 @@ export default function Home() {
           metrics,
           onScrapCollect,
           setUpgradeLevel,
-          hydrateFromSave,
+          hydrateFromProfile: hydrateFromProfile,
         }}
       />
       {/* SoundFab used to surface while paused — replaced by the inline

@@ -4,8 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { GameCanvasHandle } from './GameCanvas'
 import type { DebugApi } from '@/game/scene'
 import { DEBUG_ENABLED } from '@/lib/debug'
-import type { Cargo, GameState, Upgrades } from '@/lib/schemas'
-import { defaultGameState } from '@/lib/schemas'
+import type { Cargo, Profile, Upgrades } from '@/lib/schemas'
+import { defaultProfile } from '@/lib/schemas'
 
 /** The slice of useGameState the panel needs. Keeping it narrow avoids a
  *  circular import + keeps the panel testable in isolation. */
@@ -15,10 +15,10 @@ export interface DebugGameStateBridge {
   upgrades: Upgrades
   playerHp: number
   achievements: string[]
-  metrics: GameState['metrics']
+  metrics: Profile['metrics']
   onScrapCollect: (amount: number) => void
   setUpgradeLevel: (type: keyof Upgrades, value: number) => void
-  hydrateFromSave: (s: GameState) => void
+  hydrateFromProfile: (p: Profile) => void
 }
 
 interface DebugPanelProps {
@@ -159,10 +159,10 @@ function PanelContent({
       const text = snapshotText || (await navigator.clipboard.readText())
       const parsed = JSON.parse(text) as { react?: Record<string, unknown> }
       if (parsed.react) {
-        // Use hydrateFromSave to push react-side state — falls back gracefully
+        // Use hydrateFromProfile to push react-side state — falls back gracefully
         // if the snapshot is just scene state.
-        const fake = { ...defaultGameState(), ...(parsed.react as object) }
-        state.hydrateFromSave(fake as ReturnType<typeof defaultGameState>)
+        const fake = { ...defaultProfile(), ...(parsed.react as object) }
+        state.hydrateFromProfile(fake as ReturnType<typeof defaultProfile>)
       }
     } catch {
       // Ignore malformed paste.

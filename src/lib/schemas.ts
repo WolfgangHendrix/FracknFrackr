@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+// --- Runtime types (used by game engine, not persisted directly) ---
+
 export const ShipSchema = z.object({
   x: z.number(),
   y: z.number(),
@@ -78,69 +80,29 @@ export const AchievementMetricsSchema = z.object({
 })
 export type AchievementMetrics = z.infer<typeof AchievementMetricsSchema>
 
-export const GameStateSchema = z.object({
-  ship: ShipSchema,
-  upgrades: UpgradesSchema,
-  cargo: CargoSchema,
-  hp: z.number().int().min(0).max(100),
-  // Best endless-run score for this slot. Optional/defaulted so saves
-  // written before endless mode still load cleanly.
+// --- Persisted profile schema (records only, no in-game state) ---
+
+export const ProfileSchema = z.object({
   highScore: z.number().min(0).default(0),
   timestamp: z.number(),
-  // Achievement/Leaderboard prep
   achievements: z.array(z.string()).default([]),
   metrics: AchievementMetricsSchema.default({}),
+  prologueSeen: z.boolean().default(false),
 })
-export type GameState = z.infer<typeof GameStateSchema>
+export type Profile = z.infer<typeof ProfileSchema>
 
-export const SAVE_SLOT_IDS = ['save-1', 'save-2', 'save-3'] as const
-export type SaveSlotId = (typeof SAVE_SLOT_IDS)[number]
+export const PROFILE_IDS = ['profile-1', 'profile-2', 'profile-3'] as const
+export type ProfileId = (typeof PROFILE_IDS)[number]
 
-export const SaveSlotSummarySchema = z.object({
-  slotId: z.enum(SAVE_SLOT_IDS),
+export const ProfileSummarySchema = z.object({
+  profileId: z.enum(PROFILE_IDS),
   timestamp: z.number(),
+  highScore: z.number().default(0),
 })
-export type SaveSlotSummary = z.infer<typeof SaveSlotSummarySchema>
+export type ProfileSummary = z.infer<typeof ProfileSummarySchema>
 
-export function defaultGameState(): GameState {
+export function defaultProfile(): Profile {
   return {
-    ship: { x: 0, y: 0, rotation: 0, velocityX: 0, velocityY: 0 },
-    upgrades: {
-      blaster: 1,
-      collector: 1,
-      storage: 1,
-      missiles: 0,
-      ripple: 0,
-      options: 0,
-      speed: 0,
-      armor: 0,
-      shield: 0,
-      smartBomb: 0,
-      lazer: 0,
-      autoTool: 0,
-      drone: 0,
-      spread: 0,
-      hull: 0,
-      cooling: 0,
-      magnet: 0,
-      bounty: 0,
-      missileBias: 0,
-      thrusters: 0,
-      sensor: 0,
-      droneRepair: 0,
-      drillNose: 0,
-    },
-    cargo: {
-      scrap: 0,
-      fragments: 0,
-      carbon: 0,
-      silicates: 0,
-      platinum: 0,
-      titanium: 0,
-      exotics: 0,
-      capacity: 50,
-    },
-    hp: 100,
     highScore: 0,
     timestamp: Date.now(),
     achievements: [],
@@ -170,5 +132,47 @@ export function defaultGameState(): GameState {
       },
       bestDroneDockBurst: 0,
     },
+    prologueSeen: false,
+  }
+}
+
+export function defaultUpgrades(): Upgrades {
+  return {
+    blaster: 1,
+    collector: 1,
+    storage: 1,
+    missiles: 0,
+    ripple: 0,
+    options: 0,
+    speed: 0,
+    armor: 0,
+    shield: 0,
+    smartBomb: 0,
+    lazer: 0,
+    autoTool: 0,
+    drone: 0,
+    spread: 0,
+    hull: 0,
+    cooling: 0,
+    magnet: 0,
+    bounty: 0,
+    missileBias: 0,
+    thrusters: 0,
+    sensor: 0,
+    droneRepair: 0,
+    drillNose: 0,
+  }
+}
+
+export function defaultCargo(): Cargo {
+  return {
+    scrap: 0,
+    fragments: 0,
+    carbon: 0,
+    silicates: 0,
+    platinum: 0,
+    titanium: 0,
+    exotics: 0,
+    capacity: 50,
   }
 }

@@ -4,6 +4,7 @@ import { Fragment, useEffect, useState } from 'react'
 import type { Cargo, Upgrades } from '@/lib/schemas'
 import type { TutorialStep } from '@/hooks/useTutorial'
 import { SCRAP_VALUE_BY_MINERAL } from '@/hooks/useGameState'
+import { playCannotBuy } from '@/game/sfx'
 
 /**
  * Display rows for the sell panel — one per mineral, ordered common→legendary
@@ -610,8 +611,7 @@ function BuyPanel({
             <button
               data-menu-item
               {...(isDefault ? { 'data-menu-default': true } : {})}
-              data-menu-sound="buy"
-              onClick={canAfford ? () => onBuy(item.type, currentCost) : undefined}
+              onClick={canAfford ? () => onBuy(item.type, currentCost) : playCannotBuy}
               aria-disabled={!canAfford || undefined}
               className={`ml-3 px-5 py-3 min-h-[44px] rounded text-sm font-bold tracking-wider transition-all focus:outline-none focus:ring-2 focus:ring-hud-blue ${
                 canAfford
@@ -650,8 +650,7 @@ function BuyPanel({
           {...(canAffordLazer && !defaultAssigned
             ? ((defaultAssigned = true), { 'data-menu-default': true })
             : {})}
-          data-menu-sound="buy"
-          onClick={canAffordLazer ? onBuyLazer : undefined}
+          onClick={canAffordLazer ? onBuyLazer : playCannotBuy}
           aria-disabled={!canAffordLazer || undefined}
           className={`ml-3 px-5 py-3 min-h-[44px] rounded text-sm font-bold tracking-wider transition-all focus:outline-none focus:ring-2 focus:ring-hud-blue ${
             hasLazer
@@ -690,8 +689,7 @@ function BuyPanel({
               <button
                 data-menu-item
                 {...(isDefault ? { 'data-menu-default': true } : {})}
-                data-menu-sound="buy"
-                onClick={canBuildDrone ? onBuildDrone : undefined}
+                onClick={canBuildDrone ? onBuildDrone : playCannotBuy}
                 aria-disabled={!canBuildDrone || undefined}
                 className={`ml-3 px-5 py-3 min-h-[44px] rounded text-sm font-bold tracking-wider transition-all focus:outline-none focus:ring-2 focus:ring-hud-amber ${
                   droneCount >= upgrades.drone

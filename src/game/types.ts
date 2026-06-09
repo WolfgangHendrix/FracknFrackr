@@ -58,6 +58,35 @@ export const WEAPON_AFFINITY: Record<AsteroidType, Record<MiningTool, number>> =
   comet: { blaster: 1.0, lazer: 0.8, ripple: 0.7 },
 }
 
+/**
+ * Mass multiplier per asteroid type — affects collision physics:
+ * - Heavier types resist push from projectiles, beams, and ship collisions
+ * - Ship bounces *harder* off heavy types (more velocity transfer)
+ * - Asteroid-asteroid collisions favor heavier types in momentum exchange
+ */
+export const ASTEROID_MASS: Record<AsteroidType, number> = {
+  'c-type': 0.7,
+  's-type': 0.8,
+  'm-type': 1.3,
+  'v-type': 1.5,
+  'd-type': 1.1,
+  comet:   0.5,
+}
+
+/**
+ * Drill Nose damage multiplier per asteroid type. Soft/crumbly types (comet,
+ * c-type) take extra damage; hard/metallic types resist. At max tier + boost
+ * the effective damage ranges from ~32 (v-type) to ~158 (comet).
+ */
+export const DRILL_AFFINITY: Record<AsteroidType, number> = {
+  'c-type': 1.2,
+  's-type': 1.0,
+  'm-type': 0.4,
+  'v-type': 0.3,
+  'd-type': 0.6,
+  comet:   1.5,
+}
+
 /** Tool that deals 100% damage to each asteroid type — used by auto-toggle. */
 export const PREFERRED_TOOL: Record<AsteroidType, MiningTool> = {
   'c-type': 'blaster',
