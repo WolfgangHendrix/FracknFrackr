@@ -2,7 +2,7 @@
  * Collision detection and resolution for game objects.
  */
 import type { Ship } from '@/lib/schemas'
-import type { Asteroid, Projectile, MiningTool } from './types'
+import type { Asteroid, Comet, Projectile, MiningTool } from './types'
 import { WEAPON_AFFINITY, ASTEROID_MASS } from './types'
 import { PROJECTILE_RADIUS, LAZER_DAMAGE_MULTIPLIER } from './blaster-constants'
 import {
@@ -294,6 +294,49 @@ export function checkProjectileAsteroidCollisions(
     if (!hitSomething) {
       surviving.push(p)
     }
+  }
+
+  return { surviving, hits }
+}
+
+/** A single projectile→comet impact this tick. */
+export interface CometHit {
+  projectileId: string
+  cometId: string
+  damage: number
+  x: number
+  y: number
+}
+
+/**
+ * Swept projectile→comet collision. A roaming comet is a single fast, fat
+ * target, so we test the comet center against each bolt's swept segment
+ * (prevX,prevY → x,y) to avoid tunneling at high closing speeds. A consumed
+ * projectile is dropped from `surviving` exactly like the asteroid check.
+ */
+export function checkProjectileCometCollisions(
+  projectiles: Projectile[],
+  comets: Comet[],
+  cometRadius: number,
+): { surviving: Projectile[]; hits: CometHit[] } {
+  const hits: CometHit[] = []
+  const surviving: Projectile[] = []
+
+  for (const p of projectiles) {
+    let hitSomething = false
+    for (const c of comets) {
+      if (c.hp <= 0) continue
+      const reach = cometRadius + PROJECTILE_RADIUS
+      if (pointToSegmentDistSq(c.x, c.y, p.prevX, p.prevY, p.x, p.y) <= reach * reach) {
+        const lazerBoost = p.tool === 'lazer' ? LAZER_DAMAGE_MULTIPLIER : 1
+        const damage = Math.max(1, Math.ceil(p.damage * lazerBoost))
+        c.hp = Math.max(0, c.hp - damage)
+        hits.push({ projectileId: p.id, cometId: c.id, damage, x: p.x, y: p.y })
+        hitSomething = true
+        break // one projectile hits one comet
+      }
+    }
+    if (!hitSomething) surviving.push(p)
   }
 
   return { surviving, hits }

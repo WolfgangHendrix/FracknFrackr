@@ -55,6 +55,8 @@ export interface RadarData {
   /** Ship heading (radians); model faces local +Y. */
   shipRotation: number
   asteroids: RadarBlip[]
+  /** Roaming comets — rare fast crossers, drawn as bright cyan contacts. */
+  comets: RadarBlip[]
   enemies: RadarBlip[]
   blackHoles: RadarBlip[]
   drones: DroneBlip[]
@@ -64,6 +66,8 @@ export interface RadarData {
   rally: RadarBlip | null
   /** Sensor Array upgrade tier (0-3). Each tier extends the scanning range. */
   sensorTier: number
+  /** Gamepad D-pad crosshair position (normalized -1..1), null = hidden. */
+  gamepadCrosshair?: { nx: number; ny: number } | null
 }
 
 export interface Radar {
@@ -158,6 +162,21 @@ export function radarClickToWorld(
   return { x: shipX + dx / scale, y: shipY - dy / scale }
 }
 
+/**
+ * Convert a normalized radar crosshair position to a world-space coordinate.
+ * nx, ny are normalized coords in range [-1, 1], where (0, 0) is the ship center.
+ */
+export function radarCrosshairToWorld(
+  radar: Radar,
+  nx: number,
+  ny: number,
+  shipX: number,
+  shipY: number,
+): { x: number; y: number } {
+  // Scale normalized coords by the radar range (already accounts for rim).
+  return { x: shipX + nx * radar.range, y: shipY - ny * radar.range }
+}
+
 /** Redraw the radar for the current frame. */
 export function updateRadar(radar: Radar, data: RadarData): void {
   // Re-size the canvas to match the current sensor tier before drawing. The
@@ -228,6 +247,16 @@ export function updateRadar(radar: Radar, data: RadarData): void {
     ctx.fill()
   }
 
+  // --- Roaming comets — bright cyan contacts (pinned to rim when inbound) ---
+  for (const c of data.comets) {
+    const { px, py, clamped } = project(c.x, c.y)
+    if (clamped && data.sensorTier < 3) continue
+    ctx.fillStyle = clamped ? 'rgba(102, 255, 204, 0.5)' : 'rgba(120, 255, 220, 0.95)'
+    ctx.beginPath()
+    ctx.arc(px, py, clamped ? 2 : 2.8, 0, Math.PI * 2)
+    ctx.fill()
+  }
+
   // --- Trade station — green diamond (pinned to rim when out of range) ---
   if (data.station) {
     const { px, py } = project(data.station.x, data.station.y)
@@ -294,6 +323,25 @@ export function updateRadar(radar: Radar, data: RadarData): void {
     ctx.lineTo(px, py - r + 2)
     ctx.moveTo(px, py + r - 2)
     ctx.lineTo(px, py + r + 2)
+    ctx.stroke()
+  }
+
+  // --- Gamepad radar crosshair (D-pad control) — hollow circle to distinguish from rally point ---
+  if (data.gamepadCrosshair) {
+    const { nx, ny } = data.gamepadCrosshair
+    const px = cx + nx * rim
+    const py = cy - ny * rim
+    const r = 5.5
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.65)'
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.arc(px, py, r, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.beginPath()
+    ctx.moveTo(px - 3, py)
+    ctx.lineTo(px + 3, py)
+    ctx.moveTo(px, py - 3)
+    ctx.lineTo(px, py + 3)
     ctx.stroke()
   }
 

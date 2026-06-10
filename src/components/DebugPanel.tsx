@@ -308,6 +308,7 @@ function PanelContent({
         </Row>
         <Row>
           <Btn onClick={() => apply((a) => a.clearAsteroids())}>Clear all</Btn>
+          <Btn onClick={() => apply((a) => a.spawnComet())}>Spawn comet</Btn>
         </Row>
       </Section>
 

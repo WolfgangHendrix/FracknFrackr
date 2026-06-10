@@ -1149,7 +1149,7 @@ export default function Home() {
                 : tradeMenuOpen
                   ? 'trade'
                   : tutorial.active
-                    ? `tut:${tutorial.step}`
+                    ? `tut:${tutorial.step}:${tutorial.frozen ? 'frozen' : 'active'}`
                     : ''
   useGamepadMenu({
     enabled: screen === 'game',

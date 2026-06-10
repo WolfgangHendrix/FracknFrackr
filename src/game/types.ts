@@ -15,6 +15,24 @@ export interface Asteroid {
 export type AsteroidType = 'c-type' | 's-type' | 'm-type' | 'v-type' | 'd-type' | 'comet'
 
 /**
+ * A rare roaming comet — a fast entity that crosses the field with a glowing
+ * tail and drops bonus scrap when destroyed. Distinct from the static `comet`
+ * asteroid type: this one streaks across space as an occasional event for
+ * variance. Data-only here; the scene owns its mesh + tail (like asteroids).
+ */
+export interface Comet {
+  id: string
+  x: number
+  y: number
+  velocityX: number
+  velocityY: number
+  hp: number
+  maxHp: number
+  /** Bonus scrap awarded (split across drop boxes) when destroyed. */
+  value: number
+}
+
+/**
  * Mineral fragment dropped when an asteroid is broken. One mineral per spectral
  * class, plus comet which drops carbon (carbonaceous/volatile composition).
  *

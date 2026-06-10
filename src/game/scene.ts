@@ -56,6 +56,7 @@ import {
   tick,
   createTickState,
   PLAYER_MAX_HP,
+  COMET_FIRST_DELAY,
   effectivePlayerMaxHp,
   collectorRangeForTier,
 } from './game-tick'
@@ -98,8 +99,10 @@ import {
   stopArbiterSiren,
   disposeSfx,
 } from './sfx'
-import { createRadar, updateRadar, disposeRadar, radarClickToWorld } from './radar'
+import { createRadar, updateRadar, disposeRadar, radarClickToWorld, radarCrosshairToWorld } from './radar'
 import type { Radar, RadarBlip } from './radar'
+import { createCometModel, updateCometModel, disposeCometModel } from './comet-model'
+import type { CometModel } from './comet-model'
 import { createScreenShake, addTrauma, updateScreenShake } from './screen-shake'
 import type { ScreenShake } from './screen-shake'
 import {
@@ -415,6 +418,9 @@ export interface DebugApi {
   // Asteroids
   spawnAsteroidAtCursor: (type: AsteroidType, worldX: number, worldY: number) => void
   clearAsteroids: () => void
+
+  // Roaming comet — force the next tick to spawn one (endless mode only)
+  spawnComet: () => void
 
   // Drones
   buildDronesUpToCap: () => number
@@ -832,6 +838,10 @@ export function createGameScene(
   // Map of asteroid id → { model, healthMeter } for all asteroids in the world
   const asteroidModels = new Map<string, { model: THREE.Group; healthMeter: THREE.Group }>()
 
+  // Roaming-comet visuals, keyed by comet id. Spawned/disposed from the tick
+  // result's newComets / expiredCometIds; positions synced each frame.
+  const cometModels = new Map<string, CometModel>()
+
   // --- Debug flags. These default to "production" values and are only ever
   //     mutated by the debug panel (which is itself excluded from production
   //     builds via DEBUG_ENABLED). Reading them in hot paths is one branch
@@ -1023,8 +1033,22 @@ export function createGameScene(
   const nebulaSystem: NebulaSystem = createNebulaSystem()
   scene.add(nebulaSystem.group)
 
-  const blackHoles: BlackHole[] = [createBlackHole(-200, 200)]
-  scene.add(blackHoles[0].group)
+  // The starter black hole near the spawn area. Suppressed during the tutorial
+  // so the player can't die to a hazard the game hasn't taught yet — it spawns
+  // once the tutorial reaches 'done' (see the loop below). Returning players
+  // (who start at step 'done') get it immediately.
+  const INITIAL_BLACK_HOLE = { x: -200, y: 200 }
+  const blackHoles: BlackHole[] = []
+  function spawnInitialBlackHole(): void {
+    const hole = createBlackHole(INITIAL_BLACK_HOLE.x, INITIAL_BLACK_HOLE.y)
+    scene.add(hole.group)
+    blackHoles.push(hole)
+  }
+  let initialBlackHoleSpawned = false
+  if (getTutorialStep() === 'done') {
+    spawnInitialBlackHole()
+    initialBlackHoleSpawned = true
+  }
 
   // --- Engine Trail ---
   const engineTrail: EngineTrail = createEngineTrail()
@@ -1512,9 +1536,15 @@ export function createGameScene(
     // --- Build per-frame input for the shared tick function ---
     const paused = getPaused() || tabHidden
 
-    // --- Gamepad poll: writes to inputState/aimState, returns firing intent ---
-    const gamepadResult = gamepad.poll()
+    // --- Gamepad poll: writes to inputState/aimState, returns firing intent and radar crosshair ---
+    const gamepadResult = gamepad.poll(tickState.miningDroneCap > 0)
     if (!paused && gamepadResult.toolToggle) toggleMiningTool()
+
+    // Gamepad radar crosshair → rally point (if drones are available)
+    if (!paused && radar && gamepadResult.radarCrosshair && tickState.miningDroneCap > 0) {
+      const { nx, ny } = gamepadResult.radarCrosshair
+      tickState.rallyPoint = radarCrosshairToWorld(radar, nx, ny, ship.x, ship.y)
+    }
 
     // --- Aim joystick poll: writes to aimState, returns firing intent ---
     const aimJoystickResult = aimJoystick.poll()
@@ -1617,6 +1647,7 @@ export function createGameScene(
         halfW: camHalfW,
         halfH: camHalfH,
       },
+      radarRange: radar ? radar.range : 540,
       blackHoles: blackHoles.map((h) => ({
         x: h.x + camera.position.x * 0.1,
         y: h.y + camera.position.y * 0.1,
@@ -1795,6 +1826,15 @@ export function createGameScene(
         }
       }
 
+      // Sync roaming-comet positions + tail orientation.
+      for (const c of tickState.comets) {
+        const model = cometModels.get(c.id)
+        if (model) {
+          model.group.position.set(c.x, c.y, 0)
+          updateCometModel(model, c.velocityX, c.velocityY, now / 1000)
+        }
+      }
+
       // New projectile models
       for (const p of result.newProjectiles) {
         const model = createProjectileModel(p.tool)
@@ -1882,6 +1922,37 @@ export function createGameScene(
           scene.remove(entry.model)
           entry.model.traverse(disposeMesh)
           asteroidModels.delete(id)
+        }
+      }
+
+      // --- Roaming comets: spawn meshes for new ones ---
+      for (const c of result.newComets) {
+        const model = createCometModel()
+        model.group.position.set(c.x, c.y, 0)
+        scene.add(model.group)
+        cometModels.set(c.id, model)
+      }
+
+      // Comet destruction VFX — a bright icy burst + shatter sound.
+      for (const dest of result.destroyedComets) {
+        playAsteroidShatter('comet')
+        const explosion = createExplosion(dest.x, dest.y)
+        scene.add(explosion.group)
+        explosions.push(explosion)
+        dynamicLights.flashExplosion(dest.x, dest.y)
+        explosionGlowParticles.emit(dest.x, dest.y, 20, {
+          lifetime: 0.6, speed: 45, size: 2.4,
+          colors: [0x66ffcc, 0x9fe8ff, 0xffffff, 0x44ddff], spread: Math.PI * 2,
+        })
+      }
+
+      // Dispose destroyed/culled comet models.
+      for (const id of result.expiredCometIds) {
+        const model = cometModels.get(id)
+        if (model) {
+          scene.remove(model.group)
+          disposeCometModel(model)
+          cometModels.delete(id)
         }
       }
 
@@ -2535,6 +2606,15 @@ export function createGameScene(
       // --- Background Effects ---
       updateTwinkleStars(twinkleStars, now / 1000, camera.position.x, camera.position.y)
       updateNebulaSystem(nebulaSystem, now / 1000, camera.position.x, camera.position.y)
+
+      // Spawn the starter black hole the moment the tutorial completes — it was
+      // suppressed during the tutorial so the player couldn't die to an untaught
+      // hazard.
+      if (!initialBlackHoleSpawned && getTutorialStep() === 'done') {
+        spawnInitialBlackHole()
+        initialBlackHoleSpawned = true
+      }
+
       for (const h of blackHoles) {
         updateBlackHole(h, now / 1000, camera.position.x, camera.position.y)
       }
@@ -2872,6 +2952,7 @@ export function createGameScene(
           shipY: ship.y,
           shipRotation: ship.rotation,
           asteroids: asteroids.filter((a) => a.hp > 0),
+          comets: tickState.comets.map((c) => ({ x: c.x, y: c.y })),
           enemies: radarEnemies,
           blackHoles: blackHoles.map((h) => ({
             x: h.x + camera.position.x * 0.1,
@@ -2882,6 +2963,7 @@ export function createGameScene(
           arbiter: arbiterModel ? { x: arbiterModel.position.x, y: arbiterModel.position.y } : null,
           rally: tickState.rallyPoint,
           sensorTier: tickState.sensorTier,
+          gamepadCrosshair: gamepadResult.radarCrosshair,
         })
       }
 
@@ -3030,6 +3112,14 @@ export function createGameScene(
     // still attached to the scene graph, but we explicitly clear the lookup
     // map so re-creating the scene starts from an empty book.
     asteroidModels.clear()
+
+    // Clean up roaming-comet models + data.
+    for (const [, model] of cometModels) {
+      scene.remove(model.group)
+      disposeCometModel(model)
+    }
+    cometModels.clear()
+    tickState.comets.length = 0
 
     // Clean up mining drone meshes. They're children of miningDroneGroup so
     // they'll get walked by scene.traverse(disposeMesh), but the meshes map
@@ -3300,6 +3390,14 @@ export function createGameScene(
     asteroidModels.clear()
     tickState.asteroidHitCounts.clear()
 
+    // Remove any active roaming comets
+    for (const [, model] of cometModels) {
+      scene.remove(model.group)
+      disposeCometModel(model)
+    }
+    cometModels.clear()
+    tickState.comets.length = 0
+
     // Clear old asteroid data and generate new field
     asteroids.length = 0
     const newAsteroids = spawnAsteroidField(GAS_STATION_X, GAS_STATION_Y)
@@ -3418,6 +3516,15 @@ export function createGameScene(
     }
     asteroidModels.clear()
     tickState.asteroidHitCounts.clear()
+
+    // Remove any active roaming comets
+    for (const [, model] of cometModels) {
+      scene.remove(model.group)
+      disposeCometModel(model)
+    }
+    cometModels.clear()
+    tickState.comets.length = 0
+
     asteroids.length = 0
     for (const a of spawnAsteroidField(GAS_STATION_X, GAS_STATION_Y)) {
       asteroids.push(a)
@@ -3434,6 +3541,8 @@ export function createGameScene(
     tickState.patrolTimer = FIRST_PATROL_DELAY
     tickState.asteroidRespawnTimer = ASTEROID_REPLENISH_INTERVAL
     tickState.asteroidSpawnCounter = 1
+    tickState.cometSpawnTimer = COMET_FIRST_DELAY
+    tickState.cometSpawnCounter = 1
     tickState.peakLedger = 0
     tickState.marksDefeated = 0
     tickState.runTime = 0
@@ -3617,6 +3726,14 @@ export function createGameScene(
         tickState.runawayEnforcerMark = 0
         tickState.runawayEnforcerTimer = 0
         tickState.arbiterMark = 0
+      },
+
+      // --- Roaming comet ---
+      spawnComet() {
+        // Arm the spawn timer so the next endless tick emits a comet through
+        // the normal path (which also creates its mesh + radar blip). No-op
+        // outside endless mode, where updateComets doesn't run.
+        tickState.cometSpawnTimer = 0
       },
 
       // --- Asteroids ---

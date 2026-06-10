@@ -239,11 +239,22 @@ export function computeScore(peakLedger: number, marksDefeated: number): number 
 // Field replenishment
 // ---------------------------------------------------------------------------
 
-/** Live asteroid count near the player below which the field replenishes. */
+/** Minimum live asteroid count below which the field replenishes (used for
+ *  very small radar ranges; normally the area-derived floor below is larger). */
 export const ASTEROID_FLOOR = 28
 
+/**
+ * Target field density (rocks per square world unit), tuned to match the
+ * initial field (~55 rocks within radius 510). Replenishment keeps the whole
+ * radar disk populated at roughly this density, so the field reads as a full
+ * belt rather than a small ring near the player. */
+export const ASTEROID_DENSITY = 55 / (Math.PI * 510 * 510)
+
+/** Hard cap on the live field count so large sensor ranges don't tank perf. */
+export const ASTEROID_FIELD_CAP = 130
+
 /** Asteroids added per replenishment pulse. */
-export const ASTEROID_REPLENISH_BATCH = 4
+export const ASTEROID_REPLENISH_BATCH = 6
 
 /** Seconds between replenishment pulses while below the floor. */
-export const ASTEROID_REPLENISH_INTERVAL = 3
+export const ASTEROID_REPLENISH_INTERVAL = 2.5

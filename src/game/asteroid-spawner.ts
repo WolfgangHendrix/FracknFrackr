@@ -1,4 +1,4 @@
-import type { Asteroid, AsteroidType } from './types'
+import type { Asteroid, AsteroidType, Comet } from './types'
 
 /** Number of asteroids to spawn after tutorial. */
 const ASTEROID_COUNT = 55
@@ -155,15 +155,25 @@ export interface ViewBounds {
 }
 
 /**
- * Spawn a single asteroid just outside the camera view, drifting roughly
- * inward so it enters play. Used for endless-mode field replenishment.
+ * Spawn a single asteroid area-uniformly across the radar disk but always
+ * off-camera, for endless-mode field replenishment. Unlike {@link spawnEdgeAsteroid}
+ * (a thin ring just past the camera, which reads as a tight circle on the
+ * wider radar), this scatters new rocks anywhere from just outside the
+ * viewport out to the radar rim, so the whole radar stays populated and rocks
+ * "come up on the radar" at the edge as the player travels.
  *
- * @param view - Camera-visible world rectangle
+ * @param view - Camera-visible world rectangle (to keep spawns off-screen)
+ * @param radarRange - Current radar world range (sensor-tier aware)
+ * @param shipX - Ship X (disk is centered on the ship, matching the radar)
+ * @param shipY - Ship Y
  * @param id - Unique id for the new asteroid
  * @param rand - Random source (defaults to Math.random)
  */
-export function spawnEdgeAsteroid(
+export function spawnFieldAsteroid(
   view: ViewBounds,
+  radarRange: number,
+  shipX: number,
+  shipY: number,
   id: string,
   rand: () => number = Math.random,
 ): Asteroid {
@@ -173,27 +183,86 @@ export function spawnEdgeAsteroid(
   const size = SIZE_WEIGHTS[sizeIdx].size
   const hp = HP_TABLE[type][size]
 
-  // Place on a ring that fully encloses the viewport so it spawns off-screen.
-  const ringRadius = Math.hypot(view.halfW, view.halfH) + 15 + rand() * 30
+  // Inner radius clears the camera (plus a margin) so nothing pops into view;
+  // outer radius reaches just past the radar rim so rocks appear at the edge.
+  const innerR = Math.hypot(view.halfW, view.halfH) + 25
+  const outerR = Math.max(innerR + 40, radarRange + 30)
+  // Area-uniform radius so rocks scatter evenly across the disk (not bunched
+  // at the inner ring).
+  const distance = Math.sqrt(innerR * innerR + rand() * (outerR * outerR - innerR * innerR))
   const angle = rand() * Math.PI * 2
-  const x = view.centerX + Math.cos(angle) * ringRadius
-  const y = view.centerY + Math.sin(angle) * ringRadius
+  const x = shipX + Math.cos(angle) * distance
+  const y = shipY + Math.sin(angle) * distance
 
-  // Drift generally toward the viewport centre, with some spread.
-  const inward = Math.atan2(view.centerY - y, view.centerX - x)
-  const drift = inward + (rand() - 0.5) * 1.4
-  const driftSpeed = 2 + rand() * MAX_DRIFT_SPEED
+  // Slow random drift, matching the ambient field.
+  const driftAngle = rand() * Math.PI * 2
+  const driftSpeed = rand() * MAX_DRIFT_SPEED
+  return {
+    id,
+    x,
+    y,
+    velocityX: Math.cos(driftAngle) * driftSpeed,
+    velocityY: Math.sin(driftAngle) * driftSpeed,
+    type,
+    hp,
+    maxHp: hp,
+    size,
+  }
+}
+
+/** Roaming comet hit points — a few solid shots to crack. */
+export const COMET_HP = 30
+
+/** Bonus scrap a destroyed comet drops (split across boxes). */
+export const COMET_VALUE = 120
+
+/** Comet travel speed (units/sec) — well above ambient asteroid drift. */
+const COMET_SPEED_MIN = 26
+const COMET_SPEED_MAX = 38
+
+/**
+ * Spawn a rare roaming comet: starts beyond the radar rim and streaks across
+ * the field toward a jittered point near the ship, so the player sees it enter
+ * from the edge of the radar and cross through. Fast, with a glowing tail
+ * (rendered scene-side) and bonus scrap on destruction.
+ */
+export function spawnRoamingComet(
+  view: ViewBounds,
+  radarRange: number,
+  shipX: number,
+  shipY: number,
+  id: string,
+  rand: () => number = Math.random,
+): Comet {
+  // Start just beyond the radar rim so it slides into radar view.
+  const startR = radarRange + 60 + rand() * 120
+  const startAngle = rand() * Math.PI * 2
+  const x = shipX + Math.cos(startAngle) * startR
+  const y = shipY + Math.sin(startAngle) * startR
+
+  // Aim across the field toward a jittered point near the ship so the path
+  // cuts through the play area rather than clipping the corner.
+  const aimJitter = 160
+  const targetX = shipX + (rand() - 0.5) * aimJitter
+  const targetY = shipY + (rand() - 0.5) * aimJitter
+  const dirX = targetX - x
+  const dirY = targetY - y
+  const len = Math.hypot(dirX, dirY) || 1
+  const speed = COMET_SPEED_MIN + rand() * (COMET_SPEED_MAX - COMET_SPEED_MIN)
+
+  // View is unused for geometry (disk is ship-centered) but kept in the
+  // signature for parity with the other spawners and future tuning.
+  void view
 
   return {
     id,
     x,
     y,
-    velocityX: Math.cos(drift) * driftSpeed,
-    velocityY: Math.sin(drift) * driftSpeed,
-    type,
-    hp,
-    maxHp: hp,
-    size,
+    velocityX: (dirX / len) * speed,
+    velocityY: (dirY / len) * speed,
+    hp: COMET_HP,
+    maxHp: COMET_HP,
+    value: COMET_VALUE,
   }
 }
 

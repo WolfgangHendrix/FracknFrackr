@@ -11,7 +11,7 @@
  */
 
 import type { Ship } from '@/lib/schemas'
-import type { Asteroid, AsteroidType, MiningTool, Projectile } from './types'
+import type { Asteroid, AsteroidType, Comet, MiningTool, Projectile } from './types'
 import { WEAPON_AFFINITY, DRILL_AFFINITY } from './types'
 import type { MiningDrone } from './mining-drone'
 import {
@@ -52,6 +52,7 @@ import {
   resolveShipAsteroidCollision,
   resolveAsteroidAsteroidCollisions,
   checkProjectileAsteroidCollisions,
+  checkProjectileCometCollisions,
   checkBeamAsteroidCollisions,
 } from './collision'
 import { ASTEROID_COLLISION_RADIUS } from './collision-constants'
@@ -84,7 +85,7 @@ import type { EnemyKind } from './enemy-ship'
 import { SHIP_COLLISION_RADIUS } from './collision-constants'
 import { createScrapBox, updateScrapBox, attractScrapBoxToShip, SCRAP_BOX_VALUE } from './scrap-box'
 import { HITS_PER_BREAK } from './asteroid-debris'
-import { spawnEdgeAsteroid, spawnPrologueReinforcement } from './asteroid-spawner'
+import { spawnFieldAsteroid, spawnRoamingComet, spawnPrologueReinforcement } from './asteroid-spawner'
 import {
   LEDGER_PER_ASTEROID,
   LEDGER_PER_METAL,
@@ -94,6 +95,8 @@ import {
   MAX_PATROL_ENEMIES,
   FIRST_PATROL_DELAY,
   ASTEROID_FLOOR,
+  ASTEROID_DENSITY,
+  ASTEROID_FIELD_CAP,
   ASTEROID_REPLENISH_BATCH,
   ASTEROID_REPLENISH_INTERVAL,
   arbiterThreshold,
@@ -131,6 +134,17 @@ import {
 
 export const PLAYER_MAX_HP = 100
 const ENEMY_NEARBY_DISTANCE = 60
+
+// --- Roaming comet ---
+/** Collision radius for projectile hits on a comet (it's a big target). */
+const COMET_RADIUS = 6
+/** Seconds before the first comet can appear in a fresh run. */
+export const COMET_FIRST_DELAY = 45
+/** Random spawn interval window (seconds) between roaming comets. */
+const COMET_SPAWN_MIN = 60
+const COMET_SPAWN_MAX = 120
+/** Number of scrap boxes a destroyed comet scatters (its value is split). */
+const COMET_SCRAP_BOXES = 3
 /** Damage multiplier when the crosshair sits directly over a target as you fire
  *  — a precision bonus that rewards accurate aim over spraying. */
 const PRECISION_DAMAGE_MULT = 1.5
@@ -324,6 +338,12 @@ export interface TickState {
   asteroidRespawnTimer: number
   /** Monotonic counter for unique replenished-asteroid ids. */
   asteroidSpawnCounter: number
+  /** Active roaming comets (rare crossing entities). */
+  comets: Comet[]
+  /** Countdown (seconds) to the next roaming-comet spawn. */
+  cometSpawnTimer: number
+  /** Monotonic counter for unique comet ids. */
+  cometSpawnCounter: number
   /** The active Arbiter boss, or null when no encounter is underway. */
   arbiter: ArbiterState | null
   /** True while the ship is held in an Arbiter tractor beam (in range + cone).
@@ -391,6 +411,8 @@ export interface TickInput {
   tutorialStep: TutorialStep
   /** Camera-visible world-space rectangle, for gating fire to on-screen targets. */
   viewBounds: { centerX: number; centerY: number; halfW: number; halfH: number }
+  /** Current radar world range (sensor-tier aware) — drives disk-fill replenishment. */
+  radarRange: number
   /** Active black-hole hazards (one per visible black hole). */
   blackHoles: BlackHoleBody[]
 }
@@ -513,6 +535,12 @@ export interface TickResult {
   destroyedAsteroidIds: { id: string; x: number; y: number; type: AsteroidType }[]
   /** Ids of asteroids removed this tick (destroyed or culled far off-screen). */
   expiredAsteroidIds: string[]
+  /** Roaming comets spawned this tick. */
+  newComets: Comet[]
+  /** Comets destroyed by the player this tick (id + position for VFX). */
+  destroyedComets: { id: string; x: number; y: number }[]
+  /** Ids of comets removed this tick (destroyed or flew past the field). */
+  expiredCometIds: string[]
   /** Set the tick an Arbiter encounter begins. */
   arbiterSpawned: { mark: number } | null
   /** Set the tick the Arbiter is destroyed by the player. */
@@ -652,6 +680,9 @@ export function createTickState(config?: TickStateConfig): TickState {
     patrolTimer: FIRST_PATROL_DELAY,
     asteroidRespawnTimer: ASTEROID_REPLENISH_INTERVAL,
     asteroidSpawnCounter: 1,
+    comets: [],
+    cometSpawnTimer: COMET_FIRST_DELAY,
+    cometSpawnCounter: 1,
     arbiter: null,
     playerTractorCaught: false,
     arbiterEscort: null,
@@ -754,6 +785,9 @@ function emptyResult(): TickResult {
     smartBombDetonated: false,
     ledger: 0,
     newAsteroids: [],
+    newComets: [],
+    destroyedComets: [],
+    expiredCometIds: [],
     asteroidsDestroyed: 0,
     destroyedAsteroidIds: [],
     expiredAsteroidIds: [],
@@ -2088,7 +2122,10 @@ export function tick(state: TickState, input: TickInput): TickResult {
             state.asteroidHitCounts.set(hit.asteroidId, newHits)
 
             if (newHits % HITS_PER_BREAK === 0) {
-              if (Math.random() < METAL_SPAWN_CHANCE) {
+              // Guarantee metal during the tutorial's wait-for-metal step so the
+              // player can't get stuck on "Keep shooting the asteroid..." when
+              // the random roll keeps missing (no field replenishment runs yet).
+              if (input.tutorialStep === 'wait-for-metal' || Math.random() < METAL_SPAWN_CHANCE) {
                 const hitAsteroid = state.asteroids.find((a) => a.id === hit.asteroidId)
                 const ax = hitAsteroid ? hitAsteroid.x : hit.x
                 const ay = hitAsteroid ? hitAsteroid.y : hit.y
@@ -2428,7 +2465,9 @@ export function tick(state: TickState, input: TickInput): TickResult {
       state.asteroidHitCounts.set(hit.asteroidId, newHits)
 
       if (newHits % HITS_PER_BREAK === 0) {
-        if (Math.random() < METAL_SPAWN_CHANCE) {
+        // Guarantee metal during the tutorial's wait-for-metal step (see note
+        // on the other spawn site) so the player can't get stuck shooting.
+        if (input.tutorialStep === 'wait-for-metal' || Math.random() < METAL_SPAWN_CHANCE) {
           const hitAsteroid = state.asteroids.find((a) => a.id === hit.asteroidId)
           const ax = hitAsteroid ? hitAsteroid.x : hit.x
           const ay = hitAsteroid ? hitAsteroid.y : hit.y
@@ -2924,9 +2963,13 @@ function updateEndlessMode(
   state.runTime += dt
   updateSectorCollapse(state, dt)
 
-  // --- Cull destroyed rocks and ones the player has long since left behind ---
+  // --- Cull destroyed rocks and ones beyond the radar disk ---
+  // Cull just outside the radar range so rocks within radar (which we want
+  // populated) survive, but trailing rocks the player has left behind are
+  // pruned. Falls back to a camera-relative radius for tiny radar ranges.
   const viewDiag = Math.hypot(input.viewBounds.halfW, input.viewBounds.halfH)
-  const cullRadiusSq = (viewDiag * 3.5) ** 2
+  const cullRadius = Math.max(viewDiag * 3.5, input.radarRange * 1.25)
+  const cullRadiusSq = cullRadius * cullRadius
   for (let i = state.asteroids.length - 1; i >= 0; i--) {
     const a = state.asteroids[i]
     const dx = a.x - state.ship.x
@@ -2943,21 +2986,34 @@ function updateEndlessMode(
     }
   }
 
-  // --- Replenish the field when it thins out around the player ---
-  const localRadiusSq = (viewDiag * 2.2) ** 2
+  // --- Replenish so the whole radar disk stays populated at a steady density ---
+  // Floor scales with the radar disk area (capped) so the field reads as a full
+  // belt out to the rim, not a small ring near the player.
+  const diskRadius = input.radarRange
+  const diskRadiusSq = diskRadius * diskRadius
+  const targetFloor = Math.min(
+    ASTEROID_FIELD_CAP,
+    Math.max(ASTEROID_FLOOR, Math.round(ASTEROID_DENSITY * Math.PI * diskRadiusSq)),
+  )
   let localCount = 0
   for (const a of state.asteroids) {
     const dx = a.x - state.ship.x
     const dy = a.y - state.ship.y
-    if (dx * dx + dy * dy < localRadiusSq) localCount++
+    if (dx * dx + dy * dy < diskRadiusSq) localCount++
   }
-  if (localCount < ASTEROID_FLOOR) {
+  if (localCount < targetFloor) {
     state.asteroidRespawnTimer -= dt
     if (state.asteroidRespawnTimer <= 0) {
       state.asteroidRespawnTimer = ASTEROID_REPLENISH_INTERVAL
-      const batch = Math.min(ASTEROID_REPLENISH_BATCH, ASTEROID_FLOOR - localCount)
+      const batch = Math.min(ASTEROID_REPLENISH_BATCH, targetFloor - localCount)
       for (let i = 0; i < batch; i++) {
-        const a = spawnEdgeAsteroid(input.viewBounds, `asteroid-r${state.asteroidSpawnCounter++}`)
+        const a = spawnFieldAsteroid(
+          input.viewBounds,
+          input.radarRange,
+          state.ship.x,
+          state.ship.y,
+          `asteroid-r${state.asteroidSpawnCounter++}`,
+        )
         state.asteroids.push(a)
         state.asteroidHitCounts.set(a.id, 0)
         result.newAsteroids.push(a)
@@ -2966,6 +3022,9 @@ function updateEndlessMode(
   } else {
     state.asteroidRespawnTimer = ASTEROID_REPLENISH_INTERVAL
   }
+
+  // --- Roaming comets — rare fast crossers that drop bonus scrap ---
+  updateComets(state, input, result)
 
   // --- The Arbiter(s) — recurring boss encounter ---
   // Both the primary and (during twin Marks) the escort run the same combat
@@ -3071,6 +3130,87 @@ function updateEndlessMode(
   if (state.playerHp <= 0 && !state.endlessDeathFired) {
     state.endlessDeathFired = true
     result.playerKilled = true
+  }
+}
+
+/**
+ * Roaming-comet system (endless mode only): spawns a rare comet beyond the
+ * radar rim on a randomized cadence, advances active comets along their
+ * straight path, resolves player-projectile hits, and on destruction scatters
+ * the comet's bonus scrap across {@link COMET_SCRAP_BOXES} boxes. Comets that
+ * fly clear of the radar disk are culled silently. All spawns/removals are
+ * reported on the result for the scene to mirror its meshes/tails.
+ */
+function updateComets(state: TickState, input: TickInput, result: TickResult): void {
+  const { dt } = input
+  const ship = state.ship
+
+  // --- Spawn cadence: one comet at a time, on a randomized interval ---
+  state.cometSpawnTimer -= dt
+  if (state.cometSpawnTimer <= 0) {
+    state.cometSpawnTimer = COMET_SPAWN_MIN + Math.random() * (COMET_SPAWN_MAX - COMET_SPAWN_MIN)
+    const comet = spawnRoamingComet(
+      input.viewBounds,
+      input.radarRange,
+      ship.x,
+      ship.y,
+      `comet-${state.cometSpawnCounter++}`,
+    )
+    state.comets.push(comet)
+    result.newComets.push(comet)
+  }
+
+  if (state.comets.length === 0) return
+
+  // --- Drift along the straight crossing path ---
+  for (const c of state.comets) {
+    c.x += c.velocityX * dt
+    c.y += c.velocityY * dt
+  }
+
+  // --- Player projectiles chip the comet down ---
+  if (state.projectiles.length > 0) {
+    const { surviving, hits } = checkProjectileCometCollisions(
+      state.projectiles,
+      state.comets,
+      COMET_RADIUS,
+    )
+    if (hits.length > 0) {
+      result.asteroidHit = true
+      for (const hit of hits) {
+        state.projectileElapsed.delete(hit.projectileId)
+        result.expiredProjectileIds.push(hit.projectileId)
+      }
+    }
+    state.projectiles = surviving
+  }
+
+  // --- Cull destroyed comets (scatter loot) or ones past the radar disk ---
+  const viewDiag = Math.hypot(input.viewBounds.halfW, input.viewBounds.halfH)
+  const cullRadius = Math.max(viewDiag * 3.5, input.radarRange * 1.4)
+  const cullRadiusSq = cullRadius * cullRadius
+  for (let i = state.comets.length - 1; i >= 0; i--) {
+    const c = state.comets[i]
+    const dx = c.x - ship.x
+    const dy = c.y - ship.y
+    const destroyed = c.hp <= 0
+    const culled = dx * dx + dy * dy > cullRadiusSq
+    if (!destroyed && !culled) continue
+
+    if (destroyed) {
+      result.destroyedComets.push({ id: c.id, x: c.x, y: c.y })
+      // Split the bonus scrap across a few boxes flung out from the impact.
+      const perBox = Math.max(1, Math.round(c.value / COMET_SCRAP_BOXES))
+      for (let b = 0; b < COMET_SCRAP_BOXES; b++) {
+        const a = Math.random() * Math.PI * 2
+        const r = 2 + Math.random() * 5
+        state.scrapBoxes.push(
+          createScrapBox(c.x + Math.cos(a) * r, c.y + Math.sin(a) * r, perBox),
+        )
+      }
+    }
+    result.expiredCometIds.push(c.id)
+    state.comets.splice(i, 1)
   }
 }
 

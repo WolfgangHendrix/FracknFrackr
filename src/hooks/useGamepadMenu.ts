@@ -88,7 +88,44 @@ function moveFocus(delta: number): void {
   const current = document.activeElement
   const idx = current instanceof HTMLElement ? items.indexOf(current) : -1
   const base = idx === -1 ? (delta > 0 ? -1 : 0) : idx
-  const next = (base + delta + items.length) % items.length
+  let next = base + delta
+
+  // When moving down past the last item, check if there are more items
+  // in the DOM that aren't currently focusable (off-screen). If so,
+  // scroll the parent container to reveal them instead of cycling.
+  if (delta > 0 && next >= items.length) {
+    const currentItem = items[items.length - 1]
+    const scrollParent = currentItem.closest('[class*="overflow"]')
+    if (scrollParent && scrollParent instanceof HTMLElement) {
+      const currentRect = currentItem.getBoundingClientRect()
+      const parentRect = scrollParent.getBoundingClientRect()
+      // If the last item is near/at the bottom of the scroll container, scroll down
+      if (currentRect.bottom >= parentRect.bottom - 10) {
+        scrollParent.scrollBy({ top: currentItem.offsetHeight * 2, behavior: 'smooth' })
+        // Don't cycle; keep focus on the last item while scrolling
+        return
+      }
+    }
+  }
+
+  // When moving up past the first item, scroll up to reveal more items
+  if (delta < 0 && next < 0) {
+    const currentItem = items[0]
+    const scrollParent = currentItem.closest('[class*="overflow"]')
+    if (scrollParent && scrollParent instanceof HTMLElement) {
+      const currentRect = currentItem.getBoundingClientRect()
+      const parentRect = scrollParent.getBoundingClientRect()
+      // If the first item is near/at the top of the scroll container, scroll up
+      if (currentRect.top <= parentRect.top + 10) {
+        scrollParent.scrollBy({ top: -currentItem.offsetHeight * 2, behavior: 'smooth' })
+        // Don't cycle; keep focus on the first item while scrolling
+        return
+      }
+    }
+  }
+
+  // Normal cycling when not at boundary or after scrolling
+  next = (base + delta + items.length) % items.length
   // The focusin listener below plays the move blip — calling .focus() here
   // triggers it, so we don't need a direct playMenuMove() call.
   items[next].focus()

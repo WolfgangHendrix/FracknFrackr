@@ -94,9 +94,10 @@ const STEPS: {
 ]
 
 function StepDots({ step }: { step: TutorialStep }) {
-  // wait-for-metal is an intermediate state between shoot and collect —
-  // show the collect dot as active (index 2) during that phase.
-  const lookupKey = step === 'wait-for-metal' ? 'collect' : step
+  // wait-for-metal is a continuation of shooting ("Keep shooting the
+  // asteroid...") — keep the shoot dot active (index 1) so the indicator
+  // doesn't jump ahead to collect while the player is still firing.
+  const lookupKey = step === 'wait-for-metal' ? 'shoot' : step
   const foundIndex = STEPS.findIndex((s) => s.key === lookupKey)
   const stepIndex = foundIndex === -1 ? STEPS.length : foundIndex
 
@@ -208,18 +209,20 @@ export function TutorialOverlay({
         <StepDots step={step} />
         <p className="text-hud-green text-sm sm:text-base">{text}</p>
         {frozen && (
-          <>
-            <p className="text-white/50 text-sm mt-2 animate-pulse">
-              {gamepadActive ? 'Press (A) to continue' : 'Press any key to continue'}
-            </p>
-            {/* Invisible focusable target so gamepad A press fires onDismiss. */}
-            <button
-              data-menu-item
-              onClick={onDismiss}
-              aria-label="Continue"
-              className="pointer-events-auto !absolute opacity-0 w-px h-px"
-            />
-          </>
+          // The instruction text IS the focusable button so the gamepad menu
+          // system can focus it (data-menu-default) and dismiss on A. It must
+          // be visibly rendered (no opacity-0) or useGamepadMenu's visibility
+          // filter would skip it. Keyboard/mouse users still dismiss via the
+          // window-level listeners below.
+          <button
+            data-menu-item
+            data-menu-default
+            onClick={onDismiss}
+            aria-label="Continue"
+            className="pointer-events-auto block mx-auto mt-2 text-white/50 text-sm animate-pulse focus:outline-none focus:text-white"
+          >
+            {gamepadActive ? 'Press (A) to continue' : 'Press any key to continue'}
+          </button>
         )}
         {!frozen && !confirming && (
           <button

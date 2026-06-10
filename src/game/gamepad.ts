@@ -14,6 +14,10 @@ const AXIS_RIGHT_Y = 3
 const BUTTON_Y = 3
 const BUTTON_LT = 6
 const BUTTON_RT = 7
+const BUTTON_DPAD_UP = 12
+const BUTTON_DPAD_DOWN = 13
+const BUTTON_DPAD_LEFT = 14
+const BUTTON_DPAD_RIGHT = 15
 
 export interface GamepadSnapshot {
   leftX: number
@@ -23,6 +27,10 @@ export interface GamepadSnapshot {
   yPressed: boolean
   ltPressed: boolean
   rtPressed: boolean
+  dpadUp: boolean
+  dpadDown: boolean
+  dpadLeft: boolean
+  dpadRight: boolean
 }
 
 export interface GamepadHandlerState {
@@ -33,6 +41,8 @@ export interface GamepadHandlerState {
   droveAim: boolean
   /** Whether the gamepad drove boost last frame (so we don't stomp keyboard Shift on release). */
   droveBoost: boolean
+  /** Radar crosshair position, normalized (-1..1 on each axis), null = hidden. */
+  radarCrosshair: { nx: number; ny: number } | null
 }
 
 export function createGamepadHandlerState(): GamepadHandlerState {
@@ -41,6 +51,7 @@ export function createGamepadHandlerState(): GamepadHandlerState {
     droveAim: false,
     droveBoost: false,
     prevY: false,
+    radarCrosshair: null,
   }
 }
 
@@ -59,6 +70,10 @@ export function readGamepadSnapshot(getPads: () => (Gamepad | null)[]): GamepadS
         yPressed: pad.buttons[BUTTON_Y]?.pressed ?? false,
         ltPressed: (pad.buttons[BUTTON_LT]?.value ?? 0) > TRIGGER_THRESHOLD,
         rtPressed: (pad.buttons[BUTTON_RT]?.value ?? 0) > TRIGGER_THRESHOLD,
+        dpadUp: pad.buttons[BUTTON_DPAD_UP]?.pressed ?? false,
+        dpadDown: pad.buttons[BUTTON_DPAD_DOWN]?.pressed ?? false,
+        dpadLeft: pad.buttons[BUTTON_DPAD_LEFT]?.pressed ?? false,
+        dpadRight: pad.buttons[BUTTON_DPAD_RIGHT]?.pressed ?? false,
       }
     }
   }
@@ -72,6 +87,7 @@ export function readGamepadSnapshot(getPads: () => (Gamepad | null)[]): GamepadS
  * - Left stick drives movement (mirrors virtual joystick: cardinal flags + joystickAngle).
  * - Right stick drives aim and fires while past deadzone.
  * - Triggers (LT / RT) drive the Thruster Vectoring boost.
+ * - D-pad drives radar crosshair position when drones are available.
  * - When the gamepad releases a control it only clears the bits it owned (so keyboard
  *   and mouse inputs are not stomped on).
  *
@@ -84,7 +100,8 @@ export function applyGamepadFrame(
   aimState: AimState,
   canvasWidth: number,
   canvasHeight: number,
-): { firing: boolean; toolToggle: boolean } {
+  hasDrones: boolean = false,
+): { firing: boolean; toolToggle: boolean; radarCrosshair: { nx: number; ny: number } | null } {
   let toolToggle = false
   if (snapshot?.yPressed && !state.prevY) toolToggle = true
   state.prevY = snapshot?.yPressed ?? false
@@ -148,14 +165,36 @@ export function applyGamepadFrame(
     state.droveAim = false
   }
 
-  return { firing, toolToggle }
+  // --- Radar crosshair (D-pad) ---
+  const RADAR_MOVE_STEP = 0.04
+  if (!hasDrones) {
+    state.radarCrosshair = null
+  } else if (snapshot && (snapshot.dpadUp || snapshot.dpadDown || snapshot.dpadLeft || snapshot.dpadRight)) {
+    if (!state.radarCrosshair) {
+      state.radarCrosshair = { nx: 0, ny: 0 }
+    }
+    let nx = state.radarCrosshair.nx
+    let ny = state.radarCrosshair.ny
+    if (snapshot.dpadUp) ny -= RADAR_MOVE_STEP
+    if (snapshot.dpadDown) ny += RADAR_MOVE_STEP
+    if (snapshot.dpadLeft) nx -= RADAR_MOVE_STEP
+    if (snapshot.dpadRight) nx += RADAR_MOVE_STEP
+    const mag = Math.sqrt(nx * nx + ny * ny)
+    if (mag > 1) {
+      nx /= mag
+      ny /= mag
+    }
+    state.radarCrosshair = { nx, ny }
+  }
+
+  return { firing, toolToggle, radarCrosshair: state.radarCrosshair }
 }
 
 export interface GamepadHandler {
   attach: () => void
   detach: () => void
-  /** Poll the connected gamepad and write to inputState/aimState. Returns whether to fire this frame. */
-  poll: () => { firing: boolean; toolToggle: boolean }
+  /** Poll the connected gamepad and write to inputState/aimState. Returns firing, toolToggle, and radar crosshair state. */
+  poll: (hasDrones?: boolean) => { firing: boolean; toolToggle: boolean; radarCrosshair: { nx: number; ny: number } | null }
 }
 
 /**
@@ -181,7 +220,7 @@ export function createGamepadHandler(
       state.droveBoost = false
       inputState.boost = false
     },
-    poll() {
+    poll(hasDrones = false) {
       const getPads = (): (Gamepad | null)[] => {
         if (typeof navigator === 'undefined' || !navigator.getGamepads) return []
         return Array.from(navigator.getGamepads())
@@ -194,6 +233,7 @@ export function createGamepadHandler(
         aimState,
         canvas.clientWidth,
         canvas.clientHeight,
+        hasDrones,
       )
     },
   }
