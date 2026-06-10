@@ -1,10 +1,9 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 
-/** Grace period before dismiss listeners activate, so the in-flight hit
- *  input doesn't instantly close the popup the player just learned exists. */
-const DISMISS_GRACE_MS = 400
+/** Long enough to ensure in-flight mouse/key inputs can't instantly close the popup. */
+const DISMISS_GRACE_MS = 2500
 
 interface DefenseTutorialPopupProps {
   visible: boolean
@@ -18,22 +17,27 @@ interface DefenseTutorialPopupProps {
  * understand the defensive hierarchy, fast, before they assume it's a bug.
  */
 export function DefenseTutorialPopup({ visible, onDismiss }: DefenseTutorialPopupProps) {
+  const [ready, setReady] = useState(false)
+
   useEffect(() => {
-    if (!visible) return
+    if (!visible) {
+      setReady(false)
+      return
+    }
     const handleDismiss = (e: Event): void => {
       e.preventDefault()
       onDismiss()
     }
     const timerId = setTimeout(() => {
+      setReady(true)
       window.addEventListener('keydown', handleDismiss, { once: true })
       window.addEventListener('touchstart', handleDismiss, { once: true })
-      window.addEventListener('mousedown', handleDismiss, { once: true })
     }, DISMISS_GRACE_MS)
     return () => {
       clearTimeout(timerId)
       window.removeEventListener('keydown', handleDismiss)
       window.removeEventListener('touchstart', handleDismiss)
-      window.removeEventListener('mousedown', handleDismiss)
+      setReady(false)
     }
   }, [visible, onDismiss])
 
@@ -43,6 +47,7 @@ export function DefenseTutorialPopup({ visible, onDismiss }: DefenseTutorialPopu
     <div
       className="absolute inset-0 z-[60] flex items-center justify-center bg-black/65 p-4"
       data-testid="defense-tutorial-popup"
+      onClick={ready ? onDismiss : undefined}
     >
       <button
         data-menu-item
@@ -80,7 +85,7 @@ export function DefenseTutorialPopup({ visible, onDismiss }: DefenseTutorialPopu
         <p className="text-white/60 text-xs sm:text-sm mt-3 leading-relaxed">
           Spent charges stay spent. Buy them back at the trade station.
         </p>
-        <p className="text-white/40 text-sm mt-4 animate-pulse text-center">
+        <p className={`text-white/40 text-sm mt-4 text-center transition-opacity duration-500 ${ready ? 'opacity-100 animate-pulse' : 'opacity-0'}`}>
           Tap anywhere to continue
         </p>
       </button>

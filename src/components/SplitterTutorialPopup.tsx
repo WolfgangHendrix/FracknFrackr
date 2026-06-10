@@ -1,8 +1,9 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 
-const DISMISS_GRACE_MS = 400
+/** Long enough to ensure in-flight mouse/key inputs can't instantly close the popup. */
+const DISMISS_GRACE_MS = 2500
 
 interface SplitterTutorialPopupProps {
   visible: boolean
@@ -15,22 +16,27 @@ interface SplitterTutorialPopupProps {
  * rather than learning the hard way that one big target turns into three.
  */
 export function SplitterTutorialPopup({ visible, onDismiss }: SplitterTutorialPopupProps) {
+  const [ready, setReady] = useState(false)
+
   useEffect(() => {
-    if (!visible) return
+    if (!visible) {
+      setReady(false)
+      return
+    }
     const handleDismiss = (e: Event): void => {
       e.preventDefault()
       onDismiss()
     }
     const timerId = setTimeout(() => {
+      setReady(true)
       window.addEventListener('keydown', handleDismiss, { once: true })
       window.addEventListener('touchstart', handleDismiss, { once: true })
-      window.addEventListener('mousedown', handleDismiss, { once: true })
     }, DISMISS_GRACE_MS)
     return () => {
       clearTimeout(timerId)
       window.removeEventListener('keydown', handleDismiss)
       window.removeEventListener('touchstart', handleDismiss)
-      window.removeEventListener('mousedown', handleDismiss)
+      setReady(false)
     }
   }, [visible, onDismiss])
 
@@ -40,6 +46,7 @@ export function SplitterTutorialPopup({ visible, onDismiss }: SplitterTutorialPo
     <div
       className="absolute inset-0 z-[60] flex items-center justify-center bg-black/65 p-4"
       data-testid="splitter-tutorial-popup"
+      onClick={ready ? onDismiss : undefined}
     >
       <button
         data-menu-item
@@ -63,7 +70,7 @@ export function SplitterTutorialPopup({ visible, onDismiss }: SplitterTutorialPo
           Bait it away from other fights before you finish it off, or you&apos;ll
           find yourself surrounded the moment it dies.
         </p>
-        <p className="text-white/40 text-sm mt-4 animate-pulse text-center">
+        <p className={`text-white/40 text-sm mt-4 text-center transition-opacity duration-500 ${ready ? 'opacity-100 animate-pulse' : 'opacity-0'}`}>
           Tap anywhere to continue
         </p>
       </button>

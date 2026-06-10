@@ -1,9 +1,9 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 
-/** Grace period before dismiss listeners activate, so in-flight inputs don't instantly close. */
-const DISMISS_GRACE_MS = 400
+/** Long enough to ensure in-flight mouse/key inputs can't instantly close the popup. */
+const DISMISS_GRACE_MS = 2500
 
 interface BlackHoleTutorialPopupProps {
   visible: boolean
@@ -11,27 +11,30 @@ interface BlackHoleTutorialPopupProps {
 }
 
 export function BlackHoleTutorialPopup({ visible, onDismiss }: BlackHoleTutorialPopupProps) {
+  const [ready, setReady] = useState(false)
+
   useEffect(() => {
-    if (!visible) return
+    if (!visible) {
+      setReady(false)
+      return
+    }
 
     const handleDismiss = (e: Event) => {
-      // Mirrors the lazer popup — preventDefault stops touchstart from
-      // synthesizing a mousedown that lands on the canvas as an aim input.
       e.preventDefault()
       onDismiss()
     }
 
     const timerId = setTimeout(() => {
+      setReady(true)
       window.addEventListener('keydown', handleDismiss, { once: true })
       window.addEventListener('touchstart', handleDismiss, { once: true })
-      window.addEventListener('mousedown', handleDismiss, { once: true })
     }, DISMISS_GRACE_MS)
 
     return () => {
       clearTimeout(timerId)
       window.removeEventListener('keydown', handleDismiss)
       window.removeEventListener('touchstart', handleDismiss)
-      window.removeEventListener('mousedown', handleDismiss)
+      setReady(false)
     }
   }, [visible, onDismiss])
 
@@ -41,6 +44,7 @@ export function BlackHoleTutorialPopup({ visible, onDismiss }: BlackHoleTutorial
     <div
       className="absolute inset-0 z-[60] flex items-center justify-center bg-black/60"
       data-testid="black-hole-tutorial-popup"
+      onClick={ready ? onDismiss : undefined}
     >
       <button
         data-menu-item
@@ -62,7 +66,7 @@ export function BlackHoleTutorialPopup({ visible, onDismiss }: BlackHoleTutorial
         <p className="text-white/70 text-xs sm:text-sm leading-relaxed mt-2">
           Keep your distance, or burn hard to escape its pull.
         </p>
-        <p className="text-white/40 text-sm mt-4 animate-pulse">Tap anywhere to continue</p>
+        <p className={`text-white/40 text-sm mt-4 transition-opacity duration-500 ${ready ? 'opacity-100 animate-pulse' : 'opacity-0'}`}>Tap anywhere to continue</p>
       </button>
     </div>
   )
