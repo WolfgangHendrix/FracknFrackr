@@ -149,7 +149,7 @@ const UPGRADE_CATALOG_SECTIONS = [
         type: 'storage' as const,
         label: 'Cargo Expansion',
         cost: 100,
-        description: '+25 cargo capacity',
+        description: 'Expands your cargo hold capacity',
       },
       {
         type: 'sensor' as const,
@@ -194,6 +194,34 @@ const UPGRADE_CATALOG_SECTIONS = [
       },
     ],
   },
+  {
+    // Tycoon-tier chase purchases — priced one to two orders of magnitude above
+    // the rest of the catalog so they're only reachable once a player has truly
+    // mastered the economy. Both are one-shot, flat-cost unlocks.
+    title: 'PRESTIGE',
+    items: [
+      {
+        type: 'refinery' as const,
+        label: 'Quantum Refinery',
+        cost: 12000,
+        description: 'Doubles scrap from every material sale (×2)',
+      },
+      {
+        type: 'exoticHull' as const,
+        label: 'Exotic Matter Hull',
+        cost: 15000,
+        description:
+          'Exotic plating + black-hole immunity. Unlocks a 3rd Option Orb (figure-four formation)',
+      },
+      {
+        type: 'wormhole' as const,
+        label: 'Wormhole Generator',
+        cost: 30000,
+        description:
+          'Black holes become escape portals. Mk1 → a random hole; Mk2 → the far side of the map',
+      },
+    ],
+  },
 ]
 
 function startingLevelForUpgrade(type: keyof Upgrades): number {
@@ -202,7 +230,9 @@ function startingLevelForUpgrade(type: keyof Upgrades): number {
 
 function maxLevelForUpgrade(type: keyof Upgrades): number {
   if (type === 'missiles') return 8
-  if (type === 'options') return 2
+  if (type === 'storage') return 6
+  if (type === 'options') return 3
+  if (type === 'wormhole') return 2
   if (type === 'ripple') return 1
   if (type === 'speed') return 5
   if (
@@ -224,7 +254,9 @@ function maxLevelForUpgrade(type: keyof Upgrades): number {
     type === 'spread' ||
     type === 'missileBias' ||
     type === 'thrusters' ||
-    type === 'droneRepair'
+    type === 'droneRepair' ||
+    type === 'refinery' ||
+    type === 'exoticHull'
   ) {
     return 1
   }
@@ -241,7 +273,9 @@ function isFlatCostUpgrade(type: keyof Upgrades): boolean {
     type === 'spread' ||
     type === 'missileBias' ||
     type === 'thrusters' ||
-    type === 'droneRepair'
+    type === 'droneRepair' ||
+    type === 'refinery' ||
+    type === 'exoticHull'
   )
 }
 
@@ -370,6 +404,7 @@ export function TradeMenu({
               cargo={cargo}
               totalSellValue={totalSellValue}
               hasMaterials={hasMaterials}
+              hasRefinery={upgrades.refinery > 0}
               isTutorial={isTutorialSell}
               onSell={onSell}
             />
@@ -390,15 +425,15 @@ export function TradeMenu({
         {/* Tutorial hint */}
         {isTutorialSell && (
           <div className="px-5 pb-4">
-            <p className="text-hud-green text-sm animate-pulse text-center">
-              Sell your collected materials!
+            <p className="text-hud-green text-sm animate-pulse text-center font-bold">
+              Select SELL ALL to cash in your haul!
             </p>
           </div>
         )}
         {isTutorialBuy && (
           <div className="px-5 pb-4">
-            <p className="text-hud-green text-sm animate-pulse text-center">
-              Buy the Fire Rate upgrade!
+            <p className="text-hud-green text-sm animate-pulse text-center font-bold">
+              Grab the FREE Cargo Expansion — then press ✕ to undock!
             </p>
           </div>
         )}
@@ -409,17 +444,27 @@ export function TradeMenu({
 
 function SellPanel({
   cargo,
-  totalSellValue,
+  totalSellValue: baseSellValue,
   hasMaterials,
+  hasRefinery,
   isTutorial,
   onSell,
 }: {
   cargo: Cargo
   totalSellValue: number
   hasMaterials: boolean
+  hasRefinery: boolean
   isTutorial: boolean
   onSell: () => void
 }) {
+  const isFullCargo = cargo.fragments >= cargo.capacity
+  const bonusSellValue = isFullCargo ? Math.round(baseSellValue * 0.20) : 0
+  // Mirror the sell math in useGameState.sellMaterials: full-cargo bonus first,
+  // then the Quantum Refinery ×2 stacks on top of that subtotal.
+  const subtotalSellValue = baseSellValue + bonusSellValue
+  const refineryBonus = hasRefinery ? subtotalSellValue : 0
+  const totalSellValue = subtotalSellValue + refineryBonus
+
   return (
     <div className="flex flex-col gap-2">
       <div className="text-white/60 text-sm mb-1">YOUR MATERIALS</div>
@@ -440,6 +485,18 @@ function SellPanel({
           </div>
         )
       })}
+      {bonusSellValue > 0 && (
+        <div className="flex justify-between text-sm text-hud-green font-semibold">
+          <span>Full Cargo Bonus (+20%)</span>
+          <span className="text-hud-amber">+{bonusSellValue} scrap</span>
+        </div>
+      )}
+      {refineryBonus > 0 && (
+        <div className="flex justify-between text-sm font-semibold" style={{ color: '#ff66ff' }}>
+          <span>Quantum Refinery (×2)</span>
+          <span className="text-hud-amber">+{refineryBonus} scrap</span>
+        </div>
+      )}
       <div className="border-t border-white/10 pt-2 flex justify-between text-sm font-bold">
         <span className="text-white/80">Total</span>
         <span className="text-hud-amber">+{totalSellValue} scrap</span>
@@ -501,6 +558,29 @@ function computePrereqLock(
       // Stretches the Lazer's overheat window — irrelevant on the blaster.
       if (!hasLazer) return 'Requires Lazer'
       return null
+    case 'refinery':
+      // Doubling sale value only pays off once you're hauling real volume.
+      if (upgrades.storage < 3) return 'Requires Cargo Expansion III'
+      return null
+    case 'exoticHull':
+      // Capstone — cap the normal hull line and max Options first (the 3rd-orb
+      // unlock it grants is only usable once Options is already maxed).
+      if (upgrades.hull < 3 || upgrades.options < 2) {
+        return 'Requires Hull III + Options maxed'
+      }
+      return null
+    case 'options':
+      // Per-tier gate: the first two Option tiers are free to buy, but the 3rd
+      // (cap raised 2→3) is locked behind the Exotic Matter Hull capstone.
+      if (upgrades.options >= 2 && upgrades.exoticHull === 0) {
+        return 'Requires Exotic Matter Hull'
+      }
+      return null
+    case 'wormhole':
+      // Bends the Exotic Matter Hull's black-hole immunity into a teleport —
+      // pointless (and impossible) without that capstone.
+      if (upgrades.exoticHull === 0) return 'Requires Exotic Matter Hull'
+      return null
     default:
       return null
   }
@@ -557,12 +637,19 @@ function BuyPanel({
         // play yet. The lock message doubles as a hint about what unlocks it.
         const prereqLock = computePrereqLock(item.type, upgrades, hasLazer)
         const lockedByPrereq = prereqLock !== null
-        const canAfford = scrap >= currentCost && !maxed && !lockedByPrereq
-        const isFireRate = item.type === 'blaster'
-        const highlight = isTutorial && isFireRate
+        // The final tutorial beat forces the Cargo Expansion and comps it
+        // (free), lifting a new player from the 25 starter hold to the normal 50.
+        const isTutorialTarget = isTutorial && item.type === 'storage'
+        const effectiveCost = isTutorialTarget ? 0 : currentCost
+        const canAfford = scrap >= effectiveCost && !maxed && !lockedByPrereq
+        const highlight = isTutorialTarget
 
-        const isDefault = canAfford && !defaultAssigned
-        if (isDefault) defaultAssigned = true
+        // During the tutorial, only the Cargo Expansion is the gamepad default
+        // so focus lands on the upgrade the player is being told to buy.
+        const isDefault = isTutorial
+          ? isTutorialTarget
+          : canAfford && !defaultAssigned
+        if (isDefault && !isTutorial) defaultAssigned = true
 
         return (
           <div
@@ -595,13 +682,17 @@ function BuyPanel({
                 item.type === 'sensor' ||
                 item.type === 'drillNose'
                   ? `${currentLevel}/3`
-                  : item.type === 'drone'
+                  : item.type === 'wormhole'
+                    ? `${currentLevel}/2`
+                    : item.type === 'drone'
                     ? `${currentLevel}/4`
                     : item.type === 'autoTool' ||
                         item.type === 'spread' ||
                         item.type === 'missileBias' ||
                         item.type === 'thrusters' ||
-                        item.type === 'droneRepair'
+                        item.type === 'droneRepair' ||
+                        item.type === 'refinery' ||
+                        item.type === 'exoticHull'
                       ? currentLevel > 0
                         ? 'OWNED'
                         : 'LOCKED'
@@ -611,7 +702,7 @@ function BuyPanel({
             <button
               data-menu-item
               {...(isDefault ? { 'data-menu-default': true } : {})}
-              onClick={canAfford ? () => onBuy(item.type, currentCost) : playCannotBuy}
+              onClick={canAfford ? () => onBuy(item.type, effectiveCost) : playCannotBuy}
               aria-disabled={!canAfford || undefined}
               className={`ml-3 px-5 py-3 min-h-[44px] rounded text-sm font-bold tracking-wider transition-all focus:outline-none focus:ring-2 focus:ring-hud-blue ${
                 canAfford
@@ -621,7 +712,13 @@ function BuyPanel({
                   : 'bg-white/5 border border-white/10 text-white/20 cursor-not-allowed'
               }`}
             >
-              {maxed ? 'MAX' : lockedByPrereq ? 'LOCK' : `${currentCost}`}
+              {maxed
+                ? 'MAX'
+                : lockedByPrereq
+                  ? 'LOCK'
+                  : isTutorialTarget
+                    ? 'FREE'
+                    : `${currentCost}`}
             </button>
           </div>
         )

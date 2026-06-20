@@ -72,10 +72,13 @@ interface GameCanvasProps {
   onSmartBomb?: () => void
   onBlackHoleNearby?: () => void
   onBlackHoleEscaped?: () => void
+  onBlackHoleSurvived?: () => void
+  onWormholeTeleported?: () => void
   onDrillNoseAsteroidFinished?: (count: number) => void
   onFirstDefensiveHit?: () => void
   onFirstFormation?: () => void
   onFirstSplitter?: () => void
+  onHarvestingAreaWarning?: (outside: boolean) => void
   // Prologue callbacks
   onPrologueReady?: () => void
   onFieldCleared?: () => void
@@ -119,6 +122,8 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
     onSmartBomb,
     onBlackHoleNearby,
     onBlackHoleEscaped,
+    onBlackHoleSurvived,
+    onWormholeTeleported,
     onDrillNoseAsteroidFinished,
     onFirstDefensiveHit,
     onFirstFormation,
@@ -127,6 +132,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
     onFieldCleared,
     onArbiterArrived,
     onStripComplete,
+    onHarvestingAreaWarning,
   },
   ref,
 ) {
@@ -169,6 +175,8 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
   const onSmartBombRef = useRef(onSmartBomb)
   const onBlackHoleNearbyRef = useRef(onBlackHoleNearby)
   const onBlackHoleEscapedRef = useRef(onBlackHoleEscaped)
+  const onBlackHoleSurvivedRef = useRef(onBlackHoleSurvived)
+  const onWormholeTeleportedRef = useRef(onWormholeTeleported)
   const onDrillNoseAsteroidFinishedRef = useRef(onDrillNoseAsteroidFinished)
   const onFirstDefensiveHitRef = useRef(onFirstDefensiveHit)
   const onFirstFormationRef = useRef(onFirstFormation)
@@ -177,6 +185,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
   const onFieldClearedRef = useRef(onFieldCleared)
   const onArbiterArrivedRef = useRef(onArbiterArrived)
   const onStripCompleteRef = useRef(onStripComplete)
+  const onHarvestingAreaWarningRef = useRef(onHarvestingAreaWarning)
 
   useImperativeHandle(ref, () => ({
     setFireRateBonus: (multiplier: number) => {
@@ -348,6 +357,14 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
   }, [onBlackHoleEscaped])
 
   useEffect(() => {
+    onBlackHoleSurvivedRef.current = onBlackHoleSurvived
+  }, [onBlackHoleSurvived])
+
+  useEffect(() => {
+    onWormholeTeleportedRef.current = onWormholeTeleported
+  }, [onWormholeTeleported])
+
+  useEffect(() => {
     onDrillNoseAsteroidFinishedRef.current = onDrillNoseAsteroidFinished
   }, [onDrillNoseAsteroidFinished])
 
@@ -378,6 +395,10 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
   useEffect(() => {
     onStripCompleteRef.current = onStripComplete
   }, [onStripComplete])
+
+  useEffect(() => {
+    onHarvestingAreaWarningRef.current = onHarvestingAreaWarning
+  }, [onHarvestingAreaWarning])
 
   const getPaused = useCallback(() => pausedRef.current || frozenRef.current, [])
 
@@ -428,6 +449,8 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
           onSmartBomb: () => onSmartBombRef.current?.(),
           onBlackHoleNearby: () => onBlackHoleNearbyRef.current?.(),
           onBlackHoleEscaped: () => onBlackHoleEscapedRef.current?.(),
+          onBlackHoleSurvived: () => onBlackHoleSurvivedRef.current?.(),
+          onWormholeTeleported: () => onWormholeTeleportedRef.current?.(),
           onDrillNoseAsteroidFinished: (count: number) =>
             onDrillNoseAsteroidFinishedRef.current?.(count),
           onFirstDefensiveHit: () => onFirstDefensiveHitRef.current?.(),
@@ -437,6 +460,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(function
           onFieldCleared: () => onFieldClearedRef.current?.(),
           onArbiterArrived: () => onArbiterArrivedRef.current?.(),
           onStripComplete: () => onStripCompleteRef.current?.(),
+          onHarvestingAreaWarning: (outside) => onHarvestingAreaWarningRef.current?.(outside),
         })
         // Allow a few frames for the first render
         setTimeout(() => setIsLoading(false), 200)

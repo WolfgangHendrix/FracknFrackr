@@ -216,9 +216,9 @@ export const COMET_HP = 30
 /** Bonus scrap a destroyed comet drops (split across boxes). */
 export const COMET_VALUE = 120
 
-/** Comet travel speed (units/sec) — well above ambient asteroid drift. */
-const COMET_SPEED_MIN = 26
-const COMET_SPEED_MAX = 38
+/** Comet travel speed (units/sec) — faster than the fully upgraded ship. */
+const COMET_SPEED_MIN = 200
+const COMET_SPEED_MAX = 260
 
 /**
  * Spawn a rare roaming comet: starts beyond the radar rim and streaks across

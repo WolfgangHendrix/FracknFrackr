@@ -33,6 +33,7 @@ export type TutorialEvent =
   | 'asteroid-hit'
   | 'metal-spawned'
   | 'metal-collected'
+  | 'cargo-filled'
   | 'enemy-nearby'
   | 'enemy-destroyed'
   | 'scrap-collected'
@@ -94,7 +95,18 @@ export function advanceTutorial(state: TutorialState, event: TutorialEvent): Tut
       if (event === 'metal-spawned') return { ...state, step: 'collect' }
       return state
     case 'collect':
-      if (event === 'metal-collected') return { ...state, step: 'destroy-enemy' }
+      // The hold now starts small (25). Mine until it's full, *then* head out —
+      // the cargo-filled signal (dispatched by the page when fragments hit
+      // capacity) advances the beat instead of the first pickup.
+      if (event === 'cargo-filled') return { ...state, step: 'go-to-station' }
+      return state
+    case 'go-to-station':
+      // Arrow points to the station — but an enemy warps in to block the dock.
+      // When it closes in, freeze and force the player to deal with it first.
+      if (event === 'enemy-nearby') return { ...state, step: 'destroy-enemy', frozen: true }
+      // …unless the player snipes it from range before it ever gets close — then
+      // skip straight to picking up its scrap so the beat can't soft-lock.
+      if (event === 'enemy-destroyed') return { ...state, step: 'collect-scrap' }
       return state
     case 'destroy-enemy':
       if (event === 'enemy-nearby' && !state.frozen) return { ...state, frozen: true }
@@ -102,10 +114,7 @@ export function advanceTutorial(state: TutorialState, event: TutorialEvent): Tut
       if (event === 'enemy-destroyed') return { ...state, step: 'collect-scrap' }
       return state
     case 'collect-scrap':
-      if (event === 'scrap-collected') return { ...state, step: 'go-to-station' }
-      return state
-    case 'go-to-station':
-      if (event === 'near-station') return { ...state, step: 'approach-station' }
+      if (event === 'scrap-collected') return { ...state, step: 'approach-station' }
       return state
     case 'approach-station':
       if (event === 'entered-station') return { ...state, step: 'trade-sell' }
@@ -149,6 +158,7 @@ export interface TutorialHook {
   onAsteroidHit: () => void
   onMetalSpawned: () => void
   onMetalCollected: () => void
+  onCargoFilled: () => void
   onEnemyNearby: () => void
   onEnemyDestroyed: () => void
   onScrapCollected: () => void
@@ -161,10 +171,10 @@ export interface TutorialHook {
   skip: () => void
 }
 
-export function useTutorial(enabled: boolean): TutorialHook {
+export function useTutorial(enabled: boolean, isNewGame?: boolean): TutorialHook {
   const [state, setState] = useState<TutorialState>({
     active: false,
-    step: 'done',
+    step: isNewGame ? 'prologue-start' : 'done',
     frozen: false,
   })
 
@@ -174,6 +184,16 @@ export function useTutorial(enabled: boolean): TutorialHook {
       setState({ active: true, step: 'prologue-start', frozen: false })
     }
   }, [enabled])
+
+  // Sync step with isNewGame when not active/enabled
+  useEffect(() => {
+    if (!enabled) {
+      setState((prev) => ({
+        ...prev,
+        step: isNewGame ? 'prologue-start' : 'done',
+      }))
+    }
+  }, [enabled, isNewGame])
 
   const dispatch = useCallback((event: TutorialEvent) => {
     setState((prev) => {
@@ -199,6 +219,7 @@ export function useTutorial(enabled: boolean): TutorialHook {
   const onAsteroidHit = useCallback(() => dispatch('asteroid-hit'), [dispatch])
   const onMetalSpawned = useCallback(() => dispatch('metal-spawned'), [dispatch])
   const onMetalCollected = useCallback(() => dispatch('metal-collected'), [dispatch])
+  const onCargoFilled = useCallback(() => dispatch('cargo-filled'), [dispatch])
   const onEnemyNearby = useCallback(() => dispatch('enemy-nearby'), [dispatch])
   const onEnemyDestroyed = useCallback(() => dispatch('enemy-destroyed'), [dispatch])
   const onScrapCollected = useCallback(() => dispatch('scrap-collected'), [dispatch])
@@ -224,6 +245,7 @@ export function useTutorial(enabled: boolean): TutorialHook {
     onAsteroidHit,
     onMetalSpawned,
     onMetalCollected,
+    onCargoFilled,
     onEnemyNearby,
     onEnemyDestroyed,
     onScrapCollected,

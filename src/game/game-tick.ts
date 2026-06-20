@@ -246,6 +246,25 @@ export interface TickState {
    * decremented on hit between shield and armor in the damage hierarchy.
    */
   hullCharges: number
+  /**
+   * Exotic Matter Hull (prestige) buffer. A fixed block of charges granted by
+   * the capstone upgrade, consumed *before* the shield as the outermost layer.
+   * No self-repair — refills only on (re)acquiring the upgrade, like shield/armor.
+   */
+  exoticHullCharges: number
+  /**
+   * Exotic Matter Hull (prestige) side-effect: the ship ignores black-hole
+   * pull and is immune to event-horizon consumption while true.
+   */
+  voidImmune: boolean
+  /**
+   * Wormhole Generator (prestige, needs Exotic Matter Hull) tier 0-2. Entering
+   * a black hole teleports the ship to another one: T1 → a random hole, T2 →
+   * the far side of the map. 0 = not owned.
+   */
+  wormholeTier: number
+  /** Seconds until another wormhole jump is allowed (prevents ping-ponging). */
+  wormholeCooldown: number
   /** Bounty Manifest 0-3: +15% enemy-kill scrap per tier. */
   bountyTier: number
   /** Heat-Seeker Bias 0/1: missiles prefer Arbiter + carriers when on. */
@@ -519,11 +538,20 @@ export interface TickResult {
   prologuePlayerKilled: boolean
   shieldHit: boolean
   armorHit: boolean
+  /** An Exotic Matter Hull charge absorbed the hit this tick (prestige layer,
+   *  kept distinct from hullModuleLost so the normal-hull achievement is
+   *  unaffected). */
+  exoticHullHit: boolean
   /** A hull module was torn off this tick — scene re-applies modules at the
    *  new (lower) tickState.hullCharges to drop the outermost visible piece. */
   hullModuleLost: boolean
   /** The tick a Smart Bomb detonates (auto-bomb on death). */
   smartBombDetonated: boolean
+  /** Ship sat inside an event horizon and survived (void immunity). */
+  blackHoleSurvived: boolean
+  /** The Wormhole Generator teleported the ship this tick — scene plays the
+   *  arrival VFX at the ship's new position. */
+  wormholeTeleported: boolean
   // Endless mode
   /** Current Ledger value (always set, even outside endless mode). */
   ledger: number
@@ -629,6 +657,10 @@ export function createTickState(config?: TickStateConfig): TickState {
     coolingTier: 0,
     magnetTier: 0,
     hullCharges: 0,
+    exoticHullCharges: 0,
+    voidImmune: false,
+    wormholeTier: 0,
+    wormholeCooldown: 0,
     bountyTier: 0,
     missileBiasUnlocked: false,
     thrustersUnlocked: false,
@@ -781,8 +813,11 @@ function emptyResult(): TickResult {
     prologuePlayerKilled: false,
     shieldHit: false,
     armorHit: false,
+    exoticHullHit: false,
     hullModuleLost: false,
     smartBombDetonated: false,
+    blackHoleSurvived: false,
+    wormholeTeleported: false,
     ledger: 0,
     newAsteroids: [],
     newComets: [],
@@ -926,23 +961,68 @@ function segmentProjection(
   return { t, distSq: dx * dx + dy * dy }
 }
 
-function optionMuzzlePositions(state: TickState): { x: number; y: number }[] {
+/**
+ * Exotic Matter Hull (prestige) buffer size — how many charges the capstone
+ * grants. Consumed as the outermost defensive layer; no self-repair.
+ */
+export const EXOTIC_HULL_CHARGES = 3
+
+/**
+ * Option-orb placement, shared by firing (muzzle origins) and rendering so
+ * shots always leave the visible orbs.
+ *
+ * 1-2 orbs trail the ship Life-Force style (sampling the position history).
+ * The 3rd orb is unlocked by the Exotic Matter Hull capstone; at 3 orbs they
+ * snap into a fixed **figure-four** diamond around the ship — player at the
+ * front apex, two flanking the rear quarters, one trailing dead astern —
+ * rotated to the ship's heading (model faces +Y; forward = (-sinθ, cosθ)).
+ */
+export function optionOrbPositions(
+  ship: { x: number; y: number; rotation: number },
+  positionHistory: { x: number; y: number }[],
+  optionCount: number,
+): { x: number; y: number }[] {
   const positions: { x: number; y: number }[] = []
-  const count = Math.max(0, Math.min(2, state.optionCount))
+  const count = Math.max(0, Math.min(3, optionCount))
   if (count === 0) return positions
 
-  // Life-Force style trailing options
+  if (count >= 3) {
+    const fx = -Math.sin(ship.rotation)
+    const fy = Math.cos(ship.rotation)
+    const rx = Math.cos(ship.rotation)
+    const ry = Math.sin(ship.rotation)
+    const FLANK_BACK = 14
+    const FLANK_SIDE = 12
+    const REAR_BACK = 28
+    // Rear-left, rear-right, dead astern.
+    positions.push({
+      x: ship.x - fx * FLANK_BACK - rx * FLANK_SIDE,
+      y: ship.y - fy * FLANK_BACK - ry * FLANK_SIDE,
+    })
+    positions.push({
+      x: ship.x - fx * FLANK_BACK + rx * FLANK_SIDE,
+      y: ship.y - fy * FLANK_BACK + ry * FLANK_SIDE,
+    })
+    positions.push({ x: ship.x - fx * REAR_BACK, y: ship.y - fy * REAR_BACK })
+    return positions
+  }
+
+  // Life-Force style trailing options (1-2 orbs).
   const spacing = 18
   for (let i = 0; i < count; i++) {
-    const historyIndex = state.positionHistory.length - 1 - (i + 1) * spacing
+    const historyIndex = positionHistory.length - 1 - (i + 1) * spacing
     if (historyIndex >= 0) {
-      const hist = state.positionHistory[historyIndex]
+      const hist = positionHistory[historyIndex]
       positions.push({ x: hist.x, y: hist.y })
     } else {
-      positions.push({ x: state.ship.x, y: state.ship.y })
+      positions.push({ x: ship.x, y: ship.y })
     }
   }
   return positions
+}
+
+function optionMuzzlePositions(state: TickState): { x: number; y: number }[] {
+  return optionOrbPositions(state.ship, state.positionHistory, state.optionCount)
 }
 
 function nearestHomingTarget(state: TickState, x: number, y: number): PositionBody | null {
@@ -1189,6 +1269,13 @@ function syncFormationShieldState(state: TickState): void {
   }
 }
 
+function absorbDamageWithExoticHull(state: TickState, result: TickResult): boolean {
+  if (state.exoticHullCharges <= 0) return false
+  state.exoticHullCharges -= 1
+  result.exoticHullHit = true
+  return true
+}
+
 function absorbDamageWithShield(state: TickState, result: TickResult): boolean {
   if (state.shieldCharges <= 0) return false
   state.shieldCharges -= 1
@@ -1220,6 +1307,7 @@ function absorbDamageWithArmor(state: TickState, result: TickResult): boolean {
  * Apply one unit of incoming damage.
  *
  * Damage hierarchy (one-shot world):
+ *   0. Exotic Matter Hull charge — prestige outer plating (if owned)
  *   1. Shield charge — energy bubble, absorbed cleanly with a flash
  *   2. Hull module — outer bolt-on piece visibly tears off
  *   3. Armor charge — internal plating, absorbed cleanly
@@ -1246,6 +1334,7 @@ function damagePlayer(
   if (state.prologueInvulnerable) return
   if (state.invulnerabilityTimer > 0) return
 
+  if (absorbDamageWithExoticHull(state, result)) return
   if (absorbDamageWithShield(state, result)) return
   if (absorbDamageWithHull(state, result)) return
   if (absorbDamageWithArmor(state, result)) return
@@ -1390,17 +1479,88 @@ function isInsideBlackHole(body: PositionBody, hole: BlackHoleBody): boolean {
   return dx * dx + dy * dy <= radius * radius
 }
 
+/** Cooldown (sec) between Wormhole Generator jumps so the ship doesn't
+ *  ping-pong between two holes every frame. */
+const WORMHOLE_COOLDOWN = 3
+
+/**
+ * Pick where the Wormhole Generator drops the ship after it enters `entered`.
+ * Returns the dead *center* of the destination hole (the post-jump immunity
+ * window lets the ship sit in the core without re-triggering), or null if
+ * there's nowhere to go (T1 with no other hole). T1 → a random other hole;
+ * T2 → the farthest other hole ("far side of the map"), falling back to the
+ * point mirrored across the map center.
+ */
+function pickWormholeDestination(
+  state: TickState,
+  holes: BlackHoleBody[],
+  entered: BlackHoleBody,
+): { x: number; y: number } | null {
+  const others = holes.filter((h) => h !== entered)
+
+  if (state.wormholeTier >= 2) {
+    if (others.length > 0) {
+      let best = others[0]
+      let bestDist = -1
+      for (const h of others) {
+        const d = (h.x - entered.x) ** 2 + (h.y - entered.y) ** 2
+        if (d > bestDist) {
+          bestDist = d
+          best = h
+        }
+      }
+      return { x: best.x, y: best.y }
+    }
+    // No other hole — drop on the mirrored far side of the map.
+    return { x: -entered.x, y: -entered.y }
+  }
+
+  if (others.length === 0) return null
+  const h = others[Math.floor(Math.random() * others.length)]
+  return { x: h.x, y: h.y }
+}
+
 function applyBlackHoleConsumption(state: TickState, input: TickInput, result: TickResult): void {
   const holes = input.blackHoles
   if (holes.length === 0) return
 
+  if (state.wormholeCooldown > 0) {
+    state.wormholeCooldown = Math.max(0, state.wormholeCooldown - input.dt)
+  }
+
   for (const hole of holes) {
-    if (isInsideBlackHole(state.ship, hole) && !state.endlessDeathFired) {
-      state.playerHp = 0
-      state.endlessDeathFired = true
-      result.playerDamaged = true
-      result.playerKilled = true
-      break
+    if (isInsideBlackHole(state.ship, hole)) {
+      // Exotic Matter Hull (prestige): the ship rides through the event horizon
+      // unharmed. Flag the survival so the hidden achievement can fire.
+      if (state.voidImmune) {
+        result.blackHoleSurvived = true
+        // Wormhole Generator (prestige): instead of merely surviving, fling the
+        // ship out through another hole to escape whatever was chasing it.
+        if (state.wormholeTier > 0 && state.wormholeCooldown <= 0) {
+          const dest = pickWormholeDestination(state, holes, hole)
+          if (dest) {
+            state.ship.x = dest.x
+            state.ship.y = dest.y
+            state.ship.velocityX = 0
+            state.ship.velocityY = 0
+            // Land in the destination core, then a short grace window: no
+            // re-teleport (cooldown) and no damage (invuln) so the ship can
+            // fly back out of the center instead of looping hole-to-hole.
+            state.wormholeCooldown = WORMHOLE_COOLDOWN
+            state.invulnerabilityTimer = WORMHOLE_COOLDOWN
+            result.wormholeTeleported = true
+            break
+          }
+        }
+        continue
+      }
+      if (!state.endlessDeathFired) {
+        state.playerHp = 0
+        state.endlessDeathFired = true
+        result.playerDamaged = true
+        result.playerKilled = true
+        break
+      }
     }
   }
 
@@ -1433,6 +1593,41 @@ function applyBlackHoleConsumption(state: TickState, input: TickInput, result: T
     result.blackHoleAsteroidsConsumed.push(a.id)
     state.asteroidHitCounts.delete(a.id)
     state.asteroids.splice(i, 1)
+  }
+}
+
+/**
+ * Prologue-only Wormhole Generator demo. The intro showcases the full prestige
+ * loadout, so when the player pilots into one of the prologue black holes we let
+ * the Wormhole Generator fling them across the field — a taste of being
+ * overpowered — *without* enabling the rest of the (lethal) black-hole physics.
+ *
+ * The ship never takes damage here (the prologue is always survivable). The
+ * jump triggers only when the ship reaches the black core (the event horizon),
+ * exactly like live play — fly into the dead center to warp.
+ */
+function applyPrologueWormhole(state: TickState, input: TickInput, result: TickResult): void {
+  const holes = input.blackHoles
+  if (holes.length === 0) return
+  if (state.wormholeCooldown > 0) {
+    state.wormholeCooldown = Math.max(0, state.wormholeCooldown - input.dt)
+  }
+  if (state.wormholeTier <= 0 || state.wormholeCooldown > 0) return
+
+  for (const hole of holes) {
+    if (!isInsideBlackHole(state.ship, hole)) continue
+    const dest = pickWormholeDestination(state, holes, hole)
+    if (!dest) continue
+    state.ship.x = dest.x
+    state.ship.y = dest.y
+    state.ship.velocityX = 0
+    state.ship.velocityY = 0
+    // Land in the destination core with a grace window so the player can fly
+    // back out instead of instantly warping again.
+    state.wormholeCooldown = WORMHOLE_COOLDOWN
+    state.invulnerabilityTimer = WORMHOLE_COOLDOWN
+    result.wormholeTeleported = true
+    return
   }
 }
 
@@ -1488,6 +1683,11 @@ function prologueTick(state: TickState, input: TickInput, result: TickResult): v
       state.sensorTier = 3
       state.droneRepairUnlocked = true
       state.drillNoseTier = 3
+      // Prestige capstone: exotic plating buffer + black-hole immunity. The
+      // 3rd Option orb (figure-four) comes from PROLOGUE_SHIP.optionCount=3.
+      state.exoticHullCharges = EXOTIC_HULL_CHARGES
+      state.voidImmune = true
+      state.wormholeTier = 2
       // Mining-drone fleet at cap so the player sees the full RTS layer.
       state.miningDroneCap = 4
       const needed = state.miningDroneCap - state.miningDrones.length
@@ -1814,7 +2014,7 @@ export function tick(state: TickState, input: TickInput): TickResult {
     : { ...input.inputState, boost: state.boostActiveTimer > 0 }
   const speedMultiplier = 1 + state.speedTier * 0.1
   updateShip(state.ship, effectiveInput, dt, speedMultiplier)
-  if (blackHolesActive && input.blackHoles.length > 0) {
+  if (blackHolesActive && input.blackHoles.length > 0 && !state.voidImmune) {
     for (const hole of input.blackHoles) {
       applyBlackHolePullToBody(state.ship, hole, dt, BLACK_HOLE_PLAYER_PULL_MULT)
     }
@@ -2039,7 +2239,7 @@ export function tick(state: TickState, input: TickInput): TickResult {
     }
   }
 
-  if (state.missileTier > 0 && state.missileCooldown <= 0 && firingAllowed) {
+  if (state.missileTier > 0 && state.missileCooldown <= 0 && firingAllowed && (state.fireTarget !== null || state.mouseHoldingFire)) {
     const count = Math.max(1, Math.min(8, state.missileTier))
     const damage = 2 + Math.floor(state.blasterTier / 2)
     // Missiles deploy FORWARD (the way the ship faces) in a tight fan, then the
@@ -2487,10 +2687,11 @@ export function tick(state: TickState, input: TickInput): TickResult {
     state.projectiles = surviving
   }
 
-  // --- Enemy spawn (after first metal collected) ---
-  // Tutorial-only scripted enemy. In endless mode the director owns all
-  // enemy spawning, so this single-shot spawn is suppressed.
-  if (!endlessActive && !state.enemySpawned && state.firstMetalCollectedTime !== null) {
+  // --- Enemy spawn (once the cargo is full and the player heads to dock) ---
+  // Tutorial-only scripted enemy. It warps in during go-to-station so it can
+  // block the dock and force the "clear hostiles before docking" lesson. In
+  // endless mode the director owns all enemy spawning, so this is suppressed.
+  if (!endlessActive && !state.enemySpawned && input.tutorialStep === 'go-to-station') {
     state.enemySpawned = true
     const spawnAngle = Math.random() * Math.PI * 2
     const ex = state.ship.x + Math.cos(spawnAngle) * ENEMY_SPAWN_DISTANCE
@@ -2759,9 +2960,21 @@ export function tick(state: TickState, input: TickInput): TickResult {
   if (inStationContact !== state.wasInStationContact) {
     state.wasInStationContact = inStationContact
     if (inStationContact && !tutStep.startsWith('prologue-')) {
-      const lockoutActive = tutStep === 'done'
-      let hostilesNearby = false
-      if (lockoutActive) {
+      // Live play always enforces the no-panic-dock lockout. During the tutorial
+      // we also enforce it for the scripted enemy beat so the player learns they
+      // must clear the hostile before docking (the rest of the tutorial keeps
+      // its scripted, lockout-free pacing).
+      const tutorialEnemyBeat =
+        (tutStep === 'go-to-station' ||
+          tutStep === 'destroy-enemy' ||
+          tutStep === 'collect-scrap') &&
+        state.enemy !== null &&
+        state.enemy.alive
+      const lockoutActive = tutStep === 'done' || tutorialEnemyBeat
+      // The scripted tutorial enemy blocks docking no matter how far it has
+      // drifted — the lesson is "kill it first", not "outrun it to the pump".
+      let hostilesNearby = tutorialEnemyBeat
+      if (lockoutActive && !hostilesNearby) {
         const lockoutSq = STATION_HOSTILE_LOCKOUT_RADIUS * STATION_HOSTILE_LOCKOUT_RADIUS
         const shipX = state.ship.x
         const shipY = state.ship.y
@@ -2918,9 +3131,22 @@ export function tick(state: TickState, input: TickInput): TickResult {
   // --- Endless mode: the Ledger, field replenishment, enemy director ---
   if (endlessActive && asteroidsAliveBefore) {
     updateEndlessMode(state, input, result, asteroidsAliveBefore)
+  } else if (
+    input.tutorialStep === 'shoot' ||
+    input.tutorialStep === 'wait-for-metal' ||
+    input.tutorialStep === 'collect'
+  ) {
+    // Keep the belt stocked during the tutorial's mining beat so a new player
+    // can always top their (small) starting hold to full and advance.
+    replenishAsteroidField(state, input, result)
   }
   if (blackHolesActive && input.blackHoles.length > 0) {
     applyBlackHoleConsumption(state, input, result)
+  } else if (input.tutorialStep === 'prologue-mining' && input.blackHoles.length > 0) {
+    // Prologue showcase: black-hole physics are off (the intro is unkillable),
+    // but we still let the Wormhole Generator teleport the player for the
+    // power-fantasy beat.
+    applyPrologueWormhole(state, input, result)
   }
   result.ledger = state.ledger
 
@@ -2943,6 +3169,49 @@ export function tick(state: TickState, input: TickInput): TickResult {
  * multi-enemy combat, beam hits, radar, and aim targeting); dead ones are
  * pruned here so the pool stays bounded over a long run.
  */
+/**
+ * Keep the radar disk populated at a steady density. Floor scales with the
+ * radar disk area (capped) so the field reads as a full belt out to the rim,
+ * not a small ring near the player. Shared by endless mode and the tutorial's
+ * mining beat (so a new player can always fill their small starting hold).
+ */
+function replenishAsteroidField(state: TickState, input: TickInput, result: TickResult): void {
+  const { dt } = input
+  const diskRadius = input.radarRange
+  const diskRadiusSq = diskRadius * diskRadius
+  const targetFloor = Math.min(
+    ASTEROID_FIELD_CAP,
+    Math.max(ASTEROID_FLOOR, Math.round(ASTEROID_DENSITY * Math.PI * diskRadiusSq)),
+  )
+  let localCount = 0
+  for (const a of state.asteroids) {
+    const dx = a.x - state.ship.x
+    const dy = a.y - state.ship.y
+    if (dx * dx + dy * dy < diskRadiusSq) localCount++
+  }
+  if (localCount < targetFloor) {
+    state.asteroidRespawnTimer -= dt
+    if (state.asteroidRespawnTimer <= 0) {
+      state.asteroidRespawnTimer = ASTEROID_REPLENISH_INTERVAL
+      const batch = Math.min(ASTEROID_REPLENISH_BATCH, targetFloor - localCount)
+      for (let i = 0; i < batch; i++) {
+        const a = spawnFieldAsteroid(
+          input.viewBounds,
+          input.radarRange,
+          state.ship.x,
+          state.ship.y,
+          `asteroid-r${state.asteroidSpawnCounter++}`,
+        )
+        state.asteroids.push(a)
+        state.asteroidHitCounts.set(a.id, 0)
+        result.newAsteroids.push(a)
+      }
+    }
+  } else {
+    state.asteroidRespawnTimer = ASTEROID_REPLENISH_INTERVAL
+  }
+}
+
 function updateEndlessMode(
   state: TickState,
   input: TickInput,
@@ -2987,41 +3256,7 @@ function updateEndlessMode(
   }
 
   // --- Replenish so the whole radar disk stays populated at a steady density ---
-  // Floor scales with the radar disk area (capped) so the field reads as a full
-  // belt out to the rim, not a small ring near the player.
-  const diskRadius = input.radarRange
-  const diskRadiusSq = diskRadius * diskRadius
-  const targetFloor = Math.min(
-    ASTEROID_FIELD_CAP,
-    Math.max(ASTEROID_FLOOR, Math.round(ASTEROID_DENSITY * Math.PI * diskRadiusSq)),
-  )
-  let localCount = 0
-  for (const a of state.asteroids) {
-    const dx = a.x - state.ship.x
-    const dy = a.y - state.ship.y
-    if (dx * dx + dy * dy < diskRadiusSq) localCount++
-  }
-  if (localCount < targetFloor) {
-    state.asteroidRespawnTimer -= dt
-    if (state.asteroidRespawnTimer <= 0) {
-      state.asteroidRespawnTimer = ASTEROID_REPLENISH_INTERVAL
-      const batch = Math.min(ASTEROID_REPLENISH_BATCH, targetFloor - localCount)
-      for (let i = 0; i < batch; i++) {
-        const a = spawnFieldAsteroid(
-          input.viewBounds,
-          input.radarRange,
-          state.ship.x,
-          state.ship.y,
-          `asteroid-r${state.asteroidSpawnCounter++}`,
-        )
-        state.asteroids.push(a)
-        state.asteroidHitCounts.set(a.id, 0)
-        result.newAsteroids.push(a)
-      }
-    }
-  } else {
-    state.asteroidRespawnTimer = ASTEROID_REPLENISH_INTERVAL
-  }
+  replenishAsteroidField(state, input, result)
 
   // --- Roaming comets — rare fast crossers that drop bonus scrap ---
   updateComets(state, input, result)
@@ -3180,6 +3415,13 @@ function updateComets(state: TickState, input: TickInput, result: TickResult): v
       for (const hit of hits) {
         state.projectileElapsed.delete(hit.projectileId)
         result.expiredProjectileIds.push(hit.projectileId)
+        result.asteroidHits.push({
+          projectileId: hit.projectileId,
+          asteroidId: hit.cometId,
+          damage: hit.damage,
+          x: hit.x,
+          y: hit.y,
+        })
       }
     }
     state.projectiles = surviving
@@ -3728,7 +3970,7 @@ function updateSpecialEnemies(state: TickState, result: TickResult): void {
   const carriers = state.ambushEnemies.filter((e) => e.kind === 'carrier' && e.alive)
   for (const carrier of carriers) {
     if (carrier.droneTimer > 0) continue
-    carrier.droneTimer = CARRIER_DRONE_INTERVAL
+    carrier.droneTimer = carrier.carrierShieldHp > 0 ? 3.0 : CARRIER_DRONE_INTERVAL
     const aliveDrones = state.ambushEnemies.reduce(
       (n, e) => n + (e.kind === 'drone' && e.alive ? 1 : 0),
       0,

@@ -147,7 +147,7 @@ export interface LoadoutPower {
   speedTier: number // 0..5
   spreadTier: number // 0..1
   missileTier: number // 0..8
-  optionCount: number // 0..2
+  optionCount: number // 0..3 (3rd orb from Exotic Matter Hull)
   coolingTier: number // 0..3
   magnetTier: number // 0..3
   sensorTier: number // 0..3
@@ -172,7 +172,7 @@ export function computePowerIndex(p: LoadoutPower): number {
     frac(p.speedTier, 0, 5),
     p.spreadTier > 0 ? 1 : 0,
     frac(p.missileTier, 0, 8),
-    frac(p.optionCount, 0, 2),
+    frac(p.optionCount, 0, 3),
     frac(p.coolingTier, 0, 3),
     frac(p.magnetTier, 0, 3),
     frac(p.sensorTier, 0, 3),

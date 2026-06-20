@@ -22,13 +22,24 @@ export const SCRAP_VALUE_BY_MINERAL: Record<MetalVariant, number> = {
 
 const MINERAL_KEYS = ['carbon', 'silicates', 'platinum', 'titanium', 'exotics'] as const
 
+/**
+ * Cargo capacity for a given Storage tier. Tier 1 is the reduced new-player
+ * hold (25); each Cargo Expansion past the first follows the original
+ * 50-per-tier curve, so tiers 1-6 are 25 / 50 / 100 / 150 / 200 / 250. The
+ * tutorial's free first expansion takes a new player from 25 up to the
+ * "normal" 50.
+ */
+export function capacityForStorage(storage: number): number {
+  return storage <= 1 ? 25 : 50 * (storage - 1)
+}
+
 const UPGRADE_MAX: Record<keyof Upgrades, number> = {
   blaster: 5,
   collector: 5,
-  storage: 5,
+  storage: 6,
   missiles: 8,
   ripple: 1,
-  options: 2,
+  options: 3,
   speed: 5,
   armor: 3,
   shield: 3,
@@ -46,6 +57,9 @@ const UPGRADE_MAX: Record<keyof Upgrades, number> = {
   sensor: 3,
   droneRepair: 1,
   drillNose: 3,
+  refinery: 1,
+  exoticHull: 1,
+  wormhole: 2,
 }
 
 export interface GameStateHook {
@@ -72,7 +86,7 @@ export interface GameStateHook {
   setMetrics: React.Dispatch<React.SetStateAction<AchievementMetrics>>
 }
 
-export function useGameState(): GameStateHook {
+export function useGameState(prologueActive = false): GameStateHook {
   const [paused, setPaused] = useState(false)
   const [cargo, setCargo] = useState<Cargo>(defaultCargo)
   const [scrap, setScrap] = useState(0)
@@ -81,11 +95,15 @@ export function useGameState(): GameStateHook {
   const [achievements, setAchievements] = useState<string[]>([])
   const [metrics, setMetrics] = useState(() => defaultProfile().metrics)
 
-  // Keep cargo capacity in sync with the storage upgrade tier (50 per tier).
+  // Keep cargo capacity in sync with the storage upgrade tier. During the
+  // prologue the ship is a maxed-out showcase, so the hold reads at the top
+  // tier; the real storage tier (starting at the reduced 25 tutorial hold)
+  // takes over the moment the prologue hands control back.
   // Runs on mount (covers saves loaded with storage > 1) and on every purchase.
   useEffect(() => {
-    setCargo((prev) => ({ ...prev, capacity: 50 * upgrades.storage }))
-  }, [upgrades.storage])
+    const storageTier = prologueActive ? UPGRADE_MAX.storage : upgrades.storage
+    setCargo((prev) => ({ ...prev, capacity: capacityForStorage(storageTier) }))
+  }, [upgrades.storage, prologueActive])
 
   const togglePause = useCallback(() => {
     setPaused((p) => !p)
@@ -115,6 +133,14 @@ export function useGameState(): GameStateHook {
     let earned = 0
     setCargo((prev) => {
       earned = MINERAL_KEYS.reduce((sum, k) => sum + prev[k] * SCRAP_VALUE_BY_MINERAL[k], 0)
+      if (prev.fragments >= prev.capacity) {
+        earned = Math.round(earned * 1.20)
+      }
+      // Quantum Refinery (prestige): doubles every sale, stacking multiplicatively
+      // with the full-cargo bonus above.
+      if (upgrades.refinery > 0) {
+        earned *= 2
+      }
       const cleared = MINERAL_KEYS.reduce(
         (acc, k) => ({ ...acc, [k]: 0 }),
         {} as Record<(typeof MINERAL_KEYS)[number], number>,
@@ -123,7 +149,7 @@ export function useGameState(): GameStateHook {
     })
     setScrap((prev) => prev + earned)
     return earned
-  }, [])
+  }, [upgrades.refinery])
 
   /**
    * Buy an upgrade. Calls onPurchased(true) if successful, onPurchased(false) if not.
@@ -159,7 +185,9 @@ export function useGameState(): GameStateHook {
             type === 'spread' ||
             type === 'missileBias' ||
             type === 'thrusters' ||
-            type === 'droneRepair'
+            type === 'droneRepair' ||
+            type === 'refinery' ||
+            type === 'exoticHull'
               ? UPGRADE_MAX[type]
               : Math.min(prev[type] + 1, UPGRADE_MAX[type]),
         }))

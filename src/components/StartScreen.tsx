@@ -258,15 +258,15 @@ export function StartScreen({
           <div className="w-full overflow-y-auto overscroll-contain bg-space-900/55 border border-hud-amber/25 rounded-lg px-5 py-5 flex flex-col gap-5 items-center">
             <p className="font-sans text-xl sm:text-2xl tracking-[0.24em] text-hud-amber/90 text-center">CREDITS</p>
             <div className="w-12 h-px bg-white/10" aria-hidden="true" />
-            <CreditSection role="Developer" lines={['Santiago Salvador']} />
+            <CreditSection role="Developer" lines={['Santiago Salvador (spacechakra)', 'SantiagoSalvador.com']} />
             <div className="w-12 h-px bg-white/10" aria-hidden="true" />
-            <CreditSection role="Original Concept & Base Code" lines={['Randy Lutcavich', 'Randroid.dev']} />
+            <CreditSection role="Foundational Code & Inspiration" lines={['Randy Lutcavich', 'Randroid.dev']} />
             <div className="w-12 h-px bg-white/10" aria-hidden="true" />
-            <CreditSection role="Music & Audio" lines={['Thinking Overture by DSTechnician (via Pixabay)', 'Arranged & implemented by Santiago Salvador']} />
+            <CreditSection role="Music & Audio" lines={['"Thinking Overture" by DSTechnician (via Pixabay)', 'Arranged & Implemented by spacechakra']} />
             <div className="w-12 h-px bg-white/10" aria-hidden="true" />
-            <CreditSection role="Voiceovers" lines={['RObo-Voice Generator', 'directed by Santiago Salvador']} />
+            <CreditSection role="Voiceovers" lines={['Robo-Voice Generator by spacechakra']} />
             <div className="w-12 h-px bg-white/10" aria-hidden="true" />
-            <CreditSection role="Playtesters" lines={['Zoe Luna & Shakti Sol']} />
+            <CreditSection role="Playtesters" lines={['Zoe Luna, Shakti Sol']} />
             <p className="font-mono text-[10px] tracking-[0.18em] text-white/35 mt-2">v{BUILD_VERSION}</p>
           </div>
           <button data-menu-item data-menu-back onClick={handleBack} className="mt-3 px-6 py-3 min-h-[44px] text-white/40 font-sans text-base hover:text-white/70 focus:text-white focus:outline-none focus:ring-2 focus:ring-white/40 rounded transition-colors">

@@ -14,10 +14,10 @@ export type Ship = z.infer<typeof ShipSchema>
 export const UpgradesSchema = z.object({
   blaster: z.number().int().min(1).max(5),
   collector: z.number().int().min(1).max(5),
-  storage: z.number().int().min(1).max(5),
+  storage: z.number().int().min(1).max(6),
   missiles: z.number().int().min(0).max(8).default(0),
   ripple: z.number().int().min(0).max(1).default(0),
-  options: z.number().int().min(0).max(2).default(0),
+  options: z.number().int().min(0).max(3).default(0),
   speed: z.number().int().min(0).max(5).default(0),
   armor: z.number().int().min(0).max(3).default(0),
   shield: z.number().int().min(0).max(3).default(0),
@@ -35,6 +35,12 @@ export const UpgradesSchema = z.object({
   sensor: z.number().int().min(0).max(3).default(0),
   droneRepair: z.number().int().min(0).max(1).default(0),
   drillNose: z.number().int().min(0).max(3).default(0),
+  // --- Prestige ("Tycoon-tier") unlocks ---
+  refinery: z.number().int().min(0).max(1).default(0),
+  exoticHull: z.number().int().min(0).max(1).default(0),
+  /** Wormhole Generator (needs Exotic Matter Hull): entering a black hole
+   *  teleports you to another one. T1 random, T2 far side of the map. */
+  wormhole: z.number().int().min(0).max(2).default(0),
 })
 export type Upgrades = z.infer<typeof UpgradesSchema>
 
@@ -161,6 +167,9 @@ export function defaultUpgrades(): Upgrades {
     sensor: 0,
     droneRepair: 0,
     drillNose: 0,
+    refinery: 0,
+    exoticHull: 0,
+    wormhole: 0,
   }
 }
 
@@ -173,6 +182,6 @@ export function defaultCargo(): Cargo {
     platinum: 0,
     titanium: 0,
     exotics: 0,
-    capacity: 50,
+    capacity: 25,
   }
 }

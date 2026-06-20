@@ -44,8 +44,68 @@ export function createShipModel(variant: 'normal' | 'prologue' = 'normal'): THRE
   if (variant === 'prologue') {
     applyHullModules(ship, 3)
     applyArmorModules(ship, 3)
+    // The intro flies the full prestige loadout, so show the Exotic Matter
+    // Hull's dark hull + cosmic-pink aura too.
+    applyExoticHullVisual(ship, true)
   }
   return ship
+}
+
+/** Cosmic-pink accent for the Exotic Matter Hull prestige look. Matches the
+ *  `exotics` mineral palette used elsewhere (TradeMenu/HUD). */
+const EXOTIC_PINK = 0xff66ff
+const EXOTIC_AURA_NAME = 'exoticAura'
+
+/**
+ * Apply (or remove) the Exotic Matter Hull capstone's signature look: darken
+ * the whole vessel toward near-black with a faint pink sheen, and wrap it in a
+ * cosmic-pink additive aura. Idempotent and reversible — call with
+ * `active=false` to restore the exact stock palette (originals are cached on
+ * each mesh the first time it's darkened).
+ */
+export function applyExoticHullVisual(ship: THREE.Group, active: boolean): void {
+  ship.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh)) return
+    const mat = obj.material
+    if (!(mat instanceof THREE.MeshStandardMaterial)) return
+    if (active) {
+      if (obj.userData.exoticBaseColor === undefined) {
+        obj.userData.exoticBaseColor = mat.color.getHex()
+      }
+      const c = new THREE.Color(obj.userData.exoticBaseColor as number)
+      c.multiplyScalar(0.35)
+      c.lerp(new THREE.Color(EXOTIC_PINK), 0.12)
+      mat.color.copy(c)
+      mat.emissive.setHex(EXOTIC_PINK)
+      mat.emissiveIntensity = 0.18
+    } else if (obj.userData.exoticBaseColor !== undefined) {
+      mat.color.setHex(obj.userData.exoticBaseColor as number)
+      mat.emissive.setHex(0x000000)
+      mat.emissiveIntensity = 1
+      delete obj.userData.exoticBaseColor
+    }
+  })
+
+  const existing = ship.getObjectByName(EXOTIC_AURA_NAME)
+  if (active && !existing) {
+    const aura = new THREE.Mesh(
+      new THREE.SphereGeometry(9, 16, 12),
+      new THREE.MeshBasicMaterial({
+        color: EXOTIC_PINK,
+        transparent: true,
+        opacity: 0.16,
+        blending: THREE.AdditiveBlending,
+        depthTest: false,
+        side: THREE.BackSide,
+      }),
+    )
+    aura.name = EXOTIC_AURA_NAME
+    aura.renderOrder = -1
+    ship.add(aura)
+  } else if (!active && existing) {
+    existing.parent?.remove(existing)
+    disposeModuleTree(existing)
+  }
 }
 
 /**

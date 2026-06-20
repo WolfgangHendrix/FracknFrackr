@@ -47,15 +47,21 @@ const STEPS: {
   },
   {
     key: 'collect',
-    desktop: 'Approach metal chunks to collect.',
-    mobile: 'Approach metal chunks to collect.',
-    gamepad: 'Approach metal chunks to collect.',
+    desktop: 'Mine and collect ore until your cargo hold is full.',
+    mobile: 'Mine and collect ore until your cargo hold is full.',
+    gamepad: 'Mine and collect ore until your cargo hold is full.',
+  },
+  {
+    key: 'go-to-station',
+    desktop: 'Cargo full! Head to the Trade Station — follow the arrow!',
+    mobile: 'Cargo full! Head to the Trade Station — follow the arrow!',
+    gamepad: 'Cargo full! Head to the Trade Station — follow the arrow!',
   },
   {
     key: 'destroy-enemy',
-    desktop: 'An enemy ship approaches! Shoot it down!',
-    mobile: 'An enemy ship approaches! Shoot it down!',
-    gamepad: 'An enemy ship approaches! Shoot it down!',
+    desktop: 'An enemy blocks the dock! Shoot it down!',
+    mobile: 'An enemy blocks the dock! Shoot it down!',
+    gamepad: 'An enemy blocks the dock! Shoot it down!',
   },
   {
     key: 'collect-scrap',
@@ -64,16 +70,10 @@ const STEPS: {
     gamepad: 'Collect the scrap it dropped!',
   },
   {
-    key: 'go-to-station',
-    desktop: 'Head to the Trade Station! Follow the arrow!',
-    mobile: 'Head to the Trade Station! Follow the arrow!',
-    gamepad: 'Head to the Trade Station! Follow the arrow!',
-  },
-  {
     key: 'approach-station',
-    desktop: 'Fly into the Trade Station to dock!',
-    mobile: 'Fly into the Trade Station to dock!',
-    gamepad: 'Fly into the Trade Station to dock!',
+    desktop: 'Now fly into the Trade Station to dock!',
+    mobile: 'Now fly into the Trade Station to dock!',
+    gamepad: 'Now fly into the Trade Station to dock!',
   },
   {
     key: 'trade-sell',
@@ -83,9 +83,9 @@ const STEPS: {
   },
   {
     key: 'trade-buy',
-    desktop: 'Buy the Fire Rate upgrade!',
-    mobile: 'Buy the Fire Rate upgrade!',
-    gamepad: 'Buy the Fire Rate upgrade!',
+    desktop: 'Buy the free Cargo Expansion to double your hold!',
+    mobile: 'Buy the free Cargo Expansion to double your hold!',
+    gamepad: 'Buy the free Cargo Expansion to double your hold!',
   },
   // 'drive-through' is intentionally dropped — the underlying station-repair
   // mechanic is vestigial in endless mode (one-shot kills mean HP attrition

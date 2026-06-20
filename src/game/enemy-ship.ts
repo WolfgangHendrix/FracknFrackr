@@ -78,10 +78,15 @@ export const SCAVENGER_ESCAPE_DISTANCE = 380
 
 // --- Carrier: slow, tanky, launches drone swarms ---
 export const CARRIER_MAX_HP = 70
-/** Shield pool that must be depleted before the carrier's hull takes damage. */
-export const CARRIER_SHIELD_HP = 30
-const CARRIER_SPEED = 10
-const CARRIER_RANGE = 135
+/**
+ * Shield pool that must be depleted before the carrier's hull takes damage.
+ * Sized so the carrier soaks at least a few seconds of sustained fire — it's a
+ * mothership the player is meant to brawl with while it disgorges drones, not a
+ * glass cannon that pops before it reaches the fight.
+ */
+export const CARRIER_SHIELD_HP = 100
+const CARRIER_SPEED = 14
+const CARRIER_RANGE = 90
 /** Seconds between drone launches. */
 export const CARRIER_DRONE_INTERVAL = 3.6
 /** Max drones a carrier keeps in the field at once. */
@@ -264,6 +269,8 @@ export interface EnemyShip {
   carrierShieldHp: number
   /** Countdown to the next drone launch. */
   droneTimer: number
+  /** Age of the carrier in seconds. */
+  carrierAge?: number
   /** True while a carrier-launched drone is leaving its bay for a staging point. */
   launching: boolean
   launchTargetX: number
@@ -785,7 +792,8 @@ export function createEnemyShip(
     targetLootX: 0,
     targetLootY: 0,
     carrierShieldHp: kind === 'carrier' ? CARRIER_SHIELD_HP : 0,
-    droneTimer: CARRIER_DRONE_INTERVAL * (0.4 + Math.random() * 0.5),
+    droneTimer: kind === 'carrier' ? 1.0 : CARRIER_DRONE_INTERVAL * (0.4 + Math.random() * 0.5),
+    carrierAge: kind === 'carrier' ? 0 : undefined,
     launching: false,
     launchTargetX: x,
     launchTargetY: y,
@@ -1526,36 +1534,113 @@ function updateCarrierAI(
   dt: number,
   asteroids: Asteroid[],
 ): EnemyProjectile[] {
-  const dx = player.x - enemy.x
-  const dy = player.y - enemy.y
-  const dist = Math.sqrt(dx * dx + dy * dy) || 1
-  const toPlayer = Math.atan2(dy, dx)
+  // If the shield is down, fall back to standard carrier AI
+  if (enemy.carrierShieldHp <= 0) {
+    const dx = player.x - enemy.x
+    const dy = player.y - enemy.y
+    const dist = Math.sqrt(dx * dx + dy * dy) || 1
+    const toPlayer = Math.atan2(dy, dx)
 
-  let moveAngle: number
-  let speed = CARRIER_SPEED
-  if (dist < CARRIER_RANGE * 0.85) {
-    moveAngle = toPlayer + Math.PI
-  } else if (dist > CARRIER_RANGE * 1.25) {
-    moveAngle = toPlayer
-  } else {
-    moveAngle = toPlayer + (Math.PI / 2) * enemy.strafeDir
-    speed = CARRIER_SPEED * 0.7
+    let moveAngle: number
+    let speed = CARRIER_SPEED
+    if (dist < CARRIER_RANGE * 0.85) {
+      moveAngle = toPlayer + Math.PI
+    } else if (dist > CARRIER_RANGE * 1.25) {
+      moveAngle = toPlayer
+    } else {
+      moveAngle = toPlayer + (Math.PI / 2) * enemy.strafeDir
+      speed = CARRIER_SPEED * 0.7
+    }
+
+    steerHeading(enemy, moveAngle, dt, ENEMY_TURN_RATE * 0.5)
+    enemy.vx = Math.cos(enemy.heading) * speed
+    enemy.vy = Math.sin(enemy.heading) * speed
+    enemy.x += enemy.vx * dt
+    enemy.y += enemy.vy * dt
+    enemy.rotation = toPlayer - Math.PI / 2
+
+    enemy.strafeTimer -= dt
+    if (enemy.strafeTimer <= 0) {
+      enemy.strafeTimer = ENEMY_STRAFE_CHANGE_INTERVAL
+      enemy.strafeDir = -enemy.strafeDir
+    }
+
+    enemy.droneTimer -= dt
+    finalizeEnemy(enemy, asteroids)
+    return []
   }
 
-  steerHeading(enemy, moveAngle, dt, ENEMY_TURN_RATE * 0.5)
-  enemy.vx = Math.cos(enemy.heading) * speed
-  enemy.vy = Math.sin(enemy.heading) * speed
+  // Active shield behavior: Presentation / Entrance
+  if (enemy.carrierAge === undefined) {
+    enemy.carrierAge = 0
+  }
+  enemy.carrierAge += dt
+
+  // Samurai Shodown III animation philosophy:
+  // Setup (medium speed: 0.0s - 0.5s), Execution (fast: 0.5s - 1.5s), Recovery (slower combat pacing: 1.5s+)
+  let speed = 90
+  if (enemy.carrierAge < 0.5) {
+    speed = 50
+  } else if (enemy.carrierAge < 1.5) {
+    speed = 140
+  }
+
+  // Close in and hold a tight, *visible* standoff that tracks the player's
+  // position — so the carrier flies right into view and stays there to be shot
+  // while it launches drones, instead of lurking far off in whatever direction
+  // the player happens to be facing.
+  const targetDist = 70
+  const dx = player.x - enemy.x
+  const dy = player.y - enemy.y
+  const dist = Math.hypot(dx, dy) || 1
+  const toPlayer = Math.atan2(dy, dx)
+  // Facing you: rotation should look at the player.
+  enemy.rotation = toPlayer - Math.PI / 2
+
+  // Dodge: check if the player is lining up a shot on us.
+  const toEnemy = Math.atan2(enemy.y - player.y, enemy.x - player.x)
+  let angleDiff = player.rotation - toEnemy
+  angleDiff = Math.atan2(Math.sin(angleDiff), Math.cos(angleDiff))
+
+  let dodgeX = 0
+  let dodgeY = 0
+  if (Math.abs(angleDiff) < 0.35) {
+    // Player is aiming near the carrier — sidestep, but only a little so it
+    // never strafes itself back off-screen.
+    const perpAngle = player.rotation + (Math.PI / 2) * enemy.strafeDir
+    dodgeX = Math.cos(perpAngle) * 40
+    dodgeY = Math.sin(perpAngle) * 40
+  } else {
+    // Gentle idle sway around the hold point.
+    const swayAngle = toPlayer + Math.PI / 2
+    const sway = Math.sin(enemy.carrierAge * 4) * 22
+    dodgeX = Math.cos(swayAngle) * sway
+    dodgeY = Math.sin(swayAngle) * sway
+  }
+
+  // Hold point sits targetDist back from the player along the carrier's current
+  // bearing, so it parks just in front of the ship and follows it around.
+  const desiredX = player.x - Math.cos(toPlayer) * targetDist + dodgeX
+  const desiredY = player.y - Math.sin(toPlayer) * targetDist + dodgeY
+
+  const mx = desiredX - enemy.x
+  const my = desiredY - enemy.y
+  const mDist = Math.sqrt(mx * mx + my * my) || 1
+
+  // Approach faster the further out it is, so it commits into view quickly.
+  const approachSpeed = dist > targetDist + 30 ? Math.max(speed, 120) : speed
+  enemy.vx = (mx / mDist) * approachSpeed
+  enemy.vy = (my / mDist) * approachSpeed
   enemy.x += enemy.vx * dt
   enemy.y += enemy.vy * dt
-  enemy.rotation = toPlayer - Math.PI / 2
 
   enemy.strafeTimer -= dt
   if (enemy.strafeTimer <= 0) {
-    enemy.strafeTimer = ENEMY_STRAFE_CHANGE_INTERVAL
+    enemy.strafeTimer = ENEMY_STRAFE_CHANGE_INTERVAL * 0.5
     enemy.strafeDir = -enemy.strafeDir
   }
 
-  // Wind the launch timer down; game-tick reads it and spawns the drone.
+  // Count down droneTimer
   enemy.droneTimer -= dt
 
   finalizeEnemy(enemy, asteroids)

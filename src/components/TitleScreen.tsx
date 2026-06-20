@@ -153,6 +153,22 @@ export function TitleScreen({ onBegin }: TitleScreenProps) {
         v{BUILD_VERSION}
       </div>
 
+      <div
+        className="z-10 font-mono tracking-[0.18em]"
+        style={{
+          position: 'absolute',
+          bottom: '15px',
+          left: 0,
+          width: '100%',
+          textAlign: 'center',
+          color: 'rgba(255, 255, 255, 0.5)',
+          fontSize: '12px',
+          pointerEvents: 'none',
+        }}
+      >
+        &copy; 2026 SpaceChakra
+      </div>
+
       <div className="relative z-10 flex flex-col items-center px-6">
         <h1 className="menu-title font-display text-4xl sm:text-5xl md:text-7xl text-hud-green tracking-widest">
           FRAK&apos;N

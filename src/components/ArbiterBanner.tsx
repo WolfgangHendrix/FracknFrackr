@@ -11,6 +11,10 @@ export interface ArbiterBannerData {
 
 interface ArbiterBannerProps {
   banner: ArbiterBannerData | null
+  /** Hide the comms banner while the pause overlay is up — it sits above the
+   *  pause screen (higher z-index) and would otherwise overlap it. Kept mounted
+   *  so its auto-dismiss timer keeps running and it doesn't re-trigger on resume. */
+  paused?: boolean
 }
 
 /** How long an Arbiter comms line stays on screen (ms). */
@@ -20,7 +24,7 @@ const BANNER_DURATION = 5500
  * Transient comms banner for Arbiter encounter events — arrival taunts,
  * defeat lines, withdrawal lines. Auto-dismisses; re-firing resets the timer.
  */
-export function ArbiterBanner({ banner }: ArbiterBannerProps) {
+export function ArbiterBanner({ banner, paused = false }: ArbiterBannerProps) {
   const [visible, setVisible] = useState(false)
 
   useEffect(() => {
@@ -31,6 +35,8 @@ export function ArbiterBanner({ banner }: ArbiterBannerProps) {
   }, [banner])
 
   if (!banner) return null
+  // Suppressed while paused so the comms line never paints over the pause menu.
+  if (paused) return null
 
   return (
     <div

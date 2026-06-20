@@ -1,6 +1,6 @@
 import * as THREE from 'three'
-import { createShipModel, applyHullModules, applyArmorModules } from './ship-model'
-import { createAsteroidModel } from './asteroid-model'
+import { createShipModel, applyHullModules, applyArmorModules, applyExoticHullVisual } from './ship-model'
+import { createAsteroidModel, ASTEROID_SIZE_RADIUS } from './asteroid-model'
 import { spawnAsteroidField, spawnPrologueField } from './asteroid-spawner'
 import { createArbiterModel } from './arbiter-model'
 import {
@@ -59,6 +59,8 @@ import {
   COMET_FIRST_DELAY,
   effectivePlayerMaxHp,
   collectorRangeForTier,
+  optionOrbPositions,
+  EXOTIC_HULL_CHARGES,
 } from './game-tick'
 import type { TickState, TickInput, TickResult } from './game-tick'
 import { FIRST_PATROL_DELAY, ASTEROID_REPLENISH_INTERVAL, computeScore } from './ledger-config'
@@ -228,7 +230,7 @@ const BLACK_HOLE_SPAWN_RINGS: {
   positions: { x: number; y: number }[]
 }[] = [
   {
-    threshold: 280,
+    threshold: 120,
     scale: 1,
     positions: [
       { x: 330, y: 200 },   // right
@@ -237,7 +239,7 @@ const BLACK_HOLE_SPAWN_RINGS: {
     ],
   },
   {
-    threshold: 480,
+    threshold: 300,
     scale: 1.25,
     positions: [
       { x: 280, y: 633 },   // upper-right
@@ -246,7 +248,7 @@ const BLACK_HOLE_SPAWN_RINGS: {
     ],
   },
   {
-    threshold: 680,
+    threshold: 500,
     scale: 1.55,
     positions: [
       { x: 636, y: 550 },   // far upper-right
@@ -256,7 +258,7 @@ const BLACK_HOLE_SPAWN_RINGS: {
     ],
   },
   {
-    threshold: 920,
+    threshold: 700,
     scale: 1.9,
     positions: [
       { x: 930, y: 200 },
@@ -324,6 +326,12 @@ export interface GameSceneOptions {
   onBlackHoleNearby?: () => void
   /** Fires when the player backs out of the black-hole warning radius after entering it. */
   onBlackHoleEscaped?: () => void
+  /** Fires when the ship survives inside an event horizon via void immunity
+   *  (Exotic Matter Hull). Drives the "Event Horizon Tourist" achievement. */
+  onBlackHoleSurvived?: () => void
+  /** Fires when the Wormhole Generator teleports the ship. Drives the
+   *  "Expedited Routing" achievement. */
+  onWormholeTeleported?: () => void
   /** Fires when Drill Nose finishes one or more asteroids this tick. */
   onDrillNoseAsteroidFinished?: (count: number) => void
   /** Fires once per scene the first time any defensive layer absorbs a hit
@@ -339,6 +347,7 @@ export interface GameSceneOptions {
   onFieldCleared?: () => void
   onArbiterArrived?: () => void
   onStripComplete?: () => void
+  onHarvestingAreaWarning?: (outside: boolean) => void
 }
 
 /** Mid-run statistics snapshot returned by {@link GameScene.getRunStats}. */
@@ -504,6 +513,8 @@ export function createGameScene(
   const onSmartBomb = options?.onSmartBomb
   const onBlackHoleNearby = options?.onBlackHoleNearby
   const onBlackHoleEscaped = options?.onBlackHoleEscaped
+  const onBlackHoleSurvived = options?.onBlackHoleSurvived
+  const onWormholeTeleported = options?.onWormholeTeleported
   const onDrillNoseAsteroidFinished = options?.onDrillNoseAsteroidFinished
   const onFirstDefensiveHit = options?.onFirstDefensiveHit
   const onFirstFormation = options?.onFirstFormation
@@ -512,6 +523,7 @@ export function createGameScene(
   const onFieldCleared = options?.onFieldCleared
   const onArbiterArrived = options?.onArbiterArrived
   const onStripComplete = options?.onStripComplete
+  const onHarvestingAreaWarning = options?.onHarvestingAreaWarning
 
   // --- Renderer ---
   // `preserveDrawingBuffer: true` keeps the canvas readable after each
@@ -620,7 +632,13 @@ export function createGameScene(
   scene.add(stars)
 
   // --- Ship ---
-  let shipModel = createShipModel('prologue')
+  // Only the scripted prologue flies the maxed showcase hull (bulked modules +
+  // Exotic Matter Hull's dark/cosmic-pink look). Anyone entering past the intro
+  // — returning players, or a fresh run after the prologue is rebuilt — starts
+  // on the clean stock ship so that showcase styling never leaks into live play.
+  let shipModel = createShipModel(
+    getTutorialStep().startsWith('prologue-') ? 'prologue' : 'normal',
+  )
   scene.add(shipModel)
 
   const optionOrbs = new THREE.Group()
@@ -915,6 +933,25 @@ export function createGameScene(
   arrowGroup.add(botBar2)
   // Station proximity flags are now in tickState
 
+  // --- Arbiter Pointer Arrows (red triangles pointing at off-screen Arbiters) ---
+  const arbiterArrowGeo = new THREE.ConeGeometry(3, 8, 3)
+  arbiterArrowGeo.rotateZ(-Math.PI / 2) // Orient cone to point in +X by default
+  const arbiterArrowMat = new THREE.MeshStandardMaterial({
+    color: 0xff3333,
+    emissive: 0xff3333,
+    emissiveIntensity: 1.5,
+    flatShading: true,
+  })
+  const arbiterArrow = new THREE.Mesh(arbiterArrowGeo, arbiterArrowMat)
+  arbiterArrow.visible = false
+  scene.add(arbiterArrow)
+
+  const arbiterEscortArrow = new THREE.Mesh(arbiterArrowGeo.clone(), arbiterArrowMat)
+  arbiterEscortArrow.visible = false
+  scene.add(arbiterEscortArrow)
+
+  let isPlayerOutsideHarvestingArea = false
+
   // --- Game State (shared with game-tick.ts) ---
   // Start with prologue asteroid field; resetShipToStation replaces it with the real field.
   // Use default (tier-1) ship values here — the prologue tick (prologueTick → 'prologue-start')
@@ -1050,6 +1087,26 @@ export function createGameScene(
     initialBlackHoleSpawned = true
   }
 
+  // Prologue-only demo holes. The intro flies the full prestige loadout, so we
+  // drop a pair of reachable black holes during the free-mining beat to let the
+  // player pilot in and feel the Wormhole Generator yank them across the field.
+  // Cleared the instant the mining beat ends (see the per-frame block) so they
+  // never bleed into the scripted Arbiter sequence or live play.
+  let prologueBlackHolesSpawned = false
+  function spawnPrologueBlackHoles(): void {
+    for (const pos of [{ x: 170, y: 0 }, { x: -170, y: 0 }]) {
+      const hole = createBlackHole(pos.x, pos.y)
+      scene.add(hole.group)
+      blackHoles.push(hole)
+    }
+    prologueBlackHolesSpawned = true
+  }
+  function clearPrologueBlackHoles(): void {
+    for (const h of blackHoles) disposeBlackHole(h)
+    blackHoles.length = 0
+    prologueBlackHolesSpawned = false
+  }
+
   // --- Engine Trail ---
   const engineTrail: EngineTrail = createEngineTrail()
   scene.add(engineTrail.group)
@@ -1132,14 +1189,17 @@ export function createGameScene(
       const sx = e.clientX - rect.left
       const sy = e.clientY - rect.top
       fireTarget = screenToWorld(sx, sy)
+    } else if (e.button === 2) {
+      // Right-click: trigger thruster boost
+      inputState.boost = true
     }
-    // Right-click no longer does anything — collection is automatic. The
-    // context menu is still suppressed by onContextMenu so it doesn't pop.
   }
 
   function onMouseUp(e: MouseEvent): void {
     if (e.button === 0) {
       mouseHoldingFire = false
+    } else if (e.button === 2) {
+      inputState.boost = false
     }
   }
 
@@ -1358,7 +1418,7 @@ export function createGameScene(
   function createCarrierShieldMesh(radius: number): THREE.Mesh {
     const geo = new THREE.TorusGeometry(radius + 12, 3.5, 8, 48)
     const mat = new THREE.MeshBasicMaterial({
-      color: 0x22aaff,
+      color: 0x39ff14,
       transparent: true,
       opacity: 0.55,
       depthWrite: false,
@@ -1404,6 +1464,11 @@ export function createGameScene(
     const pulse = 0.35 + 0.2 * Math.sin(performance.now() * 0.004)
     mat.opacity = frac * pulse
     shieldMesh.rotation.z += dt * 0.6
+
+    // Dynamically interpolate color: green (frac = 1) -> red (frac = 0)
+    const startColor = new THREE.Color(0x39ff14) // green
+    const endColor = new THREE.Color(0xff3333) // red
+    mat.color.copy(endColor).lerp(startColor, frac)
   }
 
   function syncFormationShieldVisuals(dt: number): void {
@@ -1473,7 +1538,7 @@ export function createGameScene(
   }
 
   function syncOptionOrbs(): void {
-    const count = Math.max(0, Math.min(2, tickState.optionCount))
+    const count = Math.max(0, Math.min(3, tickState.optionCount))
     while (optionOrbs.children.length < count) {
       const orb = new THREE.Mesh(
         new THREE.SphereGeometry(1.7, 12, 8),
@@ -1492,15 +1557,12 @@ export function createGameScene(
       const orb = optionOrbs.children.pop()
       if (orb) orb.traverse(disposeMesh)
     }
+    // Shared placement with the firing code so shots leave the visible orbs.
+    // At 3 orbs this is the figure-four formation; otherwise the trailing line.
+    const positions = optionOrbPositions(ship, tickState.positionHistory, tickState.optionCount)
     for (let i = 0; i < optionOrbs.children.length; i++) {
-      const spacing = 18
-      const historyIndex = tickState.positionHistory.length - 1 - (i + 1) * spacing
-      if (historyIndex >= 0) {
-        const hist = tickState.positionHistory[historyIndex]
-        optionOrbs.children[i].position.set(hist.x, hist.y, 2.5)
-      } else {
-        optionOrbs.children[i].position.set(ship.x, ship.y, 2.5)
-      }
+      const p = positions[i] ?? { x: ship.x, y: ship.y }
+      optionOrbs.children[i].position.set(p.x, p.y, 2.5)
     }
   }
 
@@ -1780,7 +1842,10 @@ export function createGameScene(
       // Rocks destroyed this tick get a dedicated shatter (sound + burst) in the
       // destruction loop below. Suppress the generic per-hit explosion on that
       // same frame so the kill reads as one shatter, not a doubled-up boom.
-      const destroyedThisTick = new Set(result.destroyedAsteroidIds.map((d) => d.id))
+      const destroyedThisTick = new Set([
+        ...result.destroyedAsteroidIds.map((d) => d.id),
+        ...result.destroyedComets.map((d) => d.id),
+      ])
 
       // Beam hit VFX (explosions on hit asteroids)
       for (const hit of result.beamHits) {
@@ -2194,6 +2259,28 @@ export function createGameScene(
         onSmartBomb?.()
       }
 
+      if (result.blackHoleSurvived) {
+        onBlackHoleSurvived?.()
+      }
+
+      if (result.wormholeTeleported) {
+        // Snap the camera/visuals to the new position and pop a cosmic-pink
+        // arrival burst so the jump reads instantly.
+        addTrauma(screenShake, 0.8)
+        impactFlashTimer = 0.1
+        bloom.setBloom(0.9, true)
+        playExplosion()
+        const sw = createShockwave(ship.x, ship.y)
+        scene.add(sw.mesh)
+        shockwaves.push(sw)
+        explosionGlowParticles.emit(ship.x, ship.y, 36, {
+          lifetime: 0.6, speed: 70, size: 2,
+          colors: [0xff66ff, 0xff99ff, 0xffffff], spread: Math.PI * 2,
+        })
+        dynamicLights.flashExplosion(ship.x, ship.y, 2)
+        onWormholeTeleported?.()
+      }
+
       // --- Prologue events ---
       if (result.prologueReady) onPrologueReady?.()
       if (result.fieldCleared) onFieldCleared?.()
@@ -2434,6 +2521,20 @@ export function createGameScene(
         if (entry) {
           updateHealthMeter(entry.healthMeter, a.hp, a.maxHp)
           entry.model.visible = a.hp > 0
+
+          let isHovered = false
+          if (aimWorldPosition) {
+            const dx = aimWorldPosition.x - a.x
+            const dy = aimWorldPosition.y - a.y
+            const dist = Math.sqrt(dx * dx + dy * dy)
+            const r = ASTEROID_SIZE_RADIUS[a.size] ?? 8
+            if (dist <= r + 2) {
+              isHovered = true
+            }
+          }
+          if (!isHovered) {
+            entry.healthMeter.visible = false
+          }
         }
       }
 
@@ -2607,6 +2708,15 @@ export function createGameScene(
       updateTwinkleStars(twinkleStars, now / 1000, camera.position.x, camera.position.y)
       updateNebulaSystem(nebulaSystem, now / 1000, camera.position.x, camera.position.y)
 
+      // Prologue Wormhole demo: spawn the demo holes during free-mining, and
+      // tear them down the moment that beat ends so they never persist into the
+      // Arbiter cutscene or live play.
+      if (currentStep === 'prologue-mining' && !prologueBlackHolesSpawned) {
+        spawnPrologueBlackHoles()
+      } else if (prologueBlackHolesSpawned && currentStep !== 'prologue-mining') {
+        clearPrologueBlackHoles()
+      }
+
       // Spawn the starter black hole the moment the tutorial completes — it was
       // suppressed during the tutorial so the player couldn't die to an untaught
       // hazard.
@@ -2666,6 +2776,66 @@ export function createGameScene(
         arrowMat.emissiveIntensity = flash * 1.5
         arrowMat2.emissiveIntensity = flash * 0.7
         arrowGroup.position.z = 5 + Math.sin((now / 1000) * 2.5) * 2
+      }
+
+      // --- Update Arbiter Pointer Arrows ---
+      const getScreenBorderIntersection = (
+        cx: number, cy: number,
+        ax: number, ay: number,
+        halfW: number, halfH: number,
+        margin: number = 6
+      ) => {
+        const dx = ax - cx
+        const dy = ay - cy
+        const w = halfW - margin
+        const h = halfH - margin
+        if (dx === 0 && dy === 0) return { x: cx, y: cy }
+        const tX = dx > 0 ? w / dx : -w / dx
+        const tY = dy > 0 ? h / dy : -h / dy
+        const t = Math.min(Math.abs(tX), Math.abs(tY))
+        return { x: cx + dx * t, y: cy + dy * t }
+      }
+
+      const handleArbiterPointer = (
+        pointerMesh: THREE.Mesh,
+        arbiter: { x: number; y: number } | null
+      ) => {
+        if (!arbiter) {
+          pointerMesh.visible = false
+          return
+        }
+        const adx = arbiter.x - camera.position.x
+        const ady = arbiter.y - camera.position.y
+        const isOffScreen = Math.abs(adx) > camHalfW || Math.abs(ady) > camHalfH
+        if (isOffScreen) {
+          pointerMesh.visible = true
+          const borderPos = getScreenBorderIntersection(
+            camera.position.x,
+            camera.position.y,
+            arbiter.x,
+            arbiter.y,
+            camHalfW,
+            camHalfH,
+            6
+          )
+          pointerMesh.position.set(borderPos.x, borderPos.y, 5)
+          pointerMesh.rotation.z = Math.atan2(ady, adx)
+        } else {
+          pointerMesh.visible = false
+        }
+      }
+
+      handleArbiterPointer(arbiterArrow, visibleArbiter)
+      handleArbiterPointer(arbiterEscortArrow, tickState.arbiterEscort)
+
+      // --- Harvesting Area Warning Check ---
+      const hdx = ship.x - GAS_STATION_X
+      const hdy = ship.y - GAS_STATION_Y
+      const hDist = Math.sqrt(hdx * hdx + hdy * hdy)
+      const isOutside = hDist > 600 && getTutorialStep() === 'done'
+      if (isOutside !== isPlayerOutsideHarvestingArea) {
+        isPlayerOutsideHarvestingArea = isOutside
+        onHarvestingAreaWarning?.(isOutside)
       }
 
       // --- Sync projectile positions + trails ---
@@ -3210,6 +3380,12 @@ export function createGameScene(
     // onHullChanged → setUpgradeLevel round-trip.
     applyHullModules(shipModel, upgrades.hull)
     tickState.hullCharges = upgrades.hull
+    // Exotic Matter Hull (prestige): outermost charge buffer + black-hole
+    // immunity. Refills on (re)sync like shield/armor; no self-repair mid-run.
+    tickState.voidImmune = upgrades.exoticHull > 0
+    tickState.exoticHullCharges = upgrades.exoticHull > 0 ? EXOTIC_HULL_CHARGES : 0
+    tickState.wormholeTier = upgrades.wormhole
+    applyExoticHullVisual(shipModel, upgrades.exoticHull > 0)
     applyArmorModules(shipModel, upgrades.armor)
     tickState.coolingTier = upgrades.cooling
     tickState.magnetTier = upgrades.magnet
@@ -3267,6 +3443,10 @@ export function createGameScene(
     tickState.coolingTier = 0
     tickState.magnetTier = 0
     tickState.hullCharges = 0
+    tickState.exoticHullCharges = 0
+    tickState.voidImmune = false
+    tickState.wormholeTier = 0
+    tickState.wormholeCooldown = 0
     tickState.bountyTier = 0
     tickState.missileBiasUnlocked = false
     tickState.thrustersUnlocked = false
@@ -3660,7 +3840,7 @@ export function createGameScene(
         tickState.fireRateBonus = 1
         tickState.missileTier = 8
         tickState.rippleUnlocked = true
-        tickState.optionCount = 2
+        tickState.optionCount = 3
         tickState.speedTier = 5
         tickState.armorCharges = 3
         tickState.shieldCharges = 3
@@ -3668,6 +3848,9 @@ export function createGameScene(
         tickState.miningDroneCap = 4
         tickState.spreadTier = 1
         tickState.autoToolUnlocked = true
+        tickState.voidImmune = true
+        tickState.exoticHullCharges = EXOTIC_HULL_CHARGES
+        tickState.wormholeTier = 2
         lazerUnlocked = true
       },
       unlockAllTools() {

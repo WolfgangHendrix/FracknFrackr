@@ -77,11 +77,18 @@ export default function Home() {
   const [runStats, setRunStats] = useState<RunStats | null>(null)
   const [highScore, setHighScore] = useState(0)
   const [isNewBest, setIsNewBest] = useState(false)
+  const [showHarvestingWarning, setShowHarvestingWarning] = useState(false)
   const gameCanvasRef = useRef<GameCanvasHandle>(null)
   /** Timestamp of the last trade-menu close — used by handleStationContact
    *  to enforce the reopen cooldown above. Ref instead of state so updating
    *  it doesn't re-render or invalidate the contact callback's deps. */
   const lastTradeCloseAtRef = useRef(0)
+  // The prologue is a maxed-out god-ship showcase, so the cargo hold should read
+  // at full capacity there; the real (small) tutorial hold takes over once the
+  // intro hands control back. Computed before useGameState so the capacity sync
+  // can pick the showcase tier while the prologue is running.
+  const tutorial = useTutorial(isNewGame && screen === 'game', isNewGame)
+  const prologueActive = tutorial.step.startsWith('prologue-')
   const {
     paused,
     scrap,
@@ -104,16 +111,15 @@ export default function Home() {
     setAchievements,
     metrics,
     setMetrics,
-  } = useGameState()
+  } = useGameState(prologueActive)
   const hasLazer = upgrades.lazer > 0
   const { save, load, erase } = useGamePersistence(activeProfile)
-  const tutorial = useTutorial(isNewGame && screen === 'game')
   // Latest "is the player in the scripted prologue" flag, kept in a ref so the
   // metric/run-state mutators and the achievement evaluator can cheaply gate on
   // it without re-creating their callbacks. The prologue is a god-ship showcase
   // run, so nothing done there should count toward or unlock achievements.
   const inPrologueRef = useRef(false)
-  inPrologueRef.current = tutorial.step.startsWith('prologue-')
+  inPrologueRef.current = prologueActive
   const [achievementRun, setAchievementRun] = useState<AchievementRunState>(() =>
     defaultAchievementRunState(),
   )
@@ -182,7 +188,11 @@ export default function Home() {
   useEffect(() => {
     if (!activeProfile) return
     void load().then((p) => {
-      if (!p) return
+      if (!p) {
+        setHighScore(0)
+        hydrateFromProfile(defaultProfile())
+        return
+      }
       setHighScore(p.highScore)
       hydrateFromProfile(p)
     })
@@ -280,7 +290,7 @@ export default function Home() {
             ...upgrades,
             blaster: PROLOGUE_SHIP.blasterTier,
             collector: 5,
-            storage: 5,
+            storage: 6,
             missiles: PROLOGUE_SHIP.missileTier,
             options: PROLOGUE_SHIP.optionCount,
             speed: 5,
@@ -289,6 +299,9 @@ export default function Home() {
             armor: 3,
             drone: 4,
             smartBomb: 1,
+            refinery: 1,
+            exoticHull: 1,
+            wormhole: 2,
           }
         : upgrades,
     [tutorialStep, upgrades],
@@ -872,6 +885,18 @@ export default function Home() {
     )
   }, [patchAchievementRun])
 
+  const handleBlackHoleSurvived = useCallback(() => {
+    patchAchievementRun((prev) =>
+      prev.blackHoleSurvivedThisRun ? prev : { ...prev, blackHoleSurvivedThisRun: true },
+    )
+  }, [patchAchievementRun])
+
+  const handleWormholeTeleported = useCallback(() => {
+    patchAchievementRun((prev) =>
+      prev.wormholeUsedThisRun ? prev : { ...prev, wormholeUsedThisRun: true },
+    )
+  }, [patchAchievementRun])
+
   const handleDismissBlackHolePopup = useCallback(() => {
     setBlackHolePopupVisible(false)
     if (!activeProfile) return
@@ -1055,6 +1080,7 @@ export default function Home() {
     if (previous !== 'done' && tutorialStep === 'done') {
       resetAchievementRun()
       setLiveRunTimeSec(0)
+      setIsNewGame(false)
     }
   }, [resetAchievementRun, tutorialStep])
 
@@ -1087,6 +1113,17 @@ export default function Home() {
   const onEnteredStation = tutorial.onEnteredStation
   const onSoldMaterials = tutorial.onSoldMaterials
   const onBoughtUpgrade = tutorial.onBoughtUpgrade
+  const onCargoFilled = tutorial.onCargoFilled
+
+  // Advance the 'collect' beat once the (small, 25) starting hold is full, which
+  // is what now sends the player to dock. Replenishment during the tutorial
+  // mining beat guarantees enough ore to reach this.
+  useEffect(() => {
+    if (!tutorialActive) return
+    if (tutorialStep === 'collect' && cargo.fragments >= cargo.capacity) {
+      onCargoFilled()
+    }
+  }, [tutorialActive, tutorialStep, cargo.fragments, cargo.capacity, onCargoFilled])
 
   useEffect(() => {
     if (!tutorialActive) return
@@ -1120,10 +1157,12 @@ export default function Home() {
 
   useEffect(() => {
     if (!tutorialActive) return
-    if (tutorialStep === 'trade-buy' && upgrades.blaster > 1) {
+    // The final tutorial beat now forces the (free) Cargo Expansion, taking the
+    // new player from the starter 25 hold up to the normal 50.
+    if (tutorialStep === 'trade-buy' && upgrades.storage > 1) {
       onBoughtUpgrade()
     }
-  }, [tutorialActive, tutorialStep, upgrades.blaster, onBoughtUpgrade])
+  }, [tutorialActive, tutorialStep, upgrades.storage, onBoughtUpgrade])
 
   // --- In-game gamepad layer ---
   // Walks DOM focus across overlay buttons (Trade Menu, Tutorial, Prologue,
@@ -1331,6 +1370,8 @@ export default function Home() {
         onSmartBomb={handleSmartBomb}
         onBlackHoleNearby={handleBlackHoleNearby}
         onBlackHoleEscaped={handleBlackHoleEscaped}
+        onBlackHoleSurvived={handleBlackHoleSurvived}
+        onWormholeTeleported={handleWormholeTeleported}
         onDrillNoseAsteroidFinished={handleDrillNoseAsteroidFinished}
         onFirstDefensiveHit={defensePopup.onFire}
         onFirstFormation={formationPopup.onFire}
@@ -1339,6 +1380,7 @@ export default function Home() {
         onFieldCleared={tutorial.onFieldCleared}
         onArbiterArrived={tutorial.onArbiterArrived}
         onStripComplete={tutorial.onStripComplete}
+        onHarvestingAreaWarning={setShowHarvestingWarning}
       />
       {!photoMode && (
         <HUD
@@ -1357,13 +1399,14 @@ export default function Home() {
           onPause={togglePause}
           tradeMenuOpen={tradeMenuOpen}
           runOver={runOver}
+          showHarvestingWarning={showHarvestingWarning}
         />
       )}
       <AchievementToast
         achievement={currentToastAchievement}
         onDone={() => setAchievementQueue((prev) => prev.slice(1))}
       />
-      {!inPrologue && <ArbiterBanner banner={arbiterBanner} />}
+      {!inPrologue && <ArbiterBanner banner={arbiterBanner} paused={paused} />}
       {tutorial.active && inPrologue && (
         <PrologueOverlay
           step={tutorial.step}

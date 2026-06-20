@@ -12,7 +12,9 @@ export const PROLOGUE_SHIP = {
   fireRateBonus: 1.1 ** 4,
   miningTool: 'lazer' as MiningTool,
   missileTier: 8,
-  optionCount: 2,
+  // Prologue flies the full prestige loadout: 3 Option orbs (figure-four
+  // formation) unlocked by the Exotic Matter Hull capstone.
+  optionCount: 3,
   shieldCharges: 3,
   maxSpeed: 180,
   acceleration: 300,

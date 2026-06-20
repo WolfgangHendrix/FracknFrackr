@@ -50,6 +50,11 @@ export interface AchievementRunState {
   lowHpDefensivePurchase: boolean
   photoWithArbiterTaken: boolean
   splitterDestroyed: boolean
+  /** Survived inside a black hole's event horizon (only possible with the
+   *  Exotic Matter Hull's void immunity). */
+  blackHoleSurvivedThisRun: boolean
+  /** Teleported via the Wormhole Generator at least once this run. */
+  wormholeUsedThisRun: boolean
 }
 
 export const defaultAchievementRunState = (): AchievementRunState => ({
@@ -84,6 +89,8 @@ export const defaultAchievementRunState = (): AchievementRunState => ({
   lowHpDefensivePurchase: false,
   photoWithArbiterTaken: false,
   splitterDestroyed: false,
+  blackHoleSurvivedThisRun: false,
+  wormholeUsedThisRun: false,
 })
 
 export interface AchievementEvaluationContext {
@@ -133,8 +140,15 @@ const STARTING_UPGRADE_LEVEL: Record<keyof Upgrades, number> = {
   sensor: 0,
   droneRepair: 0,
   drillNose: 0,
+  refinery: 0,
+  exoticHull: 0,
+  wormhole: 0,
 }
 
+// NOTE: the prestige upgrades (`refinery`, `exoticHull`, `wormhole`) are NOT
+// in this list. "Full Compliance" must stay achievable mid-game; folding the
+// astronomically-priced prestige tier into "own everything" would gate it
+// behind tens of thousands of scrap.
 const PERMANENT_UPGRADE_KEYS: readonly (keyof Upgrades)[] = [
   'blaster',
   'collector',
@@ -365,6 +379,14 @@ const DEFINITIONS: AchievementDefinition[] = [
     progress: (ctx) => ({ current: Math.min(ctx.metrics.totalAsteroidsDestroyed, 250), goal: 250 }),
   },
   {
+    id: 'quantum-dividends',
+    title: 'Quantum Dividends',
+    description: 'Acquire the Quantum Refinery.',
+    icon: 'QR',
+    category: 'Mining & Economy',
+    isUnlocked: (ctx) => ctx.upgrades.refinery > 0,
+  },
+  {
     id: 'first-objection',
     title: 'First Objection',
     description: 'Destroy your first hostile.',
@@ -566,6 +588,24 @@ const DEFINITIONS: AchievementDefinition[] = [
     category: 'Hidden',
     hidden: true,
     isUnlocked: (ctx) => ctx.run.splitterDestroyed,
+  },
+  {
+    id: 'event-horizon-tourist',
+    title: 'Event Horizon Tourist',
+    description: 'Survive inside a black hole.',
+    icon: 'EH',
+    category: 'Hidden',
+    hidden: true,
+    isUnlocked: (ctx) => ctx.run.blackHoleSurvivedThisRun,
+  },
+  {
+    id: 'expedited-routing',
+    title: 'Expedited Routing',
+    description: 'Take a Wormhole Generator jump.',
+    icon: 'WH',
+    category: 'Hidden',
+    hidden: true,
+    isUnlocked: (ctx) => ctx.run.wormholeUsedThisRun,
   },
 ]
 

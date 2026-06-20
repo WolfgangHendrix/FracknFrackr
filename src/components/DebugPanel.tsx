@@ -216,10 +216,10 @@ function PanelContent({
               const maxed: typeof state.upgrades = {
                 blaster: 5,
                 collector: 5,
-                storage: 5,
+                storage: 6,
                 missiles: 8,
                 ripple: 1,
-                options: 2,
+                options: 3,
                 speed: 5,
                 armor: 3,
                 shield: 3,
@@ -237,6 +237,9 @@ function PanelContent({
                 sensor: 3,
                 droneRepair: 1,
                 drillNose: 3,
+                refinery: 1,
+                exoticHull: 1,
+                wormhole: 2,
               }
               for (const k of Object.keys(maxed) as (keyof typeof maxed)[]) {
                 state.setUpgradeLevel(k, maxed[k])

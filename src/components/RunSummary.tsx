@@ -5,6 +5,9 @@ import type { RunStats } from '@/game/ledger-config'
 import { recordScore, wouldMakeBoard } from '@/lib/leaderboard'
 import { submitOnlineScore } from '@/lib/online-leaderboard'
 import { isSupabaseConfigured } from '@/lib/supabase'
+import { playVoice } from '@/lib/voice'
+
+const GAME_OVER_VOICE = './audio/vo_gameover.wav'
 
 interface RunSummaryProps {
   stats: RunStats
@@ -66,6 +69,13 @@ export function RunSummary({ stats, highScore, isNewBest, onContinue }: RunSumma
   const [onlineStatus, setOnlineStatus] = useState<'idle' | 'sending' | 'ok' | 'err'>(
     'idle',
   )
+
+  // Play the game-over voice line once when the results screen appears.
+  // Routed through the SFX channel so the master/SFX sliders apply.
+  useEffect(() => {
+    const audio = playVoice(GAME_OVER_VOICE, 0.85)
+    return () => audio.pause()
+  }, [])
 
   // Prefill with the player's last-used initials so repeat-runners don't
   // have to retype every time.

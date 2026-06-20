@@ -76,10 +76,34 @@ function isTopmostMenuItem(el: HTMLElement): boolean {
   )
 }
 
+/**
+ * True when `el` lives inside a scroll container that is itself the topmost
+ * thing on screen — i.e. the element is part of the active menu but is just
+ * scrolled out of view, not hidden behind a different modal. Lets the focus
+ * walk include rows below the fold so a long list (the BUY menu) is fully
+ * reachable; an item genuinely behind a modal fails because its scroller's
+ * center hit-tests to the covering modal instead.
+ */
+function isInTopmostScroller(el: HTMLElement): boolean {
+  const scroller = el.closest('[class*="overflow"]')
+  if (!(scroller instanceof HTMLElement) || !isVisibleMenuItem(scroller)) return false
+  const r = scroller.getBoundingClientRect()
+  const x = Math.max(0, Math.min(window.innerWidth - 1, r.left + r.width / 2))
+  const y = Math.max(0, Math.min(window.innerHeight - 1, r.top + r.height / 2))
+  const top = document.elementFromPoint(x, y)
+  return top != null && scroller.contains(top)
+}
+
+/**
+ * Items the gamepad can walk, in DOM order. Includes on-screen items (topmost
+ * hit-test) plus any that are merely scrolled out of view inside the active
+ * menu's scroller — so a list taller than its container scrolls through fully
+ * instead of cycling back to the top early.
+ */
 function focusableItems(): HTMLElement[] {
   return Array.from(
     document.querySelectorAll<HTMLElement>('[data-menu-item]:not([disabled])'),
-  ).filter(isTopmostMenuItem)
+  ).filter((el) => isVisibleMenuItem(el) && (isTopmostMenuItem(el) || isInTopmostScroller(el)))
 }
 
 function moveFocus(delta: number): void {
@@ -88,47 +112,15 @@ function moveFocus(delta: number): void {
   const current = document.activeElement
   const idx = current instanceof HTMLElement ? items.indexOf(current) : -1
   const base = idx === -1 ? (delta > 0 ? -1 : 0) : idx
-  let next = base + delta
-
-  // When moving down past the last item, check if there are more items
-  // in the DOM that aren't currently focusable (off-screen). If so,
-  // scroll the parent container to reveal them instead of cycling.
-  if (delta > 0 && next >= items.length) {
-    const currentItem = items[items.length - 1]
-    const scrollParent = currentItem.closest('[class*="overflow"]')
-    if (scrollParent && scrollParent instanceof HTMLElement) {
-      const currentRect = currentItem.getBoundingClientRect()
-      const parentRect = scrollParent.getBoundingClientRect()
-      // If the last item is near/at the bottom of the scroll container, scroll down
-      if (currentRect.bottom >= parentRect.bottom - 10) {
-        scrollParent.scrollBy({ top: currentItem.offsetHeight * 2, behavior: 'smooth' })
-        // Don't cycle; keep focus on the last item while scrolling
-        return
-      }
-    }
-  }
-
-  // When moving up past the first item, scroll up to reveal more items
-  if (delta < 0 && next < 0) {
-    const currentItem = items[0]
-    const scrollParent = currentItem.closest('[class*="overflow"]')
-    if (scrollParent && scrollParent instanceof HTMLElement) {
-      const currentRect = currentItem.getBoundingClientRect()
-      const parentRect = scrollParent.getBoundingClientRect()
-      // If the first item is near/at the top of the scroll container, scroll up
-      if (currentRect.top <= parentRect.top + 10) {
-        scrollParent.scrollBy({ top: -currentItem.offsetHeight * 2, behavior: 'smooth' })
-        // Don't cycle; keep focus on the first item while scrolling
-        return
-      }
-    }
-  }
-
-  // Normal cycling when not at boundary or after scrolling
-  next = (base + delta + items.length) % items.length
-  // The focusin listener below plays the move blip — calling .focus() here
-  // triggers it, so we don't need a direct playMenuMove() call.
-  items[next].focus()
+  // Walk one step in DOM order, cycling at the ends. Scrolling is handled by
+  // scrollIntoView below, so down only wraps back to the first item (the close
+  // X) once the genuine last row has been passed.
+  const next = (base + delta + items.length) % items.length
+  const el = items[next]
+  // The focusin listener plays the move blip when .focus() runs.
+  el.focus()
+  // Reveal the row if it was below/above the fold of a scroll container.
+  el.scrollIntoView({ block: 'nearest' })
 }
 
 function focusFirst(): void {
@@ -138,7 +130,11 @@ function focusFirst(): void {
     .slice()
     .reverse()
     .find((item) => item.hasAttribute('data-menu-default') && !isInertMenuItem(item))
-  ;(preferred ?? items[0]).focus()
+  const target = preferred ?? items[0]
+  target.focus()
+  // Make sure a defaulted row that sits below the fold (e.g. the tutorial's
+  // forced Cargo Expansion) is scrolled into view when the menu opens.
+  target.scrollIntoView({ block: 'nearest' })
 }
 
 /** True when the focused element is a range-input slider — used to remap
